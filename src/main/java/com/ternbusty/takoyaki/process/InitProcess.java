@@ -192,11 +192,13 @@ public final class InitProcess {
             //   1. AppArmor / SELinux label staging
             //   2. PR_SET_NO_NEW_PRIVS (only if spec asks)
             //   3. seccomp_load — done HERE (still with full caps inherited from
-            //      bootstrap) so the kernel doesn't auto-set NoNewPrivs as a
-            //      side-effect of seccomp() being called without CAP_SYS_ADMIN.
-            //      If we deferred this until after capability drop, a spec saying
-            //      noNewPrivileges=false with a non-empty seccomp profile would
-            //      always end up with NoNewPrivs=1 anyway, violating the spec.
+            //      bootstrap) so seccomp(2) doesn't fail with EACCES. With
+            //      libseccomp's auto-NNP disabled (SCMP_FLTATR_CTL_NNP=0),
+            //      seccomp(2) needs either CAP_SYS_ADMIN OR a pre-set NNP.
+            //      After capability drop + setuid, a typical container has
+            //      neither, so a spec with noNewPrivileges=false plus a
+            //      non-empty seccomp profile would fail to load. Doing it
+            //      here while we still hold CAP_SYS_ADMIN avoids that.
             //   4. Capability bounding set / keep_caps
             //   5. setgroups / setresgid / setresuid
             //   6. capset (final effective/permitted/inheritable/ambient)
