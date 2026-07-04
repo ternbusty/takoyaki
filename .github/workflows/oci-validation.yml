@@ -19,7 +19,7 @@ jobs:
     name: runtime-tools validation
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install Go and TAP tooling
         run: |
