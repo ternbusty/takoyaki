@@ -191,19 +191,24 @@ public final class InitProcess {
             //
             //   1. AppArmor / SELinux label staging
             //   2. PR_SET_NO_NEW_PRIVS (only if spec asks)
-            //   3. seccomp_load — done HERE (still with full caps inherited from
-            //      bootstrap) so seccomp(2) doesn't fail with EACCES. With
-            //      libseccomp's auto-NNP disabled (SCMP_FLTATR_CTL_NNP=0),
-            //      seccomp(2) needs either CAP_SYS_ADMIN OR a pre-set NNP.
-            //      After capability drop + setuid, a typical container has
-            //      neither, so a spec with noNewPrivileges=false plus a
-            //      non-empty seccomp profile would fail to load. Doing it
-            //      here while we still hold CAP_SYS_ADMIN avoids that.
+            //   3. seccomp_load (early path) — only when NNP is NOT requested.
+            //      Rationale: seccomp(2) needs CAP_SYS_ADMIN OR a pre-set NNP
+            //      (libseccomp's auto-NNP is disabled via SCMP_FLTATR_CTL_NNP=0).
+            //      When NNP is off, we cannot rely on NNP so we load seccomp
+            //      here while CAP_SYS_ADMIN is still in effective.
             //   4. Capability bounding set / keep_caps
             //   5. setgroups / setresgid / setresuid
             //   6. capset (final effective/permitted/inheritable/ambient)
             //   7. PR_SET_DUMPABLE=0
-            //   8. execve into user process
+            //   8. seccomp_load (late path) — only when NNP IS requested.
+            //      NNP satisfies seccomp's permission check without CAP_SYS_ADMIN,
+            //      so we defer the load past the cap drop. This keeps init's own
+            //      post-drop syscalls (capset, etc.) out from under the filter
+            //      and lets the profile focus on the workload only.
+            //   9. execve into user process
+
+            boolean nnpRequested = spec.process != null
+                    && Boolean.TRUE.equals(spec.process.noNewPrivileges);
 
             if (spec.process != null && spec.process.apparmorProfile != null) {
                 AppArmor.apply(spec.process.apparmorProfile);
@@ -212,7 +217,7 @@ public final class InitProcess {
                 SeLinux.apply(spec.process.selinuxLabel);
             }
 
-            if (Boolean.TRUE.equals(spec.process != null ? spec.process.noNewPrivileges : null)) {
+            if (nnpRequested) {
                 if (Libc.prctl(Constants.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
                     Logger.warn("PR_SET_NO_NEW_PRIVS failed");
                 } else {
@@ -226,7 +231,9 @@ public final class InitProcess {
                 Keyring.joinNewSession("takoyaki-" + Libc.getpid());
             }
 
-            if (spec.linux != null && spec.linux.seccomp != null) {
+            // Early seccomp: NNP not set, so we need CAP_SYS_ADMIN which is still
+            // in effective at this point.
+            if (spec.linux != null && spec.linux.seccomp != null && !nnpRequested) {
                 Seccomp.apply(spec.linux.seccomp,
                         System.getenv("_TAKOYAKI_CONTAINER_ID"), bundlePath);
             }
@@ -262,6 +269,14 @@ public final class InitProcess {
             // Re-set non-dumpable so /proc inspection by attached processes can't leak.
             if (Libc.prctl(Constants.PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
                 Logger.debug("PR_SET_DUMPABLE,0 failed: " + Libc.strerror(Libc.errno()));
+            }
+
+            // Late seccomp: NNP is set, so we can install seccomp without
+            // CAP_SYS_ADMIN. Deferring past cap drop keeps the filter focused on
+            // the workload and off init's own setup syscalls.
+            if (spec.linux != null && spec.linux.seccomp != null && nnpRequested) {
+                Seccomp.apply(spec.linux.seccomp,
+                        System.getenv("_TAKOYAKI_CONTAINER_ID"), bundlePath);
             }
 
             // PTY setup: if process.terminal is true and a console socket was passed,
