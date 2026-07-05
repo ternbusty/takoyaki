@@ -384,6 +384,14 @@ public final class Spec {
         public LinuxCpu cpu;
         public LinuxPids pids;
         public List<LinuxDeviceCgroup> devices;
+        /**
+         * Free-form cgroup v2 pass-through map. Each key is a control-file name
+         * relative to the cgroup directory (e.g. {@code "io.weight"} or
+         * {@code "hugetlb.2MB.max"}), each value is written verbatim. Lets
+         * spec authors reach controllers that aren't modelled by the strongly
+         * typed fields above without waiting for takoyaki to grow them.
+         */
+        public Map<String, String> unified;
 
         public static LinuxResources fromJson(Object node) {
             if (node == null) return null;
@@ -393,6 +401,7 @@ public final class Spec {
             r.cpu = LinuxCpu.fromJson(o.get("cpu"));
             r.pids = LinuxPids.fromJson(o.get("pids"));
             r.devices = JsonMap.list(o, "devices", LinuxDeviceCgroup::fromJson);
+            r.unified = JsonMap.strMap(o, "unified");
             return r;
         }
 
@@ -402,6 +411,7 @@ public final class Spec {
             if (cpu != null) JsonMap.put(o, "cpu", cpu.toJson());
             if (pids != null) JsonMap.put(o, "pids", pids.toJson());
             JsonMap.put(o, "devices", JsonMap.encList(devices, LinuxDeviceCgroup::toJson));
+            if (unified != null && !unified.isEmpty()) JsonMap.put(o, "unified", unified);
             return o;
         }
     }
