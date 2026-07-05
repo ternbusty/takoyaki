@@ -384,6 +384,8 @@ public final class Spec {
         public LinuxCpu cpu;
         public LinuxPids pids;
         public List<LinuxDeviceCgroup> devices;
+        public List<LinuxHugepageLimit> hugepageLimits;
+        public LinuxBlockIO blockIO;
 
         public static LinuxResources fromJson(Object node) {
             if (node == null) return null;
@@ -393,6 +395,8 @@ public final class Spec {
             r.cpu = LinuxCpu.fromJson(o.get("cpu"));
             r.pids = LinuxPids.fromJson(o.get("pids"));
             r.devices = JsonMap.list(o, "devices", LinuxDeviceCgroup::fromJson);
+            r.hugepageLimits = JsonMap.list(o, "hugepageLimits", LinuxHugepageLimit::fromJson);
+            r.blockIO = LinuxBlockIO.fromJson(o.get("blockIO"));
             return r;
         }
 
@@ -402,6 +406,95 @@ public final class Spec {
             if (cpu != null) JsonMap.put(o, "cpu", cpu.toJson());
             if (pids != null) JsonMap.put(o, "pids", pids.toJson());
             JsonMap.put(o, "devices", JsonMap.encList(devices, LinuxDeviceCgroup::toJson));
+            JsonMap.put(o, "hugepageLimits",
+                    JsonMap.encList(hugepageLimits, LinuxHugepageLimit::toJson));
+            if (blockIO != null) JsonMap.put(o, "blockIO", blockIO.toJson());
+            return o;
+        }
+    }
+
+    public static final class LinuxHugepageLimit {
+        /** e.g. "2MB", "1GB". Matches cgroup v2's hugetlb.&lt;size&gt;.max naming. */
+        public String pageSize;
+        public Long limit;
+
+        public static LinuxHugepageLimit fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            LinuxHugepageLimit h = new LinuxHugepageLimit();
+            h.pageSize = JsonMap.str(o, "pageSize");
+            h.limit = JsonMap.longBoxed(o, "limit");
+            return h;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "pageSize", pageSize);
+            JsonMap.put(o, "limit", limit);
+            return o;
+        }
+    }
+
+    public static final class LinuxBlockIO {
+        /** Default weight, 10..1000. Maps to cgroup v2 io.weight. */
+        public Long weight;
+        public List<LinuxThrottleDevice> throttleReadBpsDevice;
+        public List<LinuxThrottleDevice> throttleWriteBpsDevice;
+        public List<LinuxThrottleDevice> throttleReadIOPSDevice;
+        public List<LinuxThrottleDevice> throttleWriteIOPSDevice;
+
+        public static LinuxBlockIO fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            LinuxBlockIO b = new LinuxBlockIO();
+            b.weight = JsonMap.longBoxed(o, "weight");
+            b.throttleReadBpsDevice = JsonMap.list(o,
+                    "throttleReadBpsDevice", LinuxThrottleDevice::fromJson);
+            b.throttleWriteBpsDevice = JsonMap.list(o,
+                    "throttleWriteBpsDevice", LinuxThrottleDevice::fromJson);
+            b.throttleReadIOPSDevice = JsonMap.list(o,
+                    "throttleReadIOPSDevice", LinuxThrottleDevice::fromJson);
+            b.throttleWriteIOPSDevice = JsonMap.list(o,
+                    "throttleWriteIOPSDevice", LinuxThrottleDevice::fromJson);
+            return b;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "weight", weight);
+            JsonMap.put(o, "throttleReadBpsDevice",
+                    JsonMap.encList(throttleReadBpsDevice, LinuxThrottleDevice::toJson));
+            JsonMap.put(o, "throttleWriteBpsDevice",
+                    JsonMap.encList(throttleWriteBpsDevice, LinuxThrottleDevice::toJson));
+            JsonMap.put(o, "throttleReadIOPSDevice",
+                    JsonMap.encList(throttleReadIOPSDevice, LinuxThrottleDevice::toJson));
+            JsonMap.put(o, "throttleWriteIOPSDevice",
+                    JsonMap.encList(throttleWriteIOPSDevice, LinuxThrottleDevice::toJson));
+            return o;
+        }
+    }
+
+    public static final class LinuxThrottleDevice {
+        public Long major;
+        public Long minor;
+        /** bytes/sec for *BpsDevice, IOPS for *IOPSDevice. */
+        public Long rate;
+
+        public static LinuxThrottleDevice fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            LinuxThrottleDevice d = new LinuxThrottleDevice();
+            d.major = JsonMap.longBoxed(o, "major");
+            d.minor = JsonMap.longBoxed(o, "minor");
+            d.rate = JsonMap.longBoxed(o, "rate");
+            return d;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "major", major);
+            JsonMap.put(o, "minor", minor);
+            JsonMap.put(o, "rate", rate);
             return o;
         }
     }
@@ -438,6 +531,10 @@ public final class Spec {
         public String mems;
         public Long realtimePeriod;
         public Long realtimeRuntime;
+        /** Linux 5.14+ CPU burst window in the same units as quota. */
+        public Long burst;
+        /** 1 → SCHED_IDLE cgroup (best-effort scheduling). Linux 5.15+. */
+        public Long idle;
 
         public static LinuxCpu fromJson(Object node) {
             if (node == null) return null;
@@ -450,6 +547,8 @@ public final class Spec {
             c.mems = JsonMap.str(o, "mems");
             c.realtimePeriod = JsonMap.longBoxed(o, "realtimePeriod");
             c.realtimeRuntime = JsonMap.longBoxed(o, "realtimeRuntime");
+            c.burst = JsonMap.longBoxed(o, "burst");
+            c.idle = JsonMap.longBoxed(o, "idle");
             return c;
         }
 
@@ -462,6 +561,8 @@ public final class Spec {
             JsonMap.put(o, "mems", mems);
             JsonMap.put(o, "realtimePeriod", realtimePeriod);
             JsonMap.put(o, "realtimeRuntime", realtimeRuntime);
+            JsonMap.put(o, "burst", burst);
+            JsonMap.put(o, "idle", idle);
             return o;
         }
     }

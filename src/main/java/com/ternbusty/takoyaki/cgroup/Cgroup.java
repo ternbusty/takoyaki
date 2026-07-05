@@ -110,9 +110,68 @@ public final class Cgroup {
                 String p = r.cpu.period == null ? "100000" : Long.toString(r.cpu.period);
                 writeIfPossible(full.resolve("cpu.max"), q + " " + p);
             }
+            // cpu.max.burst is a separate control file since Linux 5.14.
+            // Writing before the kernel supports it just fails with ENOENT
+            // and writeIfPossible logs at warn — acceptable.
+            if (r.cpu.burst != null && r.cpu.burst >= 0) {
+                writeIfPossible(full.resolve("cpu.max.burst"), Long.toString(r.cpu.burst));
+            }
+            // cpu.idle non-zero moves the cgroup to SCHED_IDLE. Linux 5.15+.
+            if (r.cpu.idle != null) {
+                writeIfPossible(full.resolve("cpu.idle"), Long.toString(r.cpu.idle));
+            }
         }
         if (r.pids != null && r.pids.limit > 0) {
             writeIfPossible(full.resolve("pids.max"), Long.toString(r.pids.limit));
+        }
+        // hugepageLimits: each entry lands in its own hugetlb.<size>.max file.
+        // Runc uses the same pageSize→filename mapping.
+        if (r.hugepageLimits != null) {
+            for (Spec.LinuxHugepageLimit h : r.hugepageLimits) {
+                if (h.pageSize == null || h.limit == null) continue;
+                writeIfPossible(full.resolve("hugetlb." + h.pageSize + ".max"),
+                        h.limit.toString());
+            }
+        }
+        if (r.blockIO != null) {
+            applyBlockIO(full, r.blockIO);
+        }
+    }
+
+    /**
+     * Emit cgroup v2 io.* files from an OCI blockIO block.
+     *
+     * OCI's blockIO is a v1-era shape (weight + throttleRead/Write*), so we
+     * translate each into its v2 equivalent:
+     *   weight                 -> io.weight (unqualified, default for the cgroup)
+     *   throttleRead/WriteBps  -> io.max "major:minor rbps=… wbps=…"
+     *   throttleRead/WriteIOPS -> io.max "major:minor riops=… wiops=…"
+     * Multiple entries for the same major:minor get merged so the kernel
+     * doesn't clobber a previous write.
+     */
+    private static void applyBlockIO(Path full, Spec.LinuxBlockIO io) {
+        if (io.weight != null && io.weight > 0) {
+            writeIfPossible(full.resolve("io.weight"), "default " + io.weight);
+        }
+        java.util.Map<String, StringBuilder> perDevice = new java.util.LinkedHashMap<>();
+        appendThrottle(perDevice, io.throttleReadBpsDevice, "rbps");
+        appendThrottle(perDevice, io.throttleWriteBpsDevice, "wbps");
+        appendThrottle(perDevice, io.throttleReadIOPSDevice, "riops");
+        appendThrottle(perDevice, io.throttleWriteIOPSDevice, "wiops");
+        for (var e : perDevice.entrySet()) {
+            writeIfPossible(full.resolve("io.max"), e.getKey() + " " + e.getValue().toString().trim());
+        }
+    }
+
+    private static void appendThrottle(java.util.Map<String, StringBuilder> perDevice,
+                                       java.util.List<Spec.LinuxThrottleDevice> devs,
+                                       String key) {
+        if (devs == null) return;
+        for (Spec.LinuxThrottleDevice d : devs) {
+            if (d.major == null || d.minor == null || d.rate == null) continue;
+            String dev = d.major + ":" + d.minor;
+            perDevice.computeIfAbsent(dev, k -> new StringBuilder())
+                    .append(key).append('=').append(d.rate).append(' ');
         }
     }
 
