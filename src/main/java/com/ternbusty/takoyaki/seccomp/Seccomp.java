@@ -167,8 +167,12 @@ public final class Seccomp {
 
                 int loadRc = (int) SECCOMP_LOAD.invoke(ctx);
                 if (loadRc != 0) {
-                    Logger.error("seccomp_load failed: " + loadRc);
-                    return;
+                    // Silently returning here would let the container come up
+                    // with no filter at all, which is worse than failing to
+                    // start — the user requested a seccomp policy and the
+                    // runtime is now serving one that does not exist. Bail so
+                    // the surrounding init aborts.
+                    throw new RuntimeException("seccomp_load failed: " + loadRc);
                 }
                 Logger.info("seccomp filter loaded");
 
