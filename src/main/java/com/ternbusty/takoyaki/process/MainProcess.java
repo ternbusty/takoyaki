@@ -56,13 +56,7 @@ public final class MainProcess {
 
                 long euid = uidFromProc();
                 boolean privileged = (euid == 0);
-                if (!privileged) {
-                    try {
-                        Files.writeString(Path.of("/proc/" + bootstrapPid + "/setgroups"), "deny\n");
-                    } catch (IOException e) {
-                        Logger.warn("setgroups write failed: " + e.getMessage());
-                    }
-                }
+
                 // Rootless path: writing maps with multiple ranges requires the
                 // newuidmap/newgidmap setuid helpers from shadow-utils.
                 boolean wroteViaHelper = false;
@@ -76,6 +70,19 @@ public final class MainProcess {
                                     spec.linux.gidMappings);
                 }
                 if (!wroteViaHelper) {
+                    // Direct write path. An unprivileged caller cannot write
+                    // gid_map without first disabling setgroups(2) in the new
+                    // userns — that's the kernel's substitute for CAP_SETGID.
+                    // Writing "deny" is irreversible and disables setgroups(2)
+                    // for the container's entire lifetime, so we only do it
+                    // when we actually need to (i.e. the helper wasn't used).
+                    if (!privileged) {
+                        try {
+                            Files.writeString(Path.of("/proc/" + bootstrapPid + "/setgroups"), "deny\n");
+                        } catch (IOException e) {
+                            Logger.warn("setgroups write failed: " + e.getMessage());
+                        }
+                    }
                     Files.writeString(Path.of("/proc/" + bootstrapPid + "/uid_map"), uidMap);
                     Files.writeString(Path.of("/proc/" + bootstrapPid + "/gid_map"), gidMap);
                 }
