@@ -70,11 +70,24 @@ public final class Capability {
 
         if (caps.ambient != null) {
             Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0);
+            // The kernel refuses PR_CAP_AMBIENT_RAISE unless the cap is in
+            // BOTH permitted AND inheritable. Silently swallowing the EPERM
+            // that would result from a spec that says "ambient: [CAP_X]"
+            // without also listing X in permitted+inheritable hides the
+            // config mistake — the user asked for X to be preserved across
+            // execve, and it silently isn't. Check up front and log which
+            // set is missing.
             for (String name : caps.ambient) {
                 int id = idOf(name);
-                if (id >= 0) {
-                    Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_RAISE, id, 0, 0);
+                if (id < 0) continue;
+                long bit = 1L << id;
+                if ((per & bit) == 0 || (inh & bit) == 0) {
+                    Logger.warn("cap " + name + " requested in ambient but"
+                            + " not in permitted+inheritable; kernel would"
+                            + " reject the raise, skipping");
+                    continue;
                 }
+                Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_RAISE, id, 0, 0);
             }
         }
     }
@@ -84,7 +97,11 @@ public final class Capability {
         if (names == null) return s;
         for (String n : names) {
             int id = idOf(n);
-            if (id >= 0) s.add(id);
+            if (id >= 0) {
+                s.add(id);
+            } else {
+                Logger.warn("unknown capability name: " + n);
+            }
         }
         return s;
     }
@@ -94,7 +111,11 @@ public final class Capability {
         if (names == null) return 0L;
         for (String n : names) {
             int id = idOf(n);
-            if (id >= 0) m |= (1L << id);
+            if (id >= 0) {
+                m |= (1L << id);
+            } else {
+                Logger.warn("unknown capability name: " + n);
+            }
         }
         return m;
     }
