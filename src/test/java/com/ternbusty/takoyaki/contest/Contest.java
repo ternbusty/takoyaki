@@ -121,18 +121,40 @@ public final class Contest {
         argv.add(rootDir.toString());
         for (String a : args) argv.add(a);
 
+        // Redirect stdout/stderr to temp files, NOT to Java-owned pipes.
+        //
+        // takoyaki create forks an init grandchild that (correctly, per OCI)
+        // inherits stdio and holds it until start+execve. If we used
+        // ProcessBuilder's default pipe capture and then read from the pipe,
+        // Process.getInputStream().readAllBytes() would block waiting for the
+        // pipe's write side to fully close — which only happens after init
+        // execs the workload or gets SIGKILL'd. On CI this manifested as the
+        // contest task hitting its 15-minute timeout intermittently.
+        //
+        // Files give us:
+        //   1. waitFor returns as soon as the create process itself exits;
+        //   2. no pipe held by grandchild → nothing to block on;
+        //   3. we can still read the captured output after waitFor.
+        Path outFile = Files.createTempFile("takoyaki-stdout-", ".log");
+        Path errFile = Files.createTempFile("takoyaki-stderr-", ".log");
         ProcessBuilder pb = new ProcessBuilder(argv);
-        pb.redirectErrorStream(false);
+        pb.redirectOutput(outFile.toFile());
+        pb.redirectError(errFile.toFile());
         Process p = pb.start();
-        // 30 s is generous — most contest steps finish in well under a second.
-        if (!p.waitFor(30, TimeUnit.SECONDS)) {
-            p.destroyForcibly();
-            throw new RuntimeException("takoyaki " + String.join(" ", args)
-                    + " timed out after 30s");
+        try {
+            // 30 s is generous — most contest steps finish in well under a second.
+            if (!p.waitFor(30, TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                throw new RuntimeException("takoyaki " + String.join(" ", args)
+                        + " timed out after 30s");
+            }
+            String out = Files.readString(outFile);
+            String err = Files.readString(errFile);
+            return new CmdResult(p.exitValue(), out, err);
+        } finally {
+            Files.deleteIfExists(outFile);
+            Files.deleteIfExists(errFile);
         }
-        String out = new String(p.getInputStream().readAllBytes());
-        String err = new String(p.getErrorStream().readAllBytes());
-        return new CmdResult(p.exitValue(), out, err);
     }
 
     // ---- busybox rootfs (for scenarios that actually start the container) --
