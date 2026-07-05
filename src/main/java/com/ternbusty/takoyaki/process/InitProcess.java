@@ -3,6 +3,7 @@ package com.ternbusty.takoyaki.process;
 import com.ternbusty.takoyaki.apparmor.AppArmor;
 import com.ternbusty.takoyaki.capability.Capability;
 import com.ternbusty.takoyaki.console.ConsoleSocket;
+import com.ternbusty.takoyaki.hooks.Hooks;
 import com.ternbusty.takoyaki.ipc.NotifySocket;
 import com.ternbusty.takoyaki.ipc.SyncChannel;
 import com.ternbusty.takoyaki.keyring.Keyring;
@@ -14,6 +15,8 @@ import com.ternbusty.takoyaki.rootfs.UserDb;
 import com.ternbusty.takoyaki.seccomp.Seccomp;
 import com.ternbusty.takoyaki.selinux.SeLinux;
 import com.ternbusty.takoyaki.spec.Spec;
+import com.ternbusty.takoyaki.state.ContainerStatus;
+import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.CloseRange;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Groups;
@@ -29,6 +32,25 @@ import java.nio.file.Path;
 
 public final class InitProcess {
     private InitProcess() {}
+
+    /**
+     * Build the transient {@link State} object that gets piped to hooks running
+     * inside the container namespace (createContainer / startContainer).
+     *
+     * The persisted state.json is written by MainProcess after INIT_READY, so it
+     * does not exist yet when these hooks fire. Rebuild an equivalent structure
+     * here from what the init already knows: spec + env-vars + own pid.
+     */
+    static State buildState(Spec spec, String containerId, String bundlePath,
+                            ContainerStatus status) {
+        return State.create(
+                spec.ociVersion,
+                containerId,
+                status,
+                Libc.getpid(),
+                bundlePath,
+                spec.annotations);
+    }
 
     /**
      * Parse the {@code _TAKOYAKI_IDMAP_FDS} env value into a destination-path
@@ -131,11 +153,25 @@ public final class InitProcess {
                 Logger.debug("idmap fd inherited: " + e.getKey() + " -> " + e.getValue());
             }
 
+            String containerId = System.getenv("_TAKOYAKI_CONTAINER_ID");
+
             if (spec.hasNamespace("mount")) {
                 Rootfs.prepare(rootfsPath, spec, idmapFds);
                 // Additional devices declared in spec.linux.devices, before pivot_root.
                 if (spec.linux != null && spec.linux.devices != null) {
                     Devices.create(rootfsPath, spec.linux.devices);
+                }
+                // createContainer hooks run in the container namespace after the
+                // rootfs is fully assembled but before pivot_root. Per the OCI
+                // runtime spec, hooks that fail (non-zero exit or timeout) MUST
+                // abort container creation — runFailFast throws which the outer
+                // catch converts into _exit(1).
+                if (spec.hooks != null && spec.hooks.createContainer != null
+                        && containerId != null) {
+                    Hooks.runFailFast(spec.hooks.createContainer,
+                            buildState(spec, containerId, bundlePath,
+                                    ContainerStatus.CREATING),
+                            "createContainer");
                 }
                 Rootfs.pivot(rootfsPath,
                         spec.linux != null ? spec.linux.rootfsPropagation : null);
@@ -338,6 +374,17 @@ public final class InitProcess {
             // about-to-execve user process picks up the new limits.
             if (spec.process.rlimits != null) {
                 com.ternbusty.takoyaki.syscall.Rlimit.apply(Libc.getpid(), spec.process.rlimits);
+            }
+
+            // startContainer hooks: last chance for the runtime to poke around
+            // in the fully-set-up container namespace before handing control to
+            // the user process. Per OCI, failable — non-zero exit aborts start.
+            if (spec.hooks != null && spec.hooks.startContainer != null
+                    && containerId != null) {
+                Hooks.runFailFast(spec.hooks.startContainer,
+                        buildState(spec, containerId, bundlePath,
+                                ContainerStatus.CREATED),
+                        "startContainer");
             }
 
             Libc.execvp(arena, argv[0], argv);
