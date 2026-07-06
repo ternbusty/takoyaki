@@ -29,7 +29,7 @@ dependencies {
     // Spec / State / KontainerConfig beans codec to/from it. jackson-databind
     // pulled in ~3,000 reachable methods and transitively ~4.6 MB of java.xml
     // at native-image build time, all for our small OCI schemas.
-    compileOnly("org.graalvm.sdk:nativeimage:25.0.3")
+    compileOnly("org.graalvm.sdk:nativeimage:25.1.3")
 
     testImplementation(platform("org.junit:junit-bom:6.1.1"))
     testImplementation("org.junit.jupiter:junit-jupiter")
