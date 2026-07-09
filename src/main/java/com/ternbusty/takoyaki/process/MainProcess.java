@@ -5,13 +5,12 @@ import com.ternbusty.takoyaki.config.KontainerConfig;
 import com.ternbusty.takoyaki.hooks.Hooks;
 import com.ternbusty.takoyaki.ipc.SyncChannel;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.rootless.Rootless;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.ContainerStatus;
 import com.ternbusty.takoyaki.state.State;
-import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
-import com.ternbusty.takoyaki.syscall.Rlimit;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,10 +25,12 @@ public final class MainProcess {
                            int notifyListenerFd, int mainSenderFd) {
         Logger.setContext("main");
         Logger.debug("main proc started; stage1=" + stage1Pid);
-        try {
-            String mntNs = java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of("/proc/self/ns/mnt")).toString();
-            Logger.debug("main mnt_ns=" + mntNs);
-        } catch (Exception e) {}
+        if (Logger.isDebugEnabled()) {
+            try {
+                String mntNs = java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of("/proc/self/ns/mnt")).toString();
+                Logger.debug("main mnt_ns=" + mntNs);
+            } catch (Exception e) {}
+        }
 
         try {
             if (spec.linux != null && spec.linux.cgroupsPath != null) {
@@ -51,11 +52,11 @@ public final class MainProcess {
                 int bootstrapPid = SyncChannel.readInt32(syncFd);
                 Logger.debug("writing uid/gid map for pid " + bootstrapPid);
 
-                String uidMap = buildIdMapping(spec.linux != null ? spec.linux.uidMappings : null);
-                String gidMap = buildIdMapping(spec.linux != null ? spec.linux.gidMappings : null);
+                long euid = Libc.geteuid();
+                String uidMap = buildIdMapping(spec.linux != null ? spec.linux.uidMappings : null, euid);
+                String gidMap = buildIdMapping(spec.linux != null ? spec.linux.gidMappings : null, euid);
 
-                long euid = uidFromProc();
-                boolean privileged = (euid == 0);
+                boolean privileged = !Rootless.isRootless();
 
                 // Rootless path: writing maps with multiple ranges requires the
                 // newuidmap/newgidmap setuid helpers from shadow-utils.
@@ -64,10 +65,8 @@ public final class MainProcess {
                         && (multiRange(spec.linux.uidMappings) || multiRange(spec.linux.gidMappings))) {
                     Logger.debug("rootless detected, attempting newuidmap/newgidmap");
                     wroteViaHelper =
-                            com.ternbusty.takoyaki.rootless.Rootless.writeUidMap(bootstrapPid,
-                                    spec.linux.uidMappings)
-                            && com.ternbusty.takoyaki.rootless.Rootless.writeGidMap(bootstrapPid,
-                                    spec.linux.gidMappings);
+                            Rootless.writeUidMap(bootstrapPid, spec.linux.uidMappings)
+                            && Rootless.writeGidMap(bootstrapPid, spec.linux.gidMappings);
                 }
                 if (!wroteViaHelper) {
                     // Direct write path. An unprivileged caller cannot write
@@ -97,7 +96,12 @@ public final class MainProcess {
             PosixIO.close(notifyListenerFd);
 
             if (spec.linux != null && spec.linux.cgroupsPath != null) {
-                Cgroup.setup(stage2Pid, spec.linux.cgroupsPath, spec.linux);
+                // The first Cgroup.setup (for stage1Pid) already created the
+                // directory, enabled controllers, applied limits, and attached
+                // the device BPF program for this same cgroupPath. Re-running
+                // setup would stack a second identical device filter, so only
+                // move the final init pid into the cgroup here.
+                Cgroup.addPid(spec.linux.cgroupsPath, stage2Pid);
             }
 
             int initReady = SyncChannel.readInt32(mainSenderFd);
@@ -150,12 +154,12 @@ public final class MainProcess {
      * Package-visible so unit tests can pin the wire format: each line is
      * "{@code containerID hostID size\n}" with no header, no trailing blank.
      * When {@code mappings} is null/empty we fall back to identity-mapping
-     * the caller's effective uid (handy for rootless quick boot).
+     * {@code fallbackEuid}, the caller's effective uid (handy for rootless
+     * quick boot).
      */
-    static String buildIdMapping(List<Spec.IdMapping> mappings) {
+    static String buildIdMapping(List<Spec.IdMapping> mappings, long fallbackEuid) {
         if (mappings == null || mappings.isEmpty()) {
-            long euid = uidFromProc();
-            return "0 " + euid + " 1\n";
+            return "0 " + fallbackEuid + " 1\n";
         }
         StringBuilder sb = new StringBuilder();
         for (Spec.IdMapping m : mappings) {
@@ -176,17 +180,5 @@ public final class MainProcess {
      */
     static boolean multiRange(List<Spec.IdMapping> m) {
         return m != null && m.size() > 0 && (m.size() > 1 || m.get(0).size > 1);
-    }
-
-    private static long uidFromProc() {
-        try {
-            for (String line : Files.readAllLines(Path.of("/proc/self/status"))) {
-                if (line.startsWith("Uid:")) {
-                    String[] parts = line.split("\\s+");
-                    return Long.parseLong(parts[1]);
-                }
-            }
-        } catch (IOException ignored) {}
-        return 0;
     }
 }

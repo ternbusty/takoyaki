@@ -12,7 +12,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -111,8 +110,7 @@ public final class DeviceCgroup {
                 return;
             }
             try {
-                String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-                String cgPath = "/sys/fs/cgroup/" + norm;
+                String cgPath = Cgroup.dir(cgroupPath).toString();
                 int cgFd = PosixIO.open(arena, cgPath, Constants.O_RDONLY | Constants.O_DIRECTORY, 0);
                 if (cgFd < 0) {
                     Logger.warn("open cgroup dir failed: " + Libc.strerror(Libc.errno()));
@@ -238,9 +236,8 @@ public final class DeviceCgroup {
     private static int loadProgram(Arena arena, byte[] prog) {
         // union bpf_attr (size at least 0x80 for old kernels, we round up to 128).
         MemorySegment attr = arena.allocate(128);
-        attr.fill((byte) 0);
         MemorySegment insns = arena.allocate(prog.length);
-        for (int i = 0; i < prog.length; i++) insns.set(ValueLayout.JAVA_BYTE, i, prog[i]);
+        insns.copyFrom(MemorySegment.ofArray(prog));
         MemorySegment license = arena.allocateFrom("GPL");
         // Layout of bpf_attr for PROG_LOAD (relevant fields):
         //   u32 prog_type
@@ -262,7 +259,6 @@ public final class DeviceCgroup {
 
     private static int attachProgram(Arena arena, int cgroupFd, int progFd) {
         MemorySegment attr = arena.allocate(64);
-        attr.fill((byte) 0);
         // Layout: u32 target_fd; u32 attach_bpf_fd; u32 attach_type; u32 attach_flags;
         attr.set(ValueLayout.JAVA_INT, 0, cgroupFd);
         attr.set(ValueLayout.JAVA_INT, 4, progFd);
@@ -273,14 +269,6 @@ public final class DeviceCgroup {
     }
 
     private static long bpfNr() {
-        String arch = System.getProperty("os.arch", "").toLowerCase();
-        return (arch.contains("aarch64") || arch.contains("arm64")) ? NR_bpf_aarch64 : NR_bpf_x86_64;
-    }
-
-    /** Standalone path helper used by callers that have a Path. */
-    @SuppressWarnings("unused")
-    private static int openCgroupDir(Arena arena, Path p) {
-        return PosixIO.open(arena, p.toString(),
-                Constants.O_RDONLY | Constants.O_DIRECTORY, 0);
+        return Constants.isAarch64() ? NR_bpf_aarch64 : NR_bpf_x86_64;
     }
 }

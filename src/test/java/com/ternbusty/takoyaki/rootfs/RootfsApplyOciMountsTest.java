@@ -39,7 +39,7 @@ class RootfsApplyOciMountsTest {
         // double-mount and the second call would error in mysterious ways.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/proc",          "proc",   "proc",   null),
                     mount("/dev",           "tmpfs",  "tmpfs",  null),
                     mount("/sys",           "sysfs",  "sysfs",  null),
@@ -58,7 +58,7 @@ class RootfsApplyOciMountsTest {
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         Spec.Mount m = new Spec.Mount(); // destination = null
         try (var s = SyscallHost.install(rec)) {
-            assertDoesNotThrow(() -> Rootfs.applyOciMounts(null, tmp.toString(),
+            assertDoesNotThrow(() -> Rootfs.applyOciMounts(tmp.toString(),
                     List.of(m), Map.of()));
         }
         assertTrue(rec.mountCalls().isEmpty());
@@ -71,7 +71,7 @@ class RootfsApplyOciMountsTest {
         // flags=MS_NOSUID, data="mode=755". No remount (no bind), no propagation.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/tmp", "tmpfs", "tmpfs", List.of("nosuid", "mode=755"))
             ), Map.of());
         }
@@ -92,7 +92,7 @@ class RootfsApplyOciMountsTest {
         // null on the actual syscall.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "/host/data", "none", List.of("bind"))
             ), Map.of());
         }
@@ -111,7 +111,7 @@ class RootfsApplyOciMountsTest {
         // nodev, noexec, noatime, etc.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/etc/ro", "/host/etc", null, List.of("bind", "ro"))
             ), Map.of());
         }
@@ -137,7 +137,7 @@ class RootfsApplyOciMountsTest {
         // that don't expect MS_REMOUNT.)
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "/host/data", null, List.of("bind"))
             ), Map.of());
         }
@@ -153,7 +153,7 @@ class RootfsApplyOciMountsTest {
         // propagation call" and the "regular flags stayed in call 1" contracts.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "tmpfs", "tmpfs",
                             List.of("nosuid", "rprivate"))
             ), Map.of());
@@ -175,7 +175,7 @@ class RootfsApplyOciMountsTest {
         // (remount must come after bind, propagation must come last).
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/etc/ro", "/host/etc", null,
                             List.of("bind", "ro", "private"))
             ), Map.of());
@@ -201,7 +201,7 @@ class RootfsApplyOciMountsTest {
                 .stubMountReturn(-1)
                 .stubErrno(13 /* EACCES */);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/etc/ro", "/host/etc", null,
                             List.of("bind", "ro", "private"))
             ), Map.of());
@@ -217,7 +217,7 @@ class RootfsApplyOciMountsTest {
         // depends on parent-before-child ordering.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/tmp",   "tmpfs",   "tmpfs", List.of("nosuid")),
                     mount("/run",   "tmpfs",   "tmpfs", List.of("nosuid", "mode=755")),
                     mount("/data",  "/host/d", null,    List.of("bind"))
@@ -237,7 +237,7 @@ class RootfsApplyOciMountsTest {
         // remount must include ALL four access-restricting bits, not just RDONLY.
         RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
         try (var s = SyscallHost.install(rec)) {
-            Rootfs.applyOciMounts(null, tmp.toString(), List.of(
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "/host", null,
                             List.of("bind", "ro", "nosuid", "nodev", "noexec"))
             ), Map.of());

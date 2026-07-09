@@ -33,6 +33,26 @@ public final class MountOptions {
         }
     }
 
+    /**
+     * Map an OCI propagation name ("shared", "rslave", ...) to its MS_* flag
+     * combination. Returns 0 for unknown names. Single owner of this mapping,
+     * shared between {@link #parse} and Rootfs' rootfsPropagation handling.
+     */
+    public static long propagationFlag(String name) {
+        if (name == null) return 0L;
+        return switch (name) {
+            case "shared"      -> Constants.MS_SHARED;
+            case "rshared"     -> Constants.MS_SHARED | Constants.MS_REC;
+            case "slave"       -> Constants.MS_SLAVE;
+            case "rslave"      -> Constants.MS_SLAVE | Constants.MS_REC;
+            case "private"     -> Constants.MS_PRIVATE;
+            case "rprivate"    -> Constants.MS_PRIVATE | Constants.MS_REC;
+            case "unbindable"  -> Constants.MS_UNBINDABLE;
+            case "runbindable" -> Constants.MS_UNBINDABLE | Constants.MS_REC;
+            default            -> 0L;
+        };
+    }
+
     public static Parsed parse(List<String> options) {
         long flags = 0;
         long propagation = 0;
@@ -60,15 +80,12 @@ public final class MountOptions {
                 case "strictatime": flags |= Constants.MS_STRICTATIME;  break;
                 case "nosymfollow": flags |= Constants.MS_NOSYMFOLLOW;  break;
                 case "rec":         flags |= Constants.MS_REC;          break;
-                case "shared":      propagation = Constants.MS_SHARED;                       break;
-                case "rshared":     propagation = Constants.MS_SHARED | Constants.MS_REC;    break;
-                case "slave":       propagation = Constants.MS_SLAVE;                        break;
-                case "rslave":      propagation = Constants.MS_SLAVE | Constants.MS_REC;     break;
-                case "private":     propagation = Constants.MS_PRIVATE;                      break;
-                case "rprivate":    propagation = Constants.MS_PRIVATE | Constants.MS_REC;   break;
-                case "unbindable":  propagation = Constants.MS_UNBINDABLE;                   break;
-                case "runbindable": propagation = Constants.MS_UNBINDABLE | Constants.MS_REC; break;
                 default:
+                    long prop = propagationFlag(o);
+                    if (prop != 0) {
+                        propagation = prop;
+                        break;
+                    }
                     if (data.length() > 0) data.append(",");
                     data.append(o);
             }

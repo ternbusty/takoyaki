@@ -13,6 +13,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
 public final class State {
+    private static final DateTimeFormatter CREATED_FORMAT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
+
     public String ociVersion;
     public String id;
     public String status;
@@ -71,24 +74,17 @@ public final class State {
     public static State create(String ociVersion, String containerId,
                                ContainerStatus status, Integer pid, String bundle,
                                Map<String, String> annotations) {
-        String created = OffsetDateTime.now(ZoneOffset.UTC)
-                .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'"));
+        String created = OffsetDateTime.now(ZoneOffset.UTC).format(CREATED_FORMAT);
         return new State(ociVersion, containerId, status, pid, bundle, annotations, created);
     }
 
     public State refreshStatus() {
-        if (pid == null) {
-            return statusEnum() == ContainerStatus.STOPPED ? this : withStatus(ContainerStatus.STOPPED);
-        }
-        if (!isProcessAlive(pid)) {
-            return statusEnum() == ContainerStatus.STOPPED ? this : withStatus(ContainerStatus.STOPPED);
-        }
-        return this;
+        if (pid != null && isProcessAlive(pid)) return this;
+        return statusEnum() == ContainerStatus.STOPPED ? this : withStatus(ContainerStatus.STOPPED);
     }
 
     private static boolean isProcessAlive(int pid) {
         Path stat = Path.of("/proc", String.valueOf(pid), "stat");
-        if (!Files.exists(stat)) return false;
         try {
             String content = Files.readString(stat);
             int lp = content.lastIndexOf(')');

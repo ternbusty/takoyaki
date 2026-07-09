@@ -17,20 +17,24 @@ import java.util.Set;
 public final class Capability {
     private Capability() {}
 
+    private static final String[] NAMES = {
+            "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_FSETID",
+            "CAP_KILL", "CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP", "CAP_LINUX_IMMUTABLE",
+            "CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST", "CAP_NET_ADMIN", "CAP_NET_RAW",
+            "CAP_IPC_LOCK", "CAP_IPC_OWNER", "CAP_SYS_MODULE", "CAP_SYS_RAWIO", "CAP_SYS_CHROOT",
+            "CAP_SYS_PTRACE", "CAP_SYS_PACCT", "CAP_SYS_ADMIN", "CAP_SYS_BOOT", "CAP_SYS_NICE",
+            "CAP_SYS_RESOURCE", "CAP_SYS_TIME", "CAP_SYS_TTY_CONFIG", "CAP_MKNOD", "CAP_LEASE",
+            "CAP_AUDIT_WRITE", "CAP_AUDIT_CONTROL", "CAP_SETFCAP", "CAP_MAC_OVERRIDE",
+            "CAP_MAC_ADMIN", "CAP_SYSLOG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND",
+            "CAP_AUDIT_READ", "CAP_PERFMON", "CAP_BPF", "CAP_CHECKPOINT_RESTORE"
+    };
+
+    /** Highest cap id we know about — the ids are the NAMES array indices. */
+    private static final int LAST_CAP = NAMES.length - 1;
+
     private static final Map<String, Integer> CAPS = new HashMap<>();
     static {
-        String[] names = {
-                "CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_FSETID",
-                "CAP_KILL", "CAP_SETGID", "CAP_SETUID", "CAP_SETPCAP", "CAP_LINUX_IMMUTABLE",
-                "CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST", "CAP_NET_ADMIN", "CAP_NET_RAW",
-                "CAP_IPC_LOCK", "CAP_IPC_OWNER", "CAP_SYS_MODULE", "CAP_SYS_RAWIO", "CAP_SYS_CHROOT",
-                "CAP_SYS_PTRACE", "CAP_SYS_PACCT", "CAP_SYS_ADMIN", "CAP_SYS_BOOT", "CAP_SYS_NICE",
-                "CAP_SYS_RESOURCE", "CAP_SYS_TIME", "CAP_SYS_TTY_CONFIG", "CAP_MKNOD", "CAP_LEASE",
-                "CAP_AUDIT_WRITE", "CAP_AUDIT_CONTROL", "CAP_SETFCAP", "CAP_MAC_OVERRIDE",
-                "CAP_MAC_ADMIN", "CAP_SYSLOG", "CAP_WAKE_ALARM", "CAP_BLOCK_SUSPEND",
-                "CAP_AUDIT_READ", "CAP_PERFMON", "CAP_BPF", "CAP_CHECKPOINT_RESTORE"
-        };
-        for (int i = 0; i < names.length; i++) CAPS.put(names[i], i);
+        for (int i = 0; i < NAMES.length; i++) CAPS.put(NAMES[i], i);
     }
 
     public static int idOf(String name) {
@@ -53,7 +57,7 @@ public final class Capability {
     public static void applyBoundingSet(Spec.LinuxCapabilities caps) {
         if (caps == null || caps.bounding == null) return;
         Set<Integer> keep = parseSet(caps.bounding);
-        for (int i = 0; i <= Constants.CAP_LAST_CAP; i++) {
+        for (int i = 0; i <= LAST_CAP; i++) {
             if (!keep.contains(i)) {
                 Libc.prctl(Constants.PR_CAPBSET_DROP, i, 0, 0, 0);
             }
@@ -108,15 +112,7 @@ public final class Capability {
 
     private static long mask(List<String> names) {
         long m = 0L;
-        if (names == null) return 0L;
-        for (String n : names) {
-            int id = idOf(n);
-            if (id >= 0) {
-                m |= (1L << id);
-            } else {
-                Logger.warn("unknown capability name: " + n);
-            }
-        }
+        for (int id : parseSet(names)) m |= (1L << id);
         return m;
     }
 

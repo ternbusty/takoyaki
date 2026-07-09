@@ -21,11 +21,10 @@ public final class CloseRange {
             int e = Libc.errno();
             if (e == Constants.ENOSYS || e == Constants.EINVAL) {
                 Logger.debug("close_range unsupported (errno=" + e + "), falling back");
-                fallbackCloexec(minFd);
             } else {
                 Logger.warn("close_range failed: " + Libc.strerror(e));
-                fallbackCloexec(minFd);
             }
+            fallbackCloexec(minFd);
         } else {
             Logger.debug("close_range applied for fds >= " + minFd);
         }

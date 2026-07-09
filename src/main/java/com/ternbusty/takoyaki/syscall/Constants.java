@@ -20,7 +20,6 @@ public final class Constants {
     public static final long MS_BIND = 4096L;
     public static final long MS_REC = 16384L;
     public static final long MS_NOATIME = 1024L;
-    public static final long MS_NODIRATIME = 2048L;
     public static final long MS_RELATIME = 1L << 21;
     public static final long MS_STRICTATIME = 1L << 24;
     public static final long MS_NOSYMFOLLOW = 256L;
@@ -58,7 +57,6 @@ public final class Constants {
     public static final int EPERM = 1;
     public static final int ENOENT = 2;
     public static final int ESRCH = 3;
-    public static final int EBADF = 9;
     public static final int EEXIST = 17;
     public static final int EBUSY = 16;
     public static final int EINVAL = 22;
@@ -68,7 +66,6 @@ public final class Constants {
     public static final int AF_INET = 2;
     public static final int SOCK_STREAM = 1;
     public static final int SOCK_DGRAM = 2;
-    public static final int SOCK_SEQPACKET = 5;
 
     public static final int F_OK = 0;
     public static final int O_RDONLY = 0;
@@ -107,21 +104,17 @@ public final class Constants {
     public static final int PR_CAP_AMBIENT_RAISE = 2;
     public static final int PR_CAP_AMBIENT_CLEAR_ALL = 4;
     public static final int PR_SET_CHILD_SUBREAPER = 36;
-    public static final int CAP_LAST_CAP = 40;
 
     public static final int LINUX_CAPABILITY_VERSION_3 = 0x20080522;
 
     public static final long NR_capset = isAarch64() ? 91L : 126L;
-    public static final long NR_capget = isAarch64() ? 90L : 125L;
-    public static final long NR_close_range = isAarch64() ? 436L : 436L;
+    public static final long NR_close_range = 436L; // same on aarch64 and x86_64
     public static final int CLOSE_RANGE_CLOEXEC = 4;
 
     // ioctl request codes
     public static final long SIOCGIFFLAGS = 0x8913L;
     public static final long SIOCSIFFLAGS = 0x8914L;
     public static final int IFF_UP = 0x1;
-    public static final int IFF_LOOPBACK = 0x8;
-    public static final int IFF_RUNNING = 0x40;
 
     // mknod / stat mode bits
     public static final int S_IFCHR = 0020000;

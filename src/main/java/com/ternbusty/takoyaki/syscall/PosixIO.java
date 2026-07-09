@@ -60,9 +60,6 @@ public final class PosixIO {
     private static final MethodHandle ACCESS = h("access",
             FunctionDescriptor.of(ValueLayout.JAVA_INT,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle MKDIR = h("mkdir",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle OPEN = h("open",
             FunctionDescriptor.of(ValueLayout.JAVA_INT,
                     ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
@@ -72,8 +69,6 @@ public final class PosixIO {
             FunctionDescriptor.of(ValueLayout.JAVA_INT));
     private static final MethodHandle EXIT_ = h("_exit",
             FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT));
-    private static final MethodHandle EXECV = h("execv",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
     private static final MethodHandle EXECVE = h("execve",
             FunctionDescriptor.of(ValueLayout.JAVA_INT,
                     ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
@@ -103,26 +98,28 @@ public final class PosixIO {
 
     public static int bindUnix(Arena arena, int fd, String path) {
         try {
-            MemorySegment addr = arena.allocate(110 + 2);
-            addr.set(ValueLayout.JAVA_SHORT, 0, (short) 1);
             byte[] pb = path.getBytes();
-            if (pb.length >= 108) throw new IllegalArgumentException("socket path too long");
-            MemorySegment sunPath = addr.asSlice(2);
-            sunPath.asByteBuffer().put(pb).put((byte) 0);
+            MemorySegment addr = sockaddrUn(arena, pb);
             return (int) BIND.invoke(fd, addr, 2 + pb.length + 1);
         } catch (Throwable t) { throw sneaky(t); }
     }
 
     public static int connectUnix(Arena arena, int fd, String path) {
         try {
-            MemorySegment addr = arena.allocate(110 + 2);
-            addr.set(ValueLayout.JAVA_SHORT, 0, (short) 1);
             byte[] pb = path.getBytes();
-            if (pb.length >= 108) throw new IllegalArgumentException("socket path too long");
-            MemorySegment sunPath = addr.asSlice(2);
-            sunPath.asByteBuffer().put(pb).put((byte) 0);
+            MemorySegment addr = sockaddrUn(arena, pb);
             return (int) CONNECT.invoke(fd, addr, 2 + pb.length + 1);
         } catch (Throwable t) { throw sneaky(t); }
+    }
+
+    /** sockaddr_un: sun_family=AF_UNIX at offset 0, NUL-terminated path at offset 2. */
+    private static MemorySegment sockaddrUn(Arena arena, byte[] pathBytes) {
+        MemorySegment addr = arena.allocate(110 + 2);
+        addr.set(ValueLayout.JAVA_SHORT, 0, (short) 1);
+        if (pathBytes.length >= 108) throw new IllegalArgumentException("socket path too long");
+        MemorySegment sunPath = addr.asSlice(2);
+        sunPath.asByteBuffer().put(pathBytes).put((byte) 0);
+        return addr;
     }
 
     public static int listen(int fd, int backlog) {
@@ -184,11 +181,6 @@ public final class PosixIO {
         catch (Throwable t) { throw sneaky(t); }
     }
 
-    public static int mkdir(Arena arena, String path, int mode) {
-        try { return (int) MKDIR.invoke(arena.allocateFrom(path), mode); }
-        catch (Throwable t) { throw sneaky(t); }
-    }
-
     public static int open(Arena arena, String path, int flags, int mode) {
         try { return (int) OPEN.invoke(arena.allocateFrom(path), flags, mode); }
         catch (Throwable t) { throw sneaky(t); }
@@ -209,13 +201,6 @@ public final class PosixIO {
         catch (Throwable t) { throw sneaky(t); }
     }
 
-    public static int execve(Arena arena, String path, String[] argv, String[] envp) {
-        try {
-            ExecvePayload p = ExecvePayload.build(arena, path, argv, envp);
-            return invokeExecve(p);
-        } catch (Throwable t) { throw sneaky(t); }
-    }
-
     public static int invokeExecve(ExecvePayload p) {
         try {
             return (int) EXECVE.invoke(p.path, p.argv, p.envp);
@@ -231,31 +216,20 @@ public final class PosixIO {
         }
         public static ExecvePayload build(Arena arena, String path, String[] argv, String[] envp) {
             MemorySegment pathSeg = arena.allocateFrom(path);
-            MemorySegment[] argSegs = new MemorySegment[argv.length];
-            for (int i = 0; i < argv.length; i++) argSegs[i] = arena.allocateFrom(argv[i]);
-            MemorySegment argvArr = arena.allocate(ValueLayout.ADDRESS, argv.length + 1L);
-            for (int i = 0; i < argv.length; i++) argvArr.setAtIndex(ValueLayout.ADDRESS, i, argSegs[i]);
-            argvArr.setAtIndex(ValueLayout.ADDRESS, argv.length, MemorySegment.NULL);
-
-            MemorySegment[] envSegs = new MemorySegment[envp.length];
-            for (int i = 0; i < envp.length; i++) envSegs[i] = arena.allocateFrom(envp[i]);
-            MemorySegment envArr = arena.allocate(ValueLayout.ADDRESS, envp.length + 1L);
-            for (int i = 0; i < envp.length; i++) envArr.setAtIndex(ValueLayout.ADDRESS, i, envSegs[i]);
-            envArr.setAtIndex(ValueLayout.ADDRESS, envp.length, MemorySegment.NULL);
-
+            MemorySegment argvArr = cStringArray(arena, argv);
+            MemorySegment envArr = cStringArray(arena, envp);
             return new ExecvePayload(pathSeg, argvArr, envArr);
         }
     }
 
-    public static int execv(Arena arena, String path, String[] argv) {
-        try {
-            MemorySegment[] segs = new MemorySegment[argv.length];
-            for (int i = 0; i < argv.length; i++) segs[i] = arena.allocateFrom(argv[i]);
-            MemorySegment arr = arena.allocate(ValueLayout.ADDRESS, argv.length + 1L);
-            for (int i = 0; i < argv.length; i++) arr.setAtIndex(ValueLayout.ADDRESS, i, segs[i]);
-            arr.setAtIndex(ValueLayout.ADDRESS, argv.length, MemorySegment.NULL);
-            return (int) EXECV.invoke(arena.allocateFrom(path), arr);
-        } catch (Throwable t) { throw sneaky(t); }
+    /** NULL-terminated array of C strings (argv/envp shape). Shared with {@link Libc#execvp}. */
+    static MemorySegment cStringArray(Arena arena, String[] strings) {
+        MemorySegment arr = arena.allocate(ValueLayout.ADDRESS, strings.length + 1L);
+        for (int i = 0; i < strings.length; i++) {
+            arr.setAtIndex(ValueLayout.ADDRESS, i, arena.allocateFrom(strings[i]));
+        }
+        arr.setAtIndex(ValueLayout.ADDRESS, strings.length, MemorySegment.NULL);
+        return arr;
     }
 
     public static int fcntl(int fd, int op, int arg) {

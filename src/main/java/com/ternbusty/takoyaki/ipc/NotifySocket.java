@@ -12,6 +12,11 @@ import static com.ternbusty.takoyaki.syscall.Constants.SOCK_STREAM;
 public final class NotifySocket {
     private NotifySocket() {}
 
+    /** Canonical notify socket path for a container. Single owner of the naming scheme. */
+    public static String pathFor(String containerId) {
+        return "/tmp/takoyaki-" + containerId + ".sock";
+    }
+
     public static int createListener(String socketPath) {
         try (Arena arena = Arena.ofConfined()) {
             int fd = PosixIO.socket(AF_UNIX, SOCK_STREAM, 0);

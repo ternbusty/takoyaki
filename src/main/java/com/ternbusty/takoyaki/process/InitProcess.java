@@ -23,7 +23,6 @@ import com.ternbusty.takoyaki.syscall.Groups;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.sysctl.Sysctl;
-import com.ternbusty.takoyaki.time.TimeNs;
 import com.ternbusty.takoyaki.util.Json;
 
 import java.lang.foreign.Arena;
@@ -84,12 +83,14 @@ public final class InitProcess {
     public static void run() {
         Logger.setContext("init");
         Logger.debug("init started, pid=" + Libc.getpid() + " ppid=" + Libc.getppid());
-        try {
-            String mntNs = Files.readSymbolicLink(Path.of("/proc/self/ns/mnt")).toString();
-            String pidNs = Files.readSymbolicLink(Path.of("/proc/self/ns/pid")).toString();
-            Logger.debug("init mnt_ns=" + mntNs + " pid_ns=" + pidNs);
-        } catch (Exception e) {
-            Logger.warn("could not read ns: " + e.getMessage());
+        if (Logger.isDebugEnabled()) {
+            try {
+                String mntNs = Files.readSymbolicLink(Path.of("/proc/self/ns/mnt")).toString();
+                String pidNs = Files.readSymbolicLink(Path.of("/proc/self/ns/pid")).toString();
+                Logger.debug("init mnt_ns=" + mntNs + " pid_ns=" + pidNs);
+            } catch (Exception e) {
+                Logger.warn("could not read ns: " + e.getMessage());
+            }
         }
 
         String bundlePath = System.getenv("_TAKOYAKI_BUNDLE_PATH");
@@ -106,6 +107,12 @@ public final class InitProcess {
 
         int mainSenderFd = Integer.parseInt(mainSenderFdStr);
         int notifyListenerFd = Integer.parseInt(notifyListenerFdStr);
+
+        // Optional: host-side pre-connected seccomp listener socket, prepared by
+        // CreateCommand when the spec has a seccomp listenerPath. -1 when absent.
+        String seccompListenerFdStr = System.getenv("_TAKOYAKI_SECCOMP_LISTENER_FD");
+        int seccompListenerFd = seccompListenerFdStr != null
+                ? Integer.parseInt(seccompListenerFdStr) : -1;
 
         Spec spec;
         try {
@@ -211,8 +218,7 @@ public final class InitProcess {
 
             // Generate /etc/passwd and /etc/group entries while still writable.
             if (spec.process != null) {
-                UserDb.ensure(spec.process.user,
-                        spec.process.user == null ? null : spec.process.user.additionalGids);
+                UserDb.ensure(spec.process.user);
             }
 
             if (spec.root != null && spec.root.readonly) {
@@ -271,7 +277,8 @@ public final class InitProcess {
             // in effective at this point.
             if (spec.linux != null && spec.linux.seccomp != null && !nnpRequested) {
                 Seccomp.apply(spec.linux.seccomp,
-                        System.getenv("_TAKOYAKI_CONTAINER_ID"), bundlePath);
+                        buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
+                        seccompListenerFd);
             }
 
             Spec.LinuxCapabilities caps = spec.process != null ? spec.process.capabilities : null;
@@ -312,7 +319,8 @@ public final class InitProcess {
             // the workload and off init's own setup syscalls.
             if (spec.linux != null && spec.linux.seccomp != null && nnpRequested) {
                 Seccomp.apply(spec.linux.seccomp,
-                        System.getenv("_TAKOYAKI_CONTAINER_ID"), bundlePath);
+                        buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
+                        seccompListenerFd);
             }
 
             // PTY setup: if process.terminal is true and a console socket was passed,

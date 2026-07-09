@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.cgroup.Cgroup;
 import com.ternbusty.takoyaki.config.KontainerConfig;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.state.State;
@@ -29,8 +30,7 @@ public final class PsCommand {
 
         List<Integer> pids = new ArrayList<>();
         if (cgroupPath != null) {
-            String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-            Path procs = Path.of("/sys/fs/cgroup", norm, "cgroup.procs");
+            Path procs = Cgroup.dir(cgroupPath).resolve("cgroup.procs");
             try {
                 for (String line : Files.readAllLines(procs)) {
                     String t = line.trim();

@@ -116,12 +116,12 @@ public final class Main {
             return 0;
         }
         return switch (subName) {
-            case "state" -> dispatchState(args, subStart, rootPath);
+            case "state" -> runWithId("state", args, subStart, rootPath, StateCommand::run);
             case "list", "ls" -> dispatchList(args, subStart, rootPath);
             case "kill" -> dispatchKill(args, subStart, rootPath);
-            case "start" -> dispatchStart(args, subStart, rootPath);
-            case "pause" -> dispatchPause(args, subStart, rootPath);
-            case "resume" -> dispatchResume(args, subStart, rootPath);
+            case "start" -> runWithId("start", args, subStart, rootPath, StartCommand::run);
+            case "pause" -> runWithId("pause", args, subStart, rootPath, PauseCommand::run);
+            case "resume" -> runWithId("resume", args, subStart, rootPath, ResumeCommand::run);
             case "delete" -> dispatchDelete(args, subStart, rootPath);
             case "ps" -> dispatchPs(args, subStart, rootPath);
             case "create" -> dispatchCreate(args, subStart, rootPath, debug);
@@ -138,13 +138,20 @@ public final class Main {
 
     // ---- per-subcommand argv parsing & dispatch -----------------------
 
-    private static int dispatchState(String[] args, int subStart, String rootPath) {
-        // takoyaki state <id>
+    /** A subcommand that takes exactly the state root and a container ID. */
+    private interface IdCommand {
+        int run(String rootPath, String id);
+    }
+
+    /** Dispatch for subcommands whose only argument is a container ID. */
+    private static int runWithId(String sub, String[] args, int subStart, String rootPath,
+                                 IdCommand cmd) {
+        // takoyaki <sub> <id>
         if (subStart >= args.length) {
-            System.err.println("takoyaki state: missing container ID");
+            System.err.println("takoyaki " + sub + ": missing container ID");
             return 1;
         }
-        return StateCommand.run(rootPath, args[subStart]);
+        return cmd.run(rootPath, args[subStart]);
     }
 
     private static int dispatchList(String[] args, int subStart, String rootPath) {
@@ -178,30 +185,6 @@ public final class Main {
         String id = args[subStart];
         String sig = subStart + 1 < args.length ? args[subStart + 1] : "SIGTERM";
         return KillCommand.run(rootPath, id, sig);
-    }
-
-    private static int dispatchStart(String[] args, int subStart, String rootPath) {
-        if (subStart >= args.length) {
-            System.err.println("takoyaki start: missing container ID");
-            return 1;
-        }
-        return StartCommand.run(rootPath, args[subStart]);
-    }
-
-    private static int dispatchPause(String[] args, int subStart, String rootPath) {
-        if (subStart >= args.length) {
-            System.err.println("takoyaki pause: missing container ID");
-            return 1;
-        }
-        return PauseCommand.run(rootPath, args[subStart]);
-    }
-
-    private static int dispatchResume(String[] args, int subStart, String rootPath) {
-        if (subStart >= args.length) {
-            System.err.println("takoyaki resume: missing container ID");
-            return 1;
-        }
-        return ResumeCommand.run(rootPath, args[subStart]);
     }
 
     private static int dispatchDelete(String[] args, int subStart, String rootPath) {
@@ -255,54 +238,10 @@ public final class Main {
     private static int dispatchCreate(String[] args, int subStart, String rootPath, boolean debug) {
         // takoyaki create [-b BUNDLE] [--pid-file P] [--console-socket S]
         //                 [--no-pivot] [--no-new-keyring] [--preserve-fds N] <id>
-        String bundle = ".";
-        String pidFile = null;
-        String consoleSocket = null;
-        boolean noPivot = false;
-        boolean noNewKeyring = false;
-        int preserveFds = 0;
-        String id = null;
-        for (int i = subStart; i < args.length; i++) {
-            String a = args[i];
-            switch (a) {
-                case "-b", "--bundle" -> {
-                    if (i + 1 >= args.length) return missingArg("create", a);
-                    bundle = args[++i];
-                }
-                case "--pid-file" -> {
-                    if (i + 1 >= args.length) return missingArg("create", a);
-                    pidFile = args[++i];
-                }
-                case "--console-socket" -> {
-                    if (i + 1 >= args.length) return missingArg("create", a);
-                    consoleSocket = args[++i];
-                }
-                case "--no-pivot" -> noPivot = true;
-                case "--no-new-keyring" -> noNewKeyring = true;
-                case "--preserve-fds" -> {
-                    if (i + 1 >= args.length) return missingArg("create", a);
-                    try { preserveFds = Integer.parseInt(args[++i]); }
-                    catch (NumberFormatException e) {
-                        System.err.println("takoyaki create: --preserve-fds requires an integer");
-                        return 1;
-                    }
-                }
-                default -> {
-                    if (a.charAt(0) != '-' && id == null) {
-                        id = a;
-                    } else {
-                        System.err.println("takoyaki create: unexpected arg: " + a);
-                        return 1;
-                    }
-                }
-            }
-        }
-        if (id == null) {
-            System.err.println("takoyaki create: missing container ID");
-            return 1;
-        }
-        return CreateCommand.run(rootPath, debug, id, bundle, pidFile, consoleSocket,
-                noPivot, noNewKeyring, preserveFds);
+        CreateOptions o = parseCreateOptions("create", args, subStart, false);
+        if (o == null) return 1;
+        return CreateCommand.run(rootPath, debug, o.id, o.bundle, o.pidFile, o.consoleSocket,
+                o.noPivot, o.noNewKeyring, o.preserveFds);
     }
 
     private static int dispatchRun(String[] args, int subStart, String rootPath, boolean debug) {
@@ -312,6 +251,14 @@ public final class Main {
         //
         // Same args as create except --detach. Without --detach we wait for
         // the container init to exit and then delete the state.
+        CreateOptions o = parseCreateOptions("run", args, subStart, true);
+        if (o == null) return 1;
+        return RunCommand.run(rootPath, debug, o.id, o.bundle, o.pidFile, o.consoleSocket,
+                o.noPivot, o.noNewKeyring, o.preserveFds, o.detach);
+    }
+
+    /** Options shared by create and run (run additionally accepts -d/--detach). */
+    private static final class CreateOptions {
         String bundle = ".";
         String pidFile = null;
         String consoleSocket = null;
@@ -320,48 +267,60 @@ public final class Main {
         int preserveFds = 0;
         boolean detach = false;
         String id = null;
+    }
+
+    /**
+     * Parses the create/run option grammar. Returns null (after printing the
+     * error) when the argv is invalid.
+     */
+    private static CreateOptions parseCreateOptions(String sub, String[] args, int subStart,
+                                                    boolean allowDetach) {
+        CreateOptions o = new CreateOptions();
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
             switch (a) {
                 case "-b", "--bundle" -> {
-                    if (i + 1 >= args.length) return missingArg("run", a);
-                    bundle = args[++i];
+                    if (i + 1 >= args.length) { missingArg(sub, a); return null; }
+                    o.bundle = args[++i];
                 }
-                case "-d", "--detach" -> detach = true;
+                case "-d", "--detach" -> {
+                    if (!allowDetach) {
+                        System.err.println("takoyaki " + sub + ": unexpected arg: " + a);
+                        return null;
+                    }
+                    o.detach = true;
+                }
                 case "--pid-file" -> {
-                    if (i + 1 >= args.length) return missingArg("run", a);
-                    pidFile = args[++i];
+                    if (i + 1 >= args.length) { missingArg(sub, a); return null; }
+                    o.pidFile = args[++i];
                 }
                 case "--console-socket" -> {
-                    if (i + 1 >= args.length) return missingArg("run", a);
-                    consoleSocket = args[++i];
+                    if (i + 1 >= args.length) { missingArg(sub, a); return null; }
+                    o.consoleSocket = args[++i];
                 }
-                case "--no-pivot" -> noPivot = true;
-                case "--no-new-keyring" -> noNewKeyring = true;
+                case "--no-pivot" -> o.noPivot = true;
+                case "--no-new-keyring" -> o.noNewKeyring = true;
                 case "--preserve-fds" -> {
-                    if (i + 1 >= args.length) return missingArg("run", a);
-                    try { preserveFds = Integer.parseInt(args[++i]); }
-                    catch (NumberFormatException e) {
-                        System.err.println("takoyaki run: --preserve-fds requires an integer");
-                        return 1;
-                    }
+                    if (i + 1 >= args.length) { missingArg(sub, a); return null; }
+                    Integer v = parseIntOrFail(sub, a, args[++i]);
+                    if (v == null) return null;
+                    o.preserveFds = v;
                 }
                 default -> {
-                    if (a.charAt(0) != '-' && id == null) {
-                        id = a;
+                    if (a.charAt(0) != '-' && o.id == null) {
+                        o.id = a;
                     } else {
-                        System.err.println("takoyaki run: unexpected arg: " + a);
-                        return 1;
+                        System.err.println("takoyaki " + sub + ": unexpected arg: " + a);
+                        return null;
                     }
                 }
             }
         }
-        if (id == null) {
-            System.err.println("takoyaki run: missing container ID");
-            return 1;
+        if (o.id == null) {
+            System.err.println("takoyaki " + sub + ": missing container ID");
+            return null;
         }
-        return RunCommand.run(rootPath, debug, id, bundle, pidFile, consoleSocket,
-                noPivot, noNewKeyring, preserveFds, detach);
+        return o;
     }
 
     private static int dispatchUpdate(String[] args, int subStart, String rootPath) {
@@ -435,11 +394,9 @@ public final class Main {
                 case "--stats" -> once = true;
                 case "--interval" -> {
                     if (i + 1 >= args.length) return missingArg("events", a);
-                    try { intervalSec = Integer.parseInt(args[++i]); }
-                    catch (NumberFormatException e) {
-                        System.err.println("takoyaki events: --interval requires an integer");
-                        return 1;
-                    }
+                    Integer v = parseIntOrFail("events", a, args[++i]);
+                    if (v == null) return 1;
+                    intervalSec = v;
                 }
                 default -> {
                     if (a.charAt(0) != '-' && id == null) {
@@ -525,6 +482,17 @@ public final class Main {
         try { return Long.parseLong(value); }
         catch (NumberFormatException e) {
             System.err.println("takoyaki " + sub + ": " + opt + " requires an integer, got: " + value);
+            return null;
+        }
+    }
+
+    // Int twin of parseLongOrFail. Kept separate because the historical int
+    // sites print a shorter message (no ", got: <value>" suffix) and callers
+    // depend on that exact output.
+    private static Integer parseIntOrFail(String sub, String opt, String value) {
+        try { return Integer.parseInt(value); }
+        catch (NumberFormatException e) {
+            System.err.println("takoyaki " + sub + ": " + opt + " requires an integer");
             return null;
         }
     }

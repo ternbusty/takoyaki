@@ -2,7 +2,7 @@ package com.ternbusty.takoyaki.seccomp;
 
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
-import com.ternbusty.takoyaki.syscall.Libc;
+import com.ternbusty.takoyaki.state.State;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
@@ -11,8 +11,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
 import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
-import java.nio.file.Path;
-import java.util.List;
 
 public final class Seccomp {
     private Seccomp() {}
@@ -30,10 +28,6 @@ public final class Seccomp {
     private static volatile MethodHandle SECCOMP_ARCH_REMOVE;
     private static volatile MethodHandle SECCOMP_ARCH_RESOLVE_NAME;
     private static volatile MethodHandle SECCOMP_ATTR_SET;
-
-    public static boolean preload() {
-        return ensureLoaded();
-    }
 
     private static synchronized boolean ensureLoaded() {
         if (libseccomp != null) return true;
@@ -77,17 +71,15 @@ public final class Seccomp {
         }
     }
 
-    public static void apply(Spec.LinuxSeccomp sec) {
-        apply(sec, null, null);
-    }
-
     /**
-     * @param containerId required only when SCMP_ACT_NOTIFY rules are present and
-     *                    {@code sec.listenerPath} is set; used to build the state
-     *                    JSON sent to the listener.
-     * @param bundle      same as above
+     * @param state          used only when SCMP_ACT_NOTIFY rules are present and
+     *                       {@code sec.listenerPath} is set; serialized as the state
+     *                       JSON sent to the listener.
+     * @param preConnectedFd host-side pre-connected listener socket fd, or -1 when
+     *                       absent (the listener path must then be reachable from
+     *                       here, which it usually isn't post-pivot).
      */
-    public static void apply(Spec.LinuxSeccomp sec, String containerId, String bundle) {
+    public static void apply(Spec.LinuxSeccomp sec, State state, int preConnectedFd) {
         if (sec == null) return;
         if (!ensureLoaded()) {
             Logger.error("libseccomp.so.2 not found, cannot apply seccomp");
@@ -126,9 +118,11 @@ public final class Seccomp {
                     }
                 }
 
+                boolean hasNotify = false;
                 if (sec.syscalls != null) {
                     for (Spec.LinuxSyscall sc : sec.syscalls) {
                         int action = actionToken(sc.action, sc.errnoRet);
+                        if (action == ACT_NOTIFY) hasNotify = true;
                         if (sc.names == null) continue;
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
@@ -179,12 +173,6 @@ public final class Seccomp {
                 // If the spec declared any SCMP_ACT_NOTIFY rules, pull the notify fd
                 // out of the loaded context. We don't manage a listener — that's the
                 // caller's responsibility — but make the fd reachable via env var.
-                boolean hasNotify = false;
-                if (sec.syscalls != null) {
-                    for (Spec.LinuxSyscall sc : sec.syscalls) {
-                        if ("SCMP_ACT_NOTIFY".equals(sc.action)) { hasNotify = true; break; }
-                    }
-                }
                 if (hasNotify) {
                     Logger.debug("seccomp ctx address=0x"
                             + Long.toHexString(ctx.address())
@@ -197,10 +185,8 @@ public final class Seccomp {
                                 + "leaving notify fd=" + notifyFd
                                 + " unforwarded — matching syscalls will block forever");
                     } else {
-                        String preFdStr = System.getenv("_TAKOYAKI_SECCOMP_LISTENER_FD");
-                        int preFd = preFdStr != null ? Integer.parseInt(preFdStr) : -1;
-                        SeccompListener.forward(sec.listenerPath, containerId, bundle,
-                                Libc.getpid(), sec.listenerMetadata, notifyFd, preFd);
+                        SeccompListener.forward(sec.listenerPath, state,
+                                sec.listenerMetadata, notifyFd, preConnectedFd);
                         // Close our copy; the listener has its own dup via SCM_RIGHTS.
                         com.ternbusty.takoyaki.syscall.PosixIO.close(notifyFd);
                     }
@@ -248,6 +234,9 @@ public final class Seccomp {
         };
     }
 
+    // libseccomp action code for SCMP_ACT_NOTIFY, from seccomp.h.
+    private static final int ACT_NOTIFY = 0x7fc00000;
+
     private static int actionToken(String action, Long errnoRet) {
         int errno = errnoRet == null ? 0 : errnoRet.intValue();
         // libseccomp action codes from seccomp.h
@@ -259,16 +248,9 @@ public final class Seccomp {
             case "SCMP_ACT_TRACE" -> 0x7ff00000 | (errno & 0xffff);
             case "SCMP_ACT_LOG" -> 0x7ffc0000;
             case "SCMP_ACT_ALLOW" -> 0x7fff0000;
-            case "SCMP_ACT_NOTIFY" -> 0x7fc00000;
+            case "SCMP_ACT_NOTIFY" -> ACT_NOTIFY;
             default -> 0x7fff0000;
         };
-    }
-
-    public static boolean available() {
-        return Path.of("/usr/lib/x86_64-linux-gnu/libseccomp.so.2").toFile().exists()
-                || Path.of("/usr/lib/aarch64-linux-gnu/libseccomp.so.2").toFile().exists()
-                || Path.of("/lib/x86_64-linux-gnu/libseccomp.so.2").toFile().exists()
-                || Path.of("/lib/aarch64-linux-gnu/libseccomp.so.2").toFile().exists();
     }
 
     private static SymbolLookup libraryLookupWithFallback() {
@@ -287,7 +269,4 @@ public final class Seccomp {
         }
         throw new RuntimeException("libseccomp.so.2 not loadable", last);
     }
-
-    @SuppressWarnings("unused")
-    private static void touch(List<String> ignore) {}
 }

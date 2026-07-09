@@ -32,8 +32,6 @@ public final class Libc {
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     private static final MethodHandle PIVOT_ROOT = downcall("pivot_root",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle CHROOT = downcall("chroot",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
     private static final MethodHandle CHDIR = downcall("chdir",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
     private static final MethodHandle SETHOSTNAME = downcall("sethostname",
@@ -45,10 +43,6 @@ public final class Libc {
                     ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
                     ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG));
     private static final MethodHandle UMASK = downcall("umask",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle SETUID = downcall("setuid",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle SETGID = downcall("setgid",
             FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
     private static final MethodHandle GETPID = downcall("getpid",
             FunctionDescriptor.of(ValueLayout.JAVA_INT));
@@ -91,6 +85,9 @@ public final class Libc {
     private static final MethodHandle IOCTL = downcall("ioctl",
             FunctionDescriptor.of(ValueLayout.JAVA_INT,
                     ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
+    private static final MethodHandle WAITPID = downcall("waitpid",
+            FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
 
     public static int unshare(int flags) {
         try {
@@ -128,12 +125,6 @@ public final class Libc {
         } catch (Throwable t) { throw sneaky(t); }
     }
 
-    public static int chroot(Arena arena, String path) {
-        try {
-            return (int) CHROOT.invoke(arena.allocateFrom(path));
-        } catch (Throwable t) { throw sneaky(t); }
-    }
-
     public static int chdir(Arena arena, String path) {
         try {
             return (int) CHDIR.invoke(arena.allocateFrom(path));
@@ -165,18 +156,6 @@ public final class Libc {
         } catch (Throwable t) { throw sneaky(t); }
     }
 
-    public static int setuid(int uid) {
-        try {
-            return (int) SETUID.invoke(uid);
-        } catch (Throwable t) { throw sneaky(t); }
-    }
-
-    public static int setgid(int gid) {
-        try {
-            return (int) SETGID.invoke(gid);
-        } catch (Throwable t) { throw sneaky(t); }
-    }
-
     public static int getpid() {
         try {
             return (int) GETPID.invoke();
@@ -205,15 +184,7 @@ public final class Libc {
 
     public static int execvp(Arena arena, String file, String[] argv) {
         try {
-            MemorySegment[] argSegs = new MemorySegment[argv.length];
-            for (int i = 0; i < argv.length; i++) {
-                argSegs[i] = arena.allocateFrom(argv[i]);
-            }
-            MemorySegment argvArr = arena.allocate(ValueLayout.ADDRESS, argv.length + 1L);
-            for (int i = 0; i < argv.length; i++) {
-                argvArr.setAtIndex(ValueLayout.ADDRESS, i, argSegs[i]);
-            }
-            argvArr.setAtIndex(ValueLayout.ADDRESS, argv.length, MemorySegment.NULL);
+            MemorySegment argvArr = PosixIO.cStringArray(arena, argv);
             return (int) EXECVP.invoke(arena.allocateFrom(file), argvArr);
         } catch (Throwable t) { throw sneaky(t); }
     }
@@ -231,10 +202,6 @@ public final class Libc {
                     arena.allocateFrom(value),
                     overwrite ? 1 : 0);
         } catch (Throwable t) { throw sneaky(t); }
-    }
-
-    public static int errnoOrZero(int rc) {
-        return rc == -1 ? errno() : 0;
     }
 
     public static int setgroups(Arena arena, int[] gids) {
@@ -287,6 +254,11 @@ public final class Libc {
 
     public static int ioctl(int fd, long request, MemorySegment arg) {
         try { return (int) IOCTL.invoke(fd, request, arg); }
+        catch (Throwable t) { throw sneaky(t); }
+    }
+
+    public static int waitpid(int pid, MemorySegment status, int options) {
+        try { return (int) WAITPID.invoke(pid, status, options); }
         catch (Throwable t) { throw sneaky(t); }
     }
 

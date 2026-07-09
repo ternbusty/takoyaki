@@ -40,7 +40,7 @@ public final class StartCommand {
         // because InitProcess detects empty args and _exits(1).
 
         try {
-            NotifySocket.sendStart("/tmp/takoyaki-" + containerId + ".sock");
+            NotifySocket.sendStart(NotifySocket.pathFor(containerId));
             State updated = state.withStatus(ContainerStatus.RUNNING);
             updated.save(rootPath);
             Logger.info("container " + containerId + " started");

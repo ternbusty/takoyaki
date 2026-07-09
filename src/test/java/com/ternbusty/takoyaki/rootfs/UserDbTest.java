@@ -30,7 +30,7 @@ class UserDbTest {
         // Spec without process.user defaults to nothing. We must not touch the
         // image rootfs in that case.
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
-            UserDb.ensure(null, null);
+            UserDb.ensure(null);
             fm.verifyNoInteractions();
         }
     }
@@ -41,7 +41,7 @@ class UserDbTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.exists(any(Path.class))).thenReturn(false);
 
-            UserDb.ensure(user(1000, 1000), null);
+            UserDb.ensure(user(1000, 1000));
 
             // Read/write must NEVER happen when the files don't exist.
             fm.verify(() -> Files.readString(any(Path.class)), never());
@@ -62,7 +62,7 @@ class UserDbTest {
             fm.when(() -> Files.readString(eq(Path.of("/etc/group"))))
                     .thenReturn("root:x:0:\n");
 
-            UserDb.ensure(user(0, 0), null);
+            UserDb.ensure(user(0, 0));
 
             fm.verify(() -> Files.writeString(any(Path.class), anyString(),
                     any(OpenOption.class)), never());
@@ -80,7 +80,7 @@ class UserDbTest {
             fm.when(() -> Files.writeString(any(Path.class), anyString(),
                     any(OpenOption.class))).thenReturn(Path.of("/dev/null"));
 
-            UserDb.ensure(user(1000, 1000), null);
+            UserDb.ensure(user(1000, 1000));
 
             // The entry shape is hard-coded to "container:x:<uid>:<gid>:container user:/:/sbin/nologin\n".
             // It's intentional that the shell is /sbin/nologin — runtime-tools doesn't run anything
@@ -105,7 +105,7 @@ class UserDbTest {
             fm.when(() -> Files.writeString(any(Path.class), anyString(),
                     any(OpenOption.class))).thenReturn(Path.of("/dev/null"));
 
-            UserDb.ensure(user(1000, 1000), null);
+            UserDb.ensure(user(1000, 1000));
 
             fm.verify(() -> Files.writeString(
                     eq(Path.of("/etc/group")),
@@ -130,27 +130,20 @@ class UserDbTest {
             fm.when(() -> Files.writeString(any(Path.class), anyString(),
                     any(OpenOption.class))).thenReturn(Path.of("/dev/null"));
 
-            UserDb.ensure(user(1000, 1000), List.of(1000, 100, 200));
+            Spec.User u = user(1000, 1000);
+            u.additionalGids = List.of(1000, 100, 200);
+            UserDb.ensure(u);
 
-            // primary gid=1000 appears once via the "user" entry.
+            // All missing entries land in ONE append. Primary gid=1000 appears
+            // once via the "user" entry and must NOT come back as "extra1000";
+            // the non-duplicate supplementary gids do get appended.
             fm.verify(() -> Files.writeString(
                     eq(Path.of("/etc/group")),
-                    eq("user:x:1000:\n"),
-                    any(OpenOption.class)));
-            // 1000 must NOT come back as "extra1000".
-            fm.verify(() -> Files.writeString(
-                    eq(Path.of("/etc/group")),
-                    eq("extra1000:x:1000:\n"),
-                    any(OpenOption.class)), never());
-            // The non-duplicate supplementary gids do get appended.
-            fm.verify(() -> Files.writeString(
-                    eq(Path.of("/etc/group")),
-                    eq("extra100:x:100:\n"),
+                    eq("user:x:1000:\nextra100:x:100:\nextra200:x:200:\n"),
                     any(OpenOption.class)));
             fm.verify(() -> Files.writeString(
                     eq(Path.of("/etc/group")),
-                    eq("extra200:x:200:\n"),
-                    any(OpenOption.class)));
+                    anyString(), any(OpenOption.class)), times(1));
         }
     }
 
@@ -163,7 +156,7 @@ class UserDbTest {
             fm.when(() -> Files.readString(any(Path.class)))
                     .thenThrow(new IOException("EACCES"));
 
-            assertDoesNotThrow(() -> UserDb.ensure(user(1000, 1000), null));
+            assertDoesNotThrow(() -> UserDb.ensure(user(1000, 1000)));
         }
     }
 }

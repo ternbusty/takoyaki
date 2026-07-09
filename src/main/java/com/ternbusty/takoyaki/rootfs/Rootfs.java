@@ -19,10 +19,6 @@ public final class Rootfs {
 
     private static final String[] DEVICES = {"null", "zero", "random", "urandom", "tty", "full"};
 
-    public static void prepare(String rootfsPath, Spec spec) {
-        prepare(rootfsPath, spec, java.util.Collections.emptyMap());
-    }
-
     public static void prepare(String rootfsPath, Spec spec,
                                java.util.Map<String, Integer> idmapFds) {
         try (Arena arena = Arena.ofConfined()) {
@@ -68,7 +64,7 @@ public final class Rootfs {
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
-                applyOciMounts(arena, rootfsPath, spec.mounts, idmapFds);
+                applyOciMounts(rootfsPath, spec.mounts, idmapFds);
             }
         }
     }
@@ -132,32 +128,20 @@ public final class Rootfs {
         }
 
         // OCI default symlinks under /dev that runtime-tools verifies.
+        String[][] symlinks = {
+                {"ptmx",   "pts/ptmx"},
+                {"fd",     "/proc/self/fd"},
+                {"stdin",  "/proc/self/fd/0"},
+                {"stdout", "/proc/self/fd/1"},
+                {"stderr", "/proc/self/fd/2"},
+        };
         try {
             Path devPath = Path.of(dev);
-            // /dev/ptmx -> pts/ptmx
-            Path ptmx = devPath.resolve("ptmx");
-            if (!Files.exists(ptmx, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                Files.createSymbolicLink(ptmx, Path.of("pts/ptmx"));
-            }
-            // /dev/fd -> /proc/self/fd
-            Path fd = devPath.resolve("fd");
-            if (!Files.exists(fd, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                Files.createSymbolicLink(fd, Path.of("/proc/self/fd"));
-            }
-            // /dev/stdin -> /proc/self/fd/0
-            Path stdin = devPath.resolve("stdin");
-            if (!Files.exists(stdin, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                Files.createSymbolicLink(stdin, Path.of("/proc/self/fd/0"));
-            }
-            // /dev/stdout -> /proc/self/fd/1
-            Path stdout = devPath.resolve("stdout");
-            if (!Files.exists(stdout, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                Files.createSymbolicLink(stdout, Path.of("/proc/self/fd/1"));
-            }
-            // /dev/stderr -> /proc/self/fd/2
-            Path stderr = devPath.resolve("stderr");
-            if (!Files.exists(stderr, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
-                Files.createSymbolicLink(stderr, Path.of("/proc/self/fd/2"));
+            for (String[] link : symlinks) {
+                Path p = devPath.resolve(link[0]);
+                if (!Files.exists(p, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                    Files.createSymbolicLink(p, Path.of(link[1]));
+                }
             }
             Logger.debug("created /dev default symlinks");
         } catch (IOException e) {
@@ -243,28 +227,13 @@ public final class Rootfs {
         return null;
     }
 
-    private static boolean isMountPoint(String path) {
-        try {
-            Path p = Path.of(path);
-            Path parent = p.getParent();
-            if (parent == null) return true;
-            return Files.getFileStore(p).equals(Files.getFileStore(parent)) ? false : true;
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
     /**
      * Apply spec.mounts in order. Package-visible so the unit test can drive
      * this directly against a RecordingSyscalls fake — the previous private
      * signature meant this loop was only reachable via the full Rootfs.prepare
      * path which can't be unit-tested.
-     *
-     * The Arena parameter is retained for source compatibility with the old
-     * call site but is no longer used; Syscalls implementations manage their
-     * own Arenas internally.
      */
-    static void applyOciMounts(Arena arena, String rootfsPath, List<Spec.Mount> mounts,
+    static void applyOciMounts(String rootfsPath, List<Spec.Mount> mounts,
                                java.util.Map<String, Integer> idmapFds) {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
@@ -339,10 +308,6 @@ public final class Rootfs {
         }
     }
 
-    public static void pivot(String newRoot) {
-        pivot(newRoot, null);
-    }
-
     public static void pivot(String newRoot, String rootfsPropagation) {
         try (Arena arena = Arena.ofConfined()) {
             Logger.debug("pivot_root to " + newRoot);
@@ -376,17 +341,7 @@ public final class Rootfs {
             // happen post-pivot because pivot_root rejects MS_SHARED on the
             // new root and its parent.
             if (rootfsPropagation != null) {
-                long prop = switch (rootfsPropagation) {
-                    case "shared"      -> Constants.MS_SHARED;
-                    case "rshared"     -> Constants.MS_SHARED | Constants.MS_REC;
-                    case "slave"       -> Constants.MS_SLAVE;
-                    case "rslave"      -> Constants.MS_SLAVE | Constants.MS_REC;
-                    case "private"     -> Constants.MS_PRIVATE;
-                    case "rprivate"    -> Constants.MS_PRIVATE | Constants.MS_REC;
-                    case "unbindable"  -> Constants.MS_UNBINDABLE;
-                    case "runbindable" -> Constants.MS_UNBINDABLE | Constants.MS_REC;
-                    default            -> 0L;
-                };
+                long prop = MountOptions.propagationFlag(rootfsPropagation);
                 if (prop != 0) {
                     if (Libc.mount(arena, null, "/", null, prop, null) != 0) {
                         Logger.warn("set / to " + rootfsPropagation + " failed: "

@@ -89,7 +89,7 @@ public final class LinuxSyscalls implements Syscalls {
 
     @Override
     public long keyctlJoinSessionKeyring(String name) {
-        long nr = isAarch64() ? NR_keyctl_aarch64 : NR_keyctl_x86_64;
+        long nr = Constants.isAarch64() ? NR_keyctl_aarch64 : NR_keyctl_x86_64;
         long arg = 0L;
         Arena arena = null;
         try {
@@ -102,11 +102,6 @@ public final class LinuxSyscalls implements Syscalls {
         } finally {
             if (arena != null) arena.close();
         }
-    }
-
-    private static boolean isAarch64() {
-        String a = System.getProperty("os.arch", "").toLowerCase();
-        return a.contains("aarch64") || a.contains("arm64");
     }
 
     @Override
