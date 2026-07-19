@@ -17,7 +17,13 @@ import java.util.List;
 public final class Rootfs {
     private Rootfs() {}
 
-    private static final String[] DEVICES = {"null", "zero", "random", "urandom", "tty", "full"};
+    // Default /dev entries that get bind-mounted from the host at container
+    // start-up. Matches the set every OCI runtime provides by default — the
+    // audit against runc / youki flagged /dev/console as missing here.
+    // /dev/console is typically 0600 root:root on the host, so the bind
+    // silently no-ops in rootless mode (bindDevice logs and moves on).
+    private static final String[] DEVICES =
+            {"null", "zero", "random", "urandom", "tty", "full", "console"};
 
     public static void prepare(String rootfsPath, Spec spec) {
         prepare(rootfsPath, spec, java.util.Collections.emptyMap());
