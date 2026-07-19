@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.2.0](https://github.com/ternbusty/takoyaki/compare/v0.1.1...v0.2.0) (2026-07-05)
+
+
+### 🎉 Features
+
+* **cgroup:** parse and apply resources.unified, warn on realtime CPU ([#35](https://github.com/ternbusty/takoyaki/issues/35)) ([6713d0b](https://github.com/ternbusty/takoyaki/commit/6713d0bd699e164bac53bd4699a4dcd90d228de1))
+* **seccomp:** load conditionally on NNP to align with runc / youki ([#28](https://github.com/ternbusty/takoyaki/issues/28)) ([ee8d859](https://github.com/ternbusty/takoyaki/commit/ee8d859efdfdedc631aef134147c47092d9404fd))
+
+
+### 🐛 Bug Fixes
+
+* **hooks:** always clear env before running a hook ([#34](https://github.com/ternbusty/takoyaki/issues/34)) ([bf9545b](https://github.com/ternbusty/takoyaki/commit/bf9545b62ddc839705576fd809791783be30ea0e))
+* **hooks:** run createContainer and startContainer inside the init ([#31](https://github.com/ternbusty/takoyaki/issues/31)) ([8f9a172](https://github.com/ternbusty/takoyaki/commit/8f9a1720391ee6f19b19488a433d7cda5e477566))
+* **seccomp:** abort init when seccomp_load fails instead of silently continuing ([#33](https://github.com/ternbusty/takoyaki/issues/33)) ([bedf686](https://github.com/ternbusty/takoyaki/commit/bedf686c07d3ce590bafb74e4172379f3513832c))
+* **sysctl:** reject non-namespaced keys before writing ([#27](https://github.com/ternbusty/takoyaki/issues/27)) ([12ab645](https://github.com/ternbusty/takoyaki/commit/12ab64507e3b0a8894325794583211d01861e05a))
+* **usermap:** only write setgroups=deny when writing gid_map directly ([#32](https://github.com/ternbusty/takoyaki/issues/32)) ([ebc2aef](https://github.com/ternbusty/takoyaki/commit/ebc2aef4e71186aa3dcf9b40d15c4aa3731f2f7b))
+
+
+### ⚡ Performance Improvements
+
+* add run subcommand that does create + start + wait + delete in one process ([#18](https://github.com/ternbusty/takoyaki/issues/18)) ([26e9638](https://github.com/ternbusty/takoyaki/commit/26e963894365153b624bcaee6c64ef81d78753f6))
+* cold start optimizations (-12 ms TOTAL, -34% --version) ([6842e0f](https://github.com/ternbusty/takoyaki/commit/6842e0fdba6246d11bf842dfc0739a1f3c4c647d))
+* replace jackson-databind with a hand-rolled JSON codec ([#16](https://github.com/ternbusty/takoyaki/issues/16)) ([483f25a](https://github.com/ternbusty/takoyaki/commit/483f25aae1e13c0ab0c176036fd1c52ae27cd847))
+* trim glibc locale init and drop picocli ([#15](https://github.com/ternbusty/takoyaki/issues/15)) ([faa0af3](https://github.com/ternbusty/takoyaki/commit/faa0af36d7e3238607075337327c3375ac10612a))
+
+
+### 🔗 Dependencies
+
+* **deps:** bump gradle-wrapper from 9.5.1 to 9.6.1 ([#25](https://github.com/ternbusty/takoyaki/issues/25)) ([35509c3](https://github.com/ternbusty/takoyaki/commit/35509c3e913a711c47f0c03114fcd41c6fa00642))
+* **deps:** bump org.graalvm.buildtools.native from 0.11.1 to 1.1.2 ([#19](https://github.com/ternbusty/takoyaki/issues/19)) ([f517429](https://github.com/ternbusty/takoyaki/commit/f5174296e310022613ecbab24fc97d59a03b6b34))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.2 to 1.1.3 ([#24](https://github.com/ternbusty/takoyaki/issues/24)) ([ceb67cd](https://github.com/ternbusty/takoyaki/commit/ceb67cd5de089812533bf20b12df8f76103df8c3))
+* **deps:** bump org.graalvm.sdk:nativeimage from 25.0.2 to 25.0.3 ([#20](https://github.com/ternbusty/takoyaki/issues/20)) ([7b8e7bf](https://github.com/ternbusty/takoyaki/commit/7b8e7bf1f45e3f383a5e1978f90808a3cf0d1123))
+* **deps:** bump org.junit:junit-bom from 6.1.0 to 6.1.1 ([#23](https://github.com/ternbusty/takoyaki/issues/23)) ([7f48e78](https://github.com/ternbusty/takoyaki/commit/7f48e78bb776de1c1297c76607f74afeccb41716))
+
 ## [0.1.1](https://github.com/ternbusty/takoyaki/compare/v0.1.0...v0.1.1) (2026-06-11)
 
 

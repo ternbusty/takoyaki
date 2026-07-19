@@ -108,7 +108,27 @@ public final class Seccomp {
                 // Disable libseccomp's auto-NNP — the runtime sets NNP earlier
                 // based on spec.process.noNewPrivileges.
                 int SCMP_FLTATR_CTL_NNP = 3;
+                int SCMP_FLTATR_CTL_TSYNC = 4;
+                int SCMP_FLTATR_CTL_LOG = 5;
+                int SCMP_FLTATR_CTL_SSB = 6;
                 SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_NNP, 0L);
+
+                // Translate the OCI spec's filter flags into the libseccomp
+                // attributes that back them. Unknown flags are warned about
+                // rather than ignored so the caller sees the mismatch.
+                if (sec.flags != null) {
+                    for (String flag : sec.flags) {
+                        switch (flag) {
+                            case "SECCOMP_FILTER_FLAG_TSYNC" ->
+                                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_TSYNC, 1L);
+                            case "SECCOMP_FILTER_FLAG_LOG" ->
+                                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_LOG, 1L);
+                            case "SECCOMP_FILTER_FLAG_SPEC_ALLOW" ->
+                                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_SSB, 1L);
+                            default -> Logger.warn("unknown seccomp filter flag: " + flag);
+                        }
+                    }
+                }
 
                 // Ask libseccomp to compile the rule set into a binary tree
                 // once it gets large enough for the linear match to hurt.
@@ -140,6 +160,17 @@ public final class Seccomp {
                     for (Spec.LinuxSyscall sc : sec.syscalls) {
                         int action = actionToken(sc.action, sc.errnoRet);
                         if (sc.names == null) continue;
+                        // SCMP_ACT_NOTIFY on write(2) is a deadlock trap: the
+                        // supervisor process reads the notify fd, and its
+                        // response typically involves writing back through the
+                        // same syscall the container just called. runc and
+                        // youki both refuse this combination up front.
+                        if ("SCMP_ACT_NOTIFY".equals(sc.action)
+                                && sc.names.contains("write")) {
+                            throw new RuntimeException(
+                                    "seccomp: SCMP_ACT_NOTIFY on write(2) is not"
+                                            + " permitted (would deadlock the notifier)");
+                        }
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
                             int nr = (int) SECCOMP_SYSCALL_RESOLVE_NAME.invoke(nameSeg);
@@ -177,8 +208,12 @@ public final class Seccomp {
 
                 int loadRc = (int) SECCOMP_LOAD.invoke(ctx);
                 if (loadRc != 0) {
-                    Logger.error("seccomp_load failed: " + loadRc);
-                    return;
+                    // Silently returning here would let the container come up
+                    // with no filter at all, which is worse than failing to
+                    // start — the user requested a seccomp policy and the
+                    // runtime is now serving one that does not exist. Bail so
+                    // the surrounding init aborts.
+                    throw new RuntimeException("seccomp_load failed: " + loadRc);
                 }
                 Logger.info("seccomp filter loaded");
 
@@ -268,7 +303,18 @@ public final class Seccomp {
     }
 
     private static int actionToken(String action, Long errnoRet) {
+        // ERRNO and TRACE encode the extra data in the low 16 bits of the
+        // action word. Any value that doesn't fit there is a spec bug — silently
+        // masking it would turn EINVAL(22) into … well, still 22, but ENOSYS
+        // (38 with a bit 16 set) into 38 with the top bit dropped. Refuse
+        // rather than mislead.
         int errno = errnoRet == null ? 0 : errnoRet.intValue();
+        if (("SCMP_ACT_ERRNO".equals(action) || "SCMP_ACT_TRACE".equals(action))
+                && (errno < 0 || errno > 0xffff)) {
+            throw new IllegalArgumentException(
+                    "seccomp: errnoRet " + errno + " out of range for " + action
+                            + " (must fit in the low 16 bits)");
+        }
         // libseccomp action codes from seccomp.h
         return switch (action == null ? "SCMP_ACT_ALLOW" : action) {
             case "SCMP_ACT_KILL", "SCMP_ACT_KILL_THREAD" -> 0x00000000;

@@ -58,8 +58,14 @@ public final class Hooks {
             cmd.add(h.path);
             if (h.args != null) cmd.addAll(h.args.subList(1, h.args.size()));
             ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
+            // Always start from a clean env — inheriting the runtime's env
+            // would leak whatever _TAKOYAKI_* variables and container-id state
+            // the caller had into the hook, which is surprising and defeats
+            // the point of the spec's env field. If the spec left env unset
+            // the hook gets an empty env; if it's set we use exactly that.
+            // Matches youki (env_clear + envs).
+            pb.environment().clear();
             if (h.env != null) {
-                pb.environment().clear();
                 for (String e : h.env) {
                     int eq = e.indexOf('=');
                     if (eq > 0) pb.environment().put(e.substring(0, eq), e.substring(eq + 1));
