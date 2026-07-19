@@ -137,9 +137,14 @@ class CapabilityTest {
 
     @Test
     void applyFinalSetsAmbientClearsThenRaisesEachListedCap() {
+        // The kernel requires an ambient cap to also be in both permitted
+        // AND inheritable. Reflect a valid spec so the pre-check in
+        // applyFinalSets actually lets the RAISE call through.
         Spec.LinuxCapabilities caps = new Spec.LinuxCapabilities();
-        caps.effective = caps.permitted = caps.inheritable = List.of();
-        caps.ambient = List.of("CAP_KILL"); // id 5
+        caps.effective   = List.of("CAP_KILL");
+        caps.permitted   = List.of("CAP_KILL");
+        caps.inheritable = List.of("CAP_KILL");
+        caps.ambient     = List.of("CAP_KILL"); // id 5
 
         try (MockedStatic<Libc> lm = mockStatic(Libc.class)) {
             lm.when(() -> Libc.syscall(anyLong(), anyLong(), anyLong(),
@@ -159,6 +164,36 @@ class CapabilityTest {
                     eq(Constants.PR_CAP_AMBIENT),
                     eq((long) Constants.PR_CAP_AMBIENT_RAISE),
                     eq(5L), eq(0L), eq(0L)));
+        }
+    }
+
+    @Test
+    void applyFinalSetsSkipsAmbientRaiseWhenPermittedOrInheritableMissing() {
+        // Spec asks for ambient=[CAP_KILL] but doesn't put CAP_KILL in
+        // permitted+inheritable. The pre-check must skip the RAISE (kernel
+        // would reject it anyway) and warn instead, leaving CLEAR_ALL as
+        // the only ambient prctl call.
+        Spec.LinuxCapabilities caps = new Spec.LinuxCapabilities();
+        caps.effective = caps.permitted = caps.inheritable = List.of();
+        caps.ambient = List.of("CAP_KILL");
+
+        try (MockedStatic<Libc> lm = mockStatic(Libc.class)) {
+            lm.when(() -> Libc.syscall(anyLong(), anyLong(), anyLong(),
+                                       anyLong(), anyLong(), anyLong())).thenReturn(0L);
+            lm.when(() -> Libc.prctl(anyInt(), anyLong(), anyLong(), anyLong(), anyLong()))
+                    .thenReturn(0);
+
+            Capability.applyFinalSets(caps);
+
+            lm.verify(() -> Libc.prctl(
+                    eq(Constants.PR_CAP_AMBIENT),
+                    eq((long) Constants.PR_CAP_AMBIENT_CLEAR_ALL),
+                    eq(0L), eq(0L), eq(0L)));
+            // The RAISE must NOT be invoked for CAP_KILL — no per/inh backing.
+            lm.verify(() -> Libc.prctl(
+                    eq(Constants.PR_CAP_AMBIENT),
+                    eq((long) Constants.PR_CAP_AMBIENT_RAISE),
+                    anyLong(), anyLong(), anyLong()), never());
         }
     }
 

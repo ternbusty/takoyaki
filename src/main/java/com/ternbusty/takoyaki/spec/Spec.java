@@ -386,6 +386,14 @@ public final class Spec {
         public List<LinuxDeviceCgroup> devices;
         public List<LinuxHugepageLimit> hugepageLimits;
         public LinuxBlockIO blockIO;
+        /**
+         * Free-form cgroup v2 pass-through map. Each key is a control-file name
+         * relative to the cgroup directory (e.g. {@code "io.weight"} or
+         * {@code "hugetlb.2MB.max"}), each value is written verbatim. Lets
+         * spec authors reach controllers that aren't modelled by the strongly
+         * typed fields above without waiting for takoyaki to grow them.
+         */
+        public Map<String, String> unified;
 
         public static LinuxResources fromJson(Object node) {
             if (node == null) return null;
@@ -397,6 +405,7 @@ public final class Spec {
             r.devices = JsonMap.list(o, "devices", LinuxDeviceCgroup::fromJson);
             r.hugepageLimits = JsonMap.list(o, "hugepageLimits", LinuxHugepageLimit::fromJson);
             r.blockIO = LinuxBlockIO.fromJson(o.get("blockIO"));
+            r.unified = JsonMap.strMap(o, "unified");
             return r;
         }
 
@@ -409,6 +418,7 @@ public final class Spec {
             JsonMap.put(o, "hugepageLimits",
                     JsonMap.encList(hugepageLimits, LinuxHugepageLimit::toJson));
             if (blockIO != null) JsonMap.put(o, "blockIO", blockIO.toJson());
+            if (unified != null && !unified.isEmpty()) JsonMap.put(o, "unified", unified);
             return o;
         }
     }

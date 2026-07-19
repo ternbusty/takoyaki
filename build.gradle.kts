@@ -9,7 +9,7 @@ plugins {
 
 group = "com.ternbusty"
 // x-release-please-start-version
-version = "0.1.1"
+version = "0.2.0"
 // x-release-please-end
 
 repositories {
@@ -29,9 +29,9 @@ dependencies {
     // Spec / State / KontainerConfig beans codec to/from it. jackson-databind
     // pulled in ~3,000 reachable methods and transitively ~4.6 MB of java.xml
     // at native-image build time, all for our small OCI schemas.
-    compileOnly("org.graalvm.sdk:nativeimage:25.0.3")
+    compileOnly("org.graalvm.sdk:nativeimage:25.1.3")
 
-    testImplementation(platform("org.junit:junit-bom:6.1.1"))
+    testImplementation(platform("org.junit:junit-bom:6.1.2"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.mockito:mockito-core:5.23.0")

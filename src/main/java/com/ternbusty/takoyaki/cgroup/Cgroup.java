@@ -6,6 +6,7 @@ import com.ternbusty.takoyaki.spec.Spec;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Map;
 
 public final class Cgroup {
     private static final String CGROUP_ROOT = "/sys/fs/cgroup";
@@ -120,6 +121,14 @@ public final class Cgroup {
             if (r.cpu.idle != null) {
                 writeIfPossible(full.resolve("cpu.idle"), Long.toString(r.cpu.idle));
             }
+            // Realtime scheduling limits are a cgroup v1 concept — v2 removed
+            // cpu.rt_period_us / cpu.rt_runtime_us entirely. Silently ignoring
+            // the field would hide a genuine spec violation from the user;
+            // surface it so they at least see it in the logs.
+            if (r.cpu.realtimePeriod != null || r.cpu.realtimeRuntime != null) {
+                Logger.warn("cpu.realtimePeriod / realtimeRuntime are not supported"
+                        + " on cgroup v2; ignoring");
+            }
         }
         if (r.pids != null && r.pids.limit > 0) {
             writeIfPossible(full.resolve("pids.max"), Long.toString(r.pids.limit));
@@ -135,6 +144,14 @@ public final class Cgroup {
         }
         if (r.blockIO != null) {
             applyBlockIO(full, r.blockIO);
+        }
+        // Unified pass-through: any arbitrary control-file the spec author
+        // named gets written verbatim. Applied last so it can override the
+        // strongly typed fields above if the same file was set both ways.
+        if (r.unified != null && !r.unified.isEmpty()) {
+            for (Map.Entry<String, String> e : r.unified.entrySet()) {
+                writeIfPossible(full.resolve(e.getKey()), e.getValue());
+            }
         }
     }
 
