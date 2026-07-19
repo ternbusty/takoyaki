@@ -11,7 +11,6 @@ import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.Callable;
 
 /**
  * Create a temporary user namespace populated with the given uid/gid mappings,
@@ -89,16 +88,18 @@ public final class IdmapHelper {
                 PosixIO.close(sync[0]);
                 int rc = Libc.unshare(Constants.CLONE_NEWUSER);
                 int savedErrno = Libc.errno();
-                int childPid = Libc.getpid();
-                // Probe what /proc/self/ns/user looks like AFTER unshare.
-                String childLink = "?", byPidLink = "?";
-                try {
-                    childLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
-                    byPidLink = Files.readSymbolicLink(Path.of("/proc/" + childPid + "/ns/user")).toString();
-                } catch (IOException ignored) {}
-                System.err.println("[idmap-child] pid=" + childPid + " unshare rc=" + rc
-                        + " errno=" + savedErrno
-                        + " self=" + childLink + " byPid=" + byPidLink);
+                if (Logger.isDebugEnabled()) {
+                    int childPid = Libc.getpid();
+                    // Probe what /proc/self/ns/user looks like AFTER unshare.
+                    String childLink = "?", byPidLink = "?";
+                    try {
+                        childLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
+                        byPidLink = Files.readSymbolicLink(Path.of("/proc/" + childPid + "/ns/user")).toString();
+                    } catch (IOException ignored) {}
+                    Logger.debug("[idmap-child] pid=" + childPid + " unshare rc=" + rc
+                            + " errno=" + savedErrno
+                            + " self=" + childLink + " byPid=" + byPidLink);
+                }
                 if (rc != 0) {
                     // Signal failure to parent by writing 0 instead of 1, then exit.
                     try (Arena a2 = Arena.ofConfined()) {
@@ -130,26 +131,30 @@ public final class IdmapHelper {
             }
             // Sanity-check: the helper's userns must NOT be our own (the kernel rejects
             // mount_setattr(IDMAP) with EPERM if userns_fd == init_user_ns).
-            try {
-                String helperLink = Files.readSymbolicLink(Path.of("/proc/" + pid + "/ns/user")).toString();
-                String myLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
-                Logger.debug("idmap parent pid=" + Libc.getpid() + " childPid=" + pid
-                        + " helper=" + helperLink + " ours=" + myLink);
-                if (helperLink.equals(myLink)) {
-                    Logger.warn("idmap helper userns same as ours (" + myLink + "); unshare lied");
-                }
-            } catch (IOException ignored) {}
+            if (Logger.isDebugEnabled()) {
+                try {
+                    String helperLink = Files.readSymbolicLink(Path.of("/proc/" + pid + "/ns/user")).toString();
+                    String myLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
+                    Logger.debug("idmap parent pid=" + Libc.getpid() + " childPid=" + pid
+                            + " helper=" + helperLink + " ours=" + myLink);
+                    if (helperLink.equals(myLink)) {
+                        Logger.warn("idmap helper userns same as ours (" + myLink + "); unshare lied");
+                    }
+                } catch (IOException ignored) {}
+            }
             // Write maps from the parent's privileged context.
             writeMappings(pid, uidMaps, "uid_map");
             writeMappings(pid, gidMaps, "gid_map");
             // Verify what actually landed in /proc/<helper>/uid_map.
-            try {
-                String uidMapContent = Files.readString(Path.of("/proc/" + pid + "/uid_map"));
-                String gidMapContent = Files.readString(Path.of("/proc/" + pid + "/gid_map"));
-                Logger.debug("idmap helper uid_map=" + uidMapContent.replace("\n", "|")
-                        + " gid_map=" + gidMapContent.replace("\n", "|"));
-            } catch (IOException e) {
-                Logger.warn("could not read back idmap helper maps: " + e.getMessage());
+            if (Logger.isDebugEnabled()) {
+                try {
+                    String uidMapContent = Files.readString(Path.of("/proc/" + pid + "/uid_map"));
+                    String gidMapContent = Files.readString(Path.of("/proc/" + pid + "/gid_map"));
+                    Logger.debug("idmap helper uid_map=" + uidMapContent.replace("\n", "|")
+                            + " gid_map=" + gidMapContent.replace("\n", "|"));
+                } catch (IOException e) {
+                    Logger.warn("could not read back idmap helper maps: " + e.getMessage());
+                }
             }
             int fd = PosixIO.open(arena, "/proc/" + pid + "/ns/user", Constants.O_RDONLY, 0);
             // Release helper child.

@@ -31,7 +31,7 @@ public final class ForeignFeature implements Feature {
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
                 ValueLayout.ADDRESS));
-        // (int,ptr,int)->int  (bind, connect)
+        // (int,ptr,int)->int  (bind, connect; waitpid shares this descriptor)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
         // (int,ptr,ptr)->int  (accept)
@@ -44,14 +44,14 @@ public final class ForeignFeature implements Feature {
         reg(FunctionDescriptor.of(ValueLayout.JAVA_LONG,
                 ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
                 ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
-        // (ptr)->int  (chroot, chdir, unlink, clearenv-with-ptr… no actually clearenv takes none)
+        // (ptr)->int  (chdir, unlink)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-        // (ptr,int)->int  (access, mkdir)
+        // (ptr,int)->int  (access)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
         // (ptr,int,int)->int  (open)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-        // (ptr,ptr)->int  (pivot_root, execv)
+        // (ptr,ptr)->int  (pivot_root, execvp)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
         // (ptr,ptr,ptr)->int  (execve)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
@@ -103,9 +103,6 @@ public final class ForeignFeature implements Feature {
         // (int,long,ptr)->int  (ioctl)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS));
-        // (int,ptr,int)->int  (waitpid)
-        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
         // (int,ptr,long)->int  (ptsname_r)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));

@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.StringJoiner;
 
 public final class CreateCommand {
     private CreateCommand() {}
@@ -66,7 +67,7 @@ public final class CreateCommand {
                 : bundle + "/" + spec.root.path;
         Logger.debug("rootfs=" + rootfsPath);
 
-        String notifySocketPath = "/tmp/takoyaki-" + containerId + ".sock";
+        String notifySocketPath = NotifySocket.pathFor(containerId);
         int notifyListenerFd = NotifySocket.createListener(notifySocketPath);
 
         int[] syncFds = new int[2];
@@ -119,7 +120,7 @@ public final class CreateCommand {
         // fork+execve because we don't set CLOEXEC. Names match `setns` nstype
         // constants in bootstrap.c's switch table.
         if (spec.linux != null && spec.linux.namespaces != null) {
-            StringBuilder nsFds = new StringBuilder();
+            StringJoiner nsFds = new StringJoiner(",");
             try (Arena openArena = Arena.ofConfined()) {
                 for (Spec.Namespace ns : spec.linux.namespaces) {
                     if (ns.path == null || ns.path.isEmpty()) continue;
@@ -128,12 +129,11 @@ public final class CreateCommand {
                         Logger.error("open ns path " + ns.path + " failed: " + Libc.strerror(Libc.errno()));
                         return 1;
                     }
-                    if (nsFds.length() > 0) nsFds.append(',');
-                    nsFds.append(ns.type).append(':').append(fd);
+                    nsFds.add(ns.type + ":" + fd);
                 }
             }
             if (nsFds.length() > 0) {
-                envList.add("_TAKOYAKI_NS_FDS=" + nsFds.toString());
+                envList.add("_TAKOYAKI_NS_FDS=" + nsFds);
             }
         }
 
@@ -144,7 +144,7 @@ public final class CreateCommand {
         // that prevents the init (which runs inside the container's pid namespace)
         // from addressing its forked helpers via host-mounted /proc.
         if (spec.mounts != null) {
-            StringBuilder fdMap = new StringBuilder();
+            StringJoiner fdMap = new StringJoiner(",");
             for (Spec.Mount m : spec.mounts) {
                 if (m.uidMappings == null || m.uidMappings.isEmpty()) continue;
                 int fd = com.ternbusty.takoyaki.rootfs.IdmapHelper.setupHostSide(
@@ -154,12 +154,11 @@ public final class CreateCommand {
                             + "; mount will fall back to plain bind");
                     continue;
                 }
-                if (fdMap.length() > 0) fdMap.append(',');
-                fdMap.append(java.util.Base64.getEncoder().encodeToString(
-                        m.destination.getBytes())).append(':').append(fd);
+                fdMap.add(java.util.Base64.getEncoder().encodeToString(
+                        m.destination.getBytes()) + ":" + fd);
             }
             if (fdMap.length() > 0) {
-                envList.add("_TAKOYAKI_IDMAP_FDS=" + fdMap.toString());
+                envList.add("_TAKOYAKI_IDMAP_FDS=" + fdMap);
             }
         }
 

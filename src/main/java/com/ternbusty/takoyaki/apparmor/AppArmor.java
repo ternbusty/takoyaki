@@ -13,9 +13,10 @@ import java.nio.file.Path;
  * {@code /proc/self/attr/exec} (legacy). The profile takes effect on the next
  * exec(2) on this thread.
  *
- * Must be done before execve() but after PR_SET_NO_NEW_PRIVS (if used) and after
- * dropping privileges; the kernel rejects writes if no_new_privs is set AFTER
- * apparmor.
+ * Stage this before PR_SET_NO_NEW_PRIVS and before dropping privileges. It is
+ * the first privilege step in init, ahead of NNP and the capability/uid drop.
+ * Once no_new_privs is set the kernel refuses an on-exec transition to a
+ * different profile, so staging it afterwards would fail.
  */
 public final class AppArmor {
     private AppArmor() {}

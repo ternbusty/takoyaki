@@ -110,7 +110,7 @@ public final class JsonWriter {
             }
             // Prefer integer form when possible — keeps state.json clean
             // (`pid: 4242` not `pid: 4242.0`).
-            if (d == Math.rint(d) && !Double.isInfinite(d) && Math.abs(d) < 1e15) {
+            if (d == Math.rint(d) && Math.abs(d) < 1e15) {
                 sb.append((long) d);
             } else {
                 sb.append(d);

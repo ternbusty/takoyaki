@@ -54,8 +54,6 @@ public final class UpdateCommand {
         }
 
         // Reuse the existing cgroup directory; just rewrite limits.
-        Spec.Linux linux = new Spec.Linux();
-        linux.resources = r;
         Cgroup.applyLimitsOnly(cgroupPath, r);
         Logger.info("updated resources for " + containerId);
         return 0;

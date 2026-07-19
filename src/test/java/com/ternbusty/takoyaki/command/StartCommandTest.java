@@ -50,6 +50,9 @@ class StartCommandTest {
             sm.when(() -> State.load(anyString(), anyString())).thenReturn(st);
             jm.when(() -> com.ternbusty.takoyaki.util.Json.readFile(any(), any()))
                     .thenReturn(spec);
+            // pathFor is a pure path builder — let the real one run so the
+            // sendStart verification below checks the canonical path.
+            nm.when(() -> NotifySocket.pathFor(anyString())).thenCallRealMethod();
 
             int rc = StartCommand.run(ROOT, "ctr-a");
 

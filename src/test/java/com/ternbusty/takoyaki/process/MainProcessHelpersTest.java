@@ -28,7 +28,7 @@ class MainProcessHelpersTest {
     void singleMappingRendersAsOneLineNoHeader() {
         // Kernel parser is strict: just "<container> <host> <size>\n", no
         // leading "#", no blank line between entries.
-        String s = MainProcess.buildIdMapping(List.of(map(0, 1000, 1)));
+        String s = MainProcess.buildIdMapping(List.of(map(0, 1000, 1)), 1000);
         assertEquals("0 1000 1\n", s);
     }
 
@@ -36,7 +36,7 @@ class MainProcessHelpersTest {
     void multipleMappingsAreNewlineSeparated() {
         String s = MainProcess.buildIdMapping(List.of(
                 map(0, 1000, 1),
-                map(1, 100000, 65536)));
+                map(1, 100000, 65536)), 1000);
         assertEquals("0 1000 1\n1 100000 65536\n", s);
     }
 
@@ -44,21 +44,20 @@ class MainProcessHelpersTest {
     void nullMappingsFallsBackToIdentityOfCurrentUid() {
         // No mappings in spec means "trivial 1:1 identity for current euid",
         // which lets a rootless quick boot work without spec gymnastics.
-        String s = MainProcess.buildIdMapping(null);
-        // Format is "0 <euid> 1\n"; we don't pin the euid, just the shape.
-        assertTrue(s.matches("0 \\d+ 1\n"), () -> "unexpected fallback shape: " + s);
+        String s = MainProcess.buildIdMapping(null, 1000);
+        assertEquals("0 1000 1\n", s);
     }
 
     @Test
     void emptyMappingsAlsoFallsBackToIdentity() {
-        String s = MainProcess.buildIdMapping(List.of());
-        assertTrue(s.matches("0 \\d+ 1\n"), () -> "unexpected fallback shape: " + s);
+        String s = MainProcess.buildIdMapping(List.of(), 1000);
+        assertEquals("0 1000 1\n", s);
     }
 
     @Test
     void largeRangeRendersTheActualSize() {
         // Make sure we don't accidentally clamp the size value.
-        String s = MainProcess.buildIdMapping(List.of(map(0, 100000, 65536)));
+        String s = MainProcess.buildIdMapping(List.of(map(0, 100000, 65536)), 0);
         assertEquals("0 100000 65536\n", s);
     }
 

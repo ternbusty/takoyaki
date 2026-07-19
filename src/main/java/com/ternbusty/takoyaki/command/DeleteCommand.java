@@ -3,6 +3,7 @@ package com.ternbusty.takoyaki.command;
 import com.ternbusty.takoyaki.cgroup.Cgroup;
 import com.ternbusty.takoyaki.config.KontainerConfig;
 import com.ternbusty.takoyaki.hooks.Hooks;
+import com.ternbusty.takoyaki.ipc.NotifySocket;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
@@ -53,7 +54,7 @@ public final class DeleteCommand {
         }
 
         try {
-            Files.deleteIfExists(Path.of("/tmp/takoyaki-" + containerId + ".sock"));
+            Files.deleteIfExists(Path.of(NotifySocket.pathFor(containerId)));
         } catch (IOException e) {
             Logger.warn("failed to remove notify socket: " + e.getMessage());
         }

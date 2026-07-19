@@ -2,16 +2,13 @@ package com.ternbusty.takoyaki.seccomp;
 
 import com.ternbusty.takoyaki.ipc.ScmRights;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.util.Json;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
-import java.util.LinkedHashMap;
-import java.util.Map;
 
 /**
  * Forward a seccomp notify fd to an external listener over a Unix socket.
@@ -34,13 +31,12 @@ public final class SeccompListener {
     /** Open and connect a Unix socket to listenerPath on the host. Returns fd, or -1. */
     public static int connectHostSide(String listenerPath) {
         try (Arena arena = Arena.ofConfined()) {
-            int sock = (int) Libc.syscall(NR_socket(),
-                    Constants.AF_UNIX, Constants.SOCK_STREAM, 0, 0, 0);
+            int sock = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
             if (sock < 0) {
                 Logger.warn("seccomp listener socket() failed: " + Libc.strerror(Libc.errno()));
                 return -1;
             }
-            if (!connectUnix(arena, sock, listenerPath)) {
+            if (!connect(arena, sock, listenerPath)) {
                 PosixIO.close(sock);
                 return -1;
             }
@@ -54,9 +50,7 @@ public final class SeccompListener {
      * path is somehow reachable from inside the container, which it usually isn't).
      */
     public static void forward(String listenerPath,
-                               String containerId,
-                               String bundle,
-                               int containerPid,
+                               State state,
                                String listenerMetadata,
                                int notifyFd,
                                int preConnectedFd) {
@@ -68,25 +62,18 @@ public final class SeccompListener {
             if (preConnectedFd >= 0) {
                 sock = preConnectedFd;
             } else {
-                sock = (int) Libc.syscall(NR_socket(),
-                        Constants.AF_UNIX, Constants.SOCK_STREAM, 0, 0, 0);
+                sock = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
                 if (sock < 0) {
                     Logger.warn("seccomp listener socket() failed: " + Libc.strerror(Libc.errno()));
                     return;
                 }
-                if (!connectUnix(arena, sock, listenerPath)) {
+                if (!connect(arena, sock, listenerPath)) {
                     PosixIO.close(sock);
                     return;
                 }
             }
             try {
-                Map<String, Object> state = new LinkedHashMap<>();
-                state.put("ociVersion", "1.0.0");
-                state.put("id", containerId == null ? "" : containerId);
-                state.put("status", "created");
-                state.put("pid", containerPid);
-                state.put("bundle", bundle == null ? "" : bundle);
-                String json = Json.encode(state) + "\n";
+                String json = Json.encode(state.toJson()) + "\n";
                 if (!writeAll(arena, sock, json.getBytes())) {
                     Logger.warn("failed to send state to seccomp listener");
                     return;
@@ -105,27 +92,19 @@ public final class SeccompListener {
         }
     }
 
-    private static boolean connectUnix(Arena arena, int sock, String path) {
-        byte[] bytes = path.getBytes();
-        if (bytes.length >= 108) {
+    private static boolean connect(Arena arena, int sock, String path) {
+        try {
+            if (PosixIO.connectUnix(arena, sock, path) != 0) {
+                Logger.warn("seccomp listener connect(" + path + ") failed: "
+                        + Libc.strerror(Libc.errno()));
+                return false;
+            }
+            return true;
+        } catch (IllegalArgumentException e) {
+            // PosixIO.connectUnix rejects paths >= 108 bytes (sun_path limit).
             Logger.warn("seccomp listener path too long: " + path);
             return false;
         }
-        // struct sockaddr_un { sa_family_t sun_family; char sun_path[108]; }
-        MemorySegment addr = arena.allocate(110);
-        addr.set(ValueLayout.JAVA_SHORT, 0, (short) Constants.AF_UNIX);
-        for (int i = 0; i < bytes.length; i++) {
-            addr.set(ValueLayout.JAVA_BYTE, 2 + i, bytes[i]);
-        }
-        addr.set(ValueLayout.JAVA_BYTE, 2 + bytes.length, (byte) 0);
-        int addrLen = 2 + bytes.length + 1;
-        long rc = Libc.syscall(NR_connect(), sock, addr.address(), addrLen, 0, 0);
-        if (rc != 0) {
-            Logger.warn("seccomp listener connect(" + path + ") failed: "
-                    + Libc.strerror(Libc.errno()));
-            return false;
-        }
-        return true;
     }
 
     private static boolean writeAll(Arena arena, int sock, byte[] data) {
@@ -147,15 +126,5 @@ public final class SeccompListener {
             off += (int) n;
         }
         return true;
-    }
-
-    private static long NR_socket() {
-        String a = System.getProperty("os.arch", "").toLowerCase();
-        return (a.contains("aarch64") || a.contains("arm64")) ? 198L : 41L;
-    }
-
-    private static long NR_connect() {
-        String a = System.getProperty("os.arch", "").toLowerCase();
-        return (a.contains("aarch64") || a.contains("arm64")) ? 203L : 42L;
     }
 }

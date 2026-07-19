@@ -35,6 +35,8 @@ public final class Logger {
         }
     }
 
+    public static boolean isDebugEnabled() { return Level.DEBUG.ordinal() >= level.ordinal(); }
+
     public static void debug(String msg) { log(Level.DEBUG, msg); }
     public static void info(String msg) { log(Level.INFO, msg); }
     public static void warn(String msg) { log(Level.WARN, msg); }

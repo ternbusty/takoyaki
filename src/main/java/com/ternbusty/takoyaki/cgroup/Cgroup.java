@@ -6,17 +6,38 @@ import com.ternbusty.takoyaki.spec.Spec;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class Cgroup {
     private static final String CGROUP_ROOT = "/sys/fs/cgroup";
 
+    /**
+     * Controllers that can actually be enabled via cgroup.subtree_control.
+     * Used to filter control-file prefixes: "memory.max" names the memory
+     * controller, but "cgroup.freeze" (possible via resources.unified) does
+     * not name a controller at all.
+     */
+    private static final Set<String> KNOWN_CONTROLLERS =
+            Set.of("cpu", "cpuset", "memory", "pids", "io", "hugetlb");
+
     private Cgroup() {}
+
+    /**
+     * Resolve an OCI cgroupsPath (with or without a leading '/') to its
+     * directory under the cgroup v2 mount.
+     */
+    public static Path dir(String cgroupPath) {
+        String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
+        return Path.of(CGROUP_ROOT, norm);
+    }
 
     public static void setup(int pid, String cgroupPath, Spec.Linux linux) {
         if (cgroupPath == null) return;
-        String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-        Path full = Path.of(CGROUP_ROOT, norm);
+        Path full = dir(cgroupPath);
         try {
             Files.createDirectories(full);
         } catch (IOException e) {
@@ -30,12 +51,7 @@ public final class Cgroup {
 
         applyLimits(full, linux != null ? linux.resources : null);
 
-        try {
-            Files.writeString(full.resolve("cgroup.procs"), Integer.toString(pid));
-            Logger.debug("added pid " + pid + " to cgroup " + full);
-        } catch (IOException e) {
-            Logger.warn("add pid to cgroup failed: " + e.getMessage());
-        }
+        addPid(cgroupPath, pid);
 
         // eBPF device cgroup for resources.devices (cgroup v2 only path).
         if (linux != null && linux.resources != null && linux.resources.devices != null
@@ -44,20 +60,40 @@ public final class Cgroup {
         }
     }
 
+    /**
+     * Move a pid into an already-configured cgroup. Writes cgroup.procs only;
+     * directory creation, controller enablement, limits, and the device BPF
+     * program are all left untouched (see setup for the full path).
+     */
+    public static void addPid(String cgroupPath, long pid) {
+        if (cgroupPath == null) return;
+        Path full = dir(cgroupPath);
+        try {
+            Files.writeString(full.resolve("cgroup.procs"), Long.toString(pid));
+            Logger.debug("added pid " + pid + " to cgroup " + full);
+        } catch (IOException e) {
+            Logger.warn("add pid to cgroup failed: " + e.getMessage());
+        }
+    }
+
     private static void enableControllers(Path full, Spec.LinuxResources r) {
-        java.util.List<String> needed = new java.util.ArrayList<>();
-        if (r != null) {
-            if (r.memory != null) needed.add("memory");
-            if (r.cpu != null) {
-                needed.add("cpu");
-                if (r.cpu.cpus != null || r.cpu.mems != null) needed.add("cpuset");
+        // Derive the needed controller set from the control files applyLimits
+        // is about to write: the prefix before the first '.' names the
+        // controller ("memory.max" -> memory). This handles the strongly
+        // typed fields and resources.unified keys uniformly.
+        Set<String> needed = new LinkedHashSet<>();
+        for (Map.Entry<String, String> e : plannedWrites(r)) {
+            String file = e.getKey();
+            int dot = file.indexOf('.');
+            if (dot > 0) {
+                String ctrl = file.substring(0, dot);
+                if (KNOWN_CONTROLLERS.contains(ctrl)) needed.add(ctrl);
             }
-            if (r.pids != null) needed.add("pids");
         }
         if (needed.isEmpty()) return;
         // Walk up from full to CGROUP_ROOT to enable controllers in subtree_control
         Path root = Path.of(CGROUP_ROOT);
-        java.util.List<Path> chain = new java.util.ArrayList<>();
+        List<Path> chain = new ArrayList<>();
         Path cur = full.getParent();
         while (cur != null && cur.startsWith(root)) {
             chain.add(0, cur);
@@ -76,83 +112,96 @@ public final class Cgroup {
 
     /** Re-apply resource limits to an existing cgroup (e.g. via `update`). */
     public static void applyLimitsOnly(String cgroupPath, Spec.LinuxResources r) {
-        String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-        applyLimits(Path.of(CGROUP_ROOT, norm), r);
+        applyLimits(dir(cgroupPath), r);
     }
 
     private static void applyLimits(Path full, Spec.LinuxResources r) {
         if (r == null) return;
+        // Realtime scheduling limits are a cgroup v1 concept — v2 removed
+        // cpu.rt_period_us / cpu.rt_runtime_us entirely. Silently ignoring
+        // the field would hide a genuine spec violation from the user;
+        // surface it so they at least see it in the logs.
+        if (r.cpu != null && (r.cpu.realtimePeriod != null || r.cpu.realtimeRuntime != null)) {
+            Logger.warn("cpu.realtimePeriod / realtimeRuntime are not supported"
+                    + " on cgroup v2; ignoring");
+        }
+        for (Map.Entry<String, String> e : plannedWrites(r)) {
+            writeIfPossible(full.resolve(e.getKey()), e.getValue());
+        }
+    }
+
+    /**
+     * The control-file writes derived from the spec resources, in application
+     * order. Drives both applyLimits (the writes themselves) and
+     * enableControllers (the controller set). resources.unified entries come
+     * last so they can override the strongly typed fields if the same file
+     * was set both ways.
+     */
+    private static List<Map.Entry<String, String>> plannedWrites(Spec.LinuxResources r) {
+        List<Map.Entry<String, String>> writes = new ArrayList<>();
+        if (r == null) return writes;
         if (r.memory != null) {
-            if (r.memory.limit != null) writeIfPossible(full.resolve("memory.max"),
-                    r.memory.limit == -1L ? "max" : r.memory.limit.toString());
+            if (r.memory.limit != null) writes.add(Map.entry("memory.max",
+                    r.memory.limit == -1L ? "max" : r.memory.limit.toString()));
             if (r.memory.swap != null && r.memory.limit != null) {
                 long swap = (r.memory.swap == -1L || r.memory.limit == -1L)
                         ? -1L
                         : r.memory.swap - r.memory.limit;
-                writeIfPossible(full.resolve("memory.swap.max"), swap == -1L ? "max" : Long.toString(swap));
+                writes.add(Map.entry("memory.swap.max", swap == -1L ? "max" : Long.toString(swap)));
             }
-            if (r.memory.reservation != null) writeIfPossible(full.resolve("memory.low"),
-                    r.memory.reservation == -1L ? "max" : r.memory.reservation.toString());
+            if (r.memory.reservation != null) writes.add(Map.entry("memory.low",
+                    r.memory.reservation == -1L ? "max" : r.memory.reservation.toString()));
         }
         if (r.cpu != null) {
             if (r.cpu.cpus != null && !r.cpu.cpus.isEmpty()) {
-                writeIfPossible(full.resolve("cpuset.cpus"), r.cpu.cpus);
+                writes.add(Map.entry("cpuset.cpus", r.cpu.cpus));
             }
             if (r.cpu.mems != null && !r.cpu.mems.isEmpty()) {
-                writeIfPossible(full.resolve("cpuset.mems"), r.cpu.mems);
+                writes.add(Map.entry("cpuset.mems", r.cpu.mems));
             }
             if (r.cpu.shares != null && r.cpu.shares > 0) {
                 long w = 1 + ((r.cpu.shares - 2L) * 9999L / 262142L);
                 if (w > 10000L) w = 10000L;
-                writeIfPossible(full.resolve("cpu.weight"), Long.toString(w));
+                writes.add(Map.entry("cpu.weight", Long.toString(w)));
             }
             if (r.cpu.quota != null || r.cpu.period != null) {
                 String q = r.cpu.quota == null || r.cpu.quota <= 0 ? "max" : Long.toString(r.cpu.quota);
                 String p = r.cpu.period == null ? "100000" : Long.toString(r.cpu.period);
-                writeIfPossible(full.resolve("cpu.max"), q + " " + p);
+                writes.add(Map.entry("cpu.max", q + " " + p));
             }
             // cpu.max.burst is a separate control file since Linux 5.14.
             // Writing before the kernel supports it just fails with ENOENT
             // and writeIfPossible logs at warn — acceptable.
             if (r.cpu.burst != null && r.cpu.burst >= 0) {
-                writeIfPossible(full.resolve("cpu.max.burst"), Long.toString(r.cpu.burst));
+                writes.add(Map.entry("cpu.max.burst", Long.toString(r.cpu.burst)));
             }
             // cpu.idle non-zero moves the cgroup to SCHED_IDLE. Linux 5.15+.
             if (r.cpu.idle != null) {
-                writeIfPossible(full.resolve("cpu.idle"), Long.toString(r.cpu.idle));
-            }
-            // Realtime scheduling limits are a cgroup v1 concept — v2 removed
-            // cpu.rt_period_us / cpu.rt_runtime_us entirely. Silently ignoring
-            // the field would hide a genuine spec violation from the user;
-            // surface it so they at least see it in the logs.
-            if (r.cpu.realtimePeriod != null || r.cpu.realtimeRuntime != null) {
-                Logger.warn("cpu.realtimePeriod / realtimeRuntime are not supported"
-                        + " on cgroup v2; ignoring");
+                writes.add(Map.entry("cpu.idle", Long.toString(r.cpu.idle)));
             }
         }
         if (r.pids != null && r.pids.limit > 0) {
-            writeIfPossible(full.resolve("pids.max"), Long.toString(r.pids.limit));
+            writes.add(Map.entry("pids.max", Long.toString(r.pids.limit)));
         }
         // hugepageLimits: each entry lands in its own hugetlb.<size>.max file.
         // Runc uses the same pageSize→filename mapping.
         if (r.hugepageLimits != null) {
             for (Spec.LinuxHugepageLimit h : r.hugepageLimits) {
                 if (h.pageSize == null || h.limit == null) continue;
-                writeIfPossible(full.resolve("hugetlb." + h.pageSize + ".max"),
-                        h.limit.toString());
+                writes.add(Map.entry("hugetlb." + h.pageSize + ".max", h.limit.toString()));
             }
         }
         if (r.blockIO != null) {
-            applyBlockIO(full, r.blockIO);
+            appendBlockIO(writes, r.blockIO);
         }
         // Unified pass-through: any arbitrary control-file the spec author
-        // named gets written verbatim. Applied last so it can override the
-        // strongly typed fields above if the same file was set both ways.
-        if (r.unified != null && !r.unified.isEmpty()) {
+        // named gets written verbatim.
+        if (r.unified != null) {
             for (Map.Entry<String, String> e : r.unified.entrySet()) {
-                writeIfPossible(full.resolve(e.getKey()), e.getValue());
+                writes.add(Map.entry(e.getKey(), e.getValue()));
             }
         }
+        return writes;
     }
 
     /**
@@ -166,9 +215,9 @@ public final class Cgroup {
      * Multiple entries for the same major:minor get merged so the kernel
      * doesn't clobber a previous write.
      */
-    private static void applyBlockIO(Path full, Spec.LinuxBlockIO io) {
+    private static void appendBlockIO(List<Map.Entry<String, String>> writes, Spec.LinuxBlockIO io) {
         if (io.weight != null && io.weight > 0) {
-            writeIfPossible(full.resolve("io.weight"), "default " + io.weight);
+            writes.add(Map.entry("io.weight", "default " + io.weight));
         }
         java.util.Map<String, StringBuilder> perDevice = new java.util.LinkedHashMap<>();
         appendThrottle(perDevice, io.throttleReadBpsDevice, "rbps");
@@ -176,7 +225,7 @@ public final class Cgroup {
         appendThrottle(perDevice, io.throttleReadIOPSDevice, "riops");
         appendThrottle(perDevice, io.throttleWriteIOPSDevice, "wiops");
         for (var e : perDevice.entrySet()) {
-            writeIfPossible(full.resolve("io.max"), e.getKey() + " " + e.getValue().toString().trim());
+            writes.add(Map.entry("io.max", e.getKey() + " " + e.getValue().toString().trim()));
         }
     }
 
@@ -203,8 +252,7 @@ public final class Cgroup {
 
     public static void cleanup(String cgroupPath) {
         if (cgroupPath == null) return;
-        String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-        Path full = Path.of(CGROUP_ROOT, norm);
+        Path full = dir(cgroupPath);
         if (!Files.exists(full)) return;
 
         // cgroup v2: writing "1" to cgroup.kill sends SIGKILL to every process

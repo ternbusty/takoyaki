@@ -7,7 +7,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * Ensure the container has /etc/passwd and /etc/group entries for the target uid/gid
@@ -19,15 +20,10 @@ import java.util.List;
 public final class UserDb {
     private UserDb() {}
 
-    public static void ensure(Spec.User user, List<Integer> additionalGids) {
+    public static void ensure(Spec.User user) {
         if (user == null) return;
         addPasswd(user.uid, user.gid);
-        addGroup(user.gid, "user");
-        if (additionalGids != null) {
-            for (int gid : additionalGids) {
-                if (gid != user.gid) addGroup(gid, "extra" + gid);
-            }
-        }
+        addGroups(user);
     }
 
     private static void addPasswd(int uid, int gid) {
@@ -45,18 +41,36 @@ public final class UserDb {
         }
     }
 
-    private static void addGroup(int gid, String fallbackName) {
+    private static void addGroups(Spec.User user) {
         Path p = Path.of("/etc/group");
         if (!Files.exists(p)) return;
         try {
+            // Read once, compute every missing gid against that single content,
+            // and append all missing entries in one write.
             String content = Files.readString(p);
-            if (lineForGid(content, gid) != null) return;
-            String entry = fallbackName + ":x:" + gid + ":\n";
-            Files.writeString(p, entry, StandardOpenOption.APPEND);
-            Logger.debug("/etc/group entry added for gid=" + gid);
+            Set<Integer> pending = new LinkedHashSet<>();
+            StringBuilder entries = new StringBuilder();
+            appendIfMissing(content, pending, entries, user.gid, "user");
+            if (user.additionalGids != null) {
+                for (int gid : user.additionalGids) {
+                    if (gid != user.gid) {
+                        appendIfMissing(content, pending, entries, gid, "extra" + gid);
+                    }
+                }
+            }
+            if (entries.length() == 0) return;
+            Files.writeString(p, entries.toString(), StandardOpenOption.APPEND);
         } catch (IOException e) {
             Logger.debug("/etc/group update skipped: " + e.getMessage());
         }
+    }
+
+    private static void appendIfMissing(String content, Set<Integer> pending,
+                                        StringBuilder entries, int gid, String fallbackName) {
+        if (lineForGid(content, gid) != null) return;
+        if (!pending.add(gid)) return;
+        entries.append(fallbackName).append(":x:").append(gid).append(":\n");
+        Logger.debug("/etc/group entry added for gid=" + gid);
     }
 
     private static String lineForUid(String content, int uid) {

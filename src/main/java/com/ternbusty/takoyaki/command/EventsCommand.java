@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.cgroup.Cgroup;
 import com.ternbusty.takoyaki.config.KontainerConfig;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.util.Json;
@@ -30,8 +31,7 @@ public final class EventsCommand {
             Logger.error("no cgroupsPath for container");
             return 1;
         }
-        String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-        Path cg = Path.of("/sys/fs/cgroup", norm);
+        Path cg = Cgroup.dir(cgroupPath);
         do {
             Map<String, Object> snap = snapshot(cg, containerId);
             System.out.println(Json.encode(snap));

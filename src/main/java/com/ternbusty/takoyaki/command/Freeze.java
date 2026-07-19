@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.cgroup.Cgroup;
 import com.ternbusty.takoyaki.config.KontainerConfig;
 import com.ternbusty.takoyaki.logger.Logger;
 
@@ -23,8 +24,7 @@ final class Freeze {
             Logger.error("container has no cgroupsPath, cannot " + op);
             return 1;
         }
-        String norm = cgroupPath.startsWith("/") ? cgroupPath.substring(1) : cgroupPath;
-        Path freeze = Path.of("/sys/fs/cgroup", norm, "cgroup.freeze");
+        Path freeze = Cgroup.dir(cgroupPath).resolve("cgroup.freeze");
         try {
             Files.writeString(freeze, value);
             Logger.info(op + " ok for " + containerId);
