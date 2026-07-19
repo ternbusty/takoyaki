@@ -122,6 +122,16 @@ public final class Seccomp {
                     }
                 }
 
+                // Ask libseccomp to compile the rule set into a binary tree
+                // once it gets large enough for the linear match to hurt.
+                // Docker's default profile has hundreds of syscalls; without
+                // this every allowed syscall pays for walking the whole list.
+                // runc uses the same 32-rule threshold.
+                int SCMP_FLTATR_CTL_OPTIMIZE = 8;
+                if (sec.syscalls != null && countSyscalls(sec.syscalls) > 32) {
+                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_OPTIMIZE, 2L);
+                }
+
                 // architectures - libseccomp wants lowercase, no SCMP_ARCH_ prefix
                 if (sec.architectures != null) {
                     for (String archName : sec.architectures) {
@@ -267,6 +277,19 @@ public final class Seccomp {
 
     // libseccomp action code for SCMP_ACT_NOTIFY, from seccomp.h.
     private static final int ACT_NOTIFY = 0x7fc00000;
+
+    /**
+     * Count the total number of rules (name × action pairs) the spec will
+     * install. Each entry in `syscalls` may cover several names, and every
+     * name becomes an independent libseccomp rule.
+     */
+    private static int countSyscalls(java.util.List<Spec.LinuxSyscall> syscalls) {
+        int n = 0;
+        for (Spec.LinuxSyscall s : syscalls) {
+            if (s.names != null) n += s.names.size();
+        }
+        return n;
+    }
 
     private static int actionToken(String action, Long errnoRet) {
         // ERRNO and TRACE encode the extra data in the low 16 bits of the
