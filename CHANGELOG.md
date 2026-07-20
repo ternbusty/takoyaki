@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.0](https://github.com/ternbusty/takoyaki/compare/v0.2.0...v0.3.0) (2026-07-20)
+
+
+### 🎉 Features
+
+* **cgroup:** honour cpu.burst / cpu.idle, hugepageLimits and blockIO ([#39](https://github.com/ternbusty/takoyaki/issues/39)) ([2f6f8d1](https://github.com/ternbusty/takoyaki/commit/2f6f8d115f1544e8a7cdf0d10e3d8b3b149988d9))
+* **seccomp:** translate filter flags, reject NOTIFY-on-write, validate errno ([#36](https://github.com/ternbusty/takoyaki/issues/36)) ([195ded2](https://github.com/ternbusty/takoyaki/commit/195ded236a593b1ef6076ed1cf183eaa5f4dfc28))
+
+
+### 🐛 Bug Fixes
+
+* **capability:** warn on unknown cap names, pre-check ambient raise ([#37](https://github.com/ternbusty/takoyaki/issues/37)) ([02f8a22](https://github.com/ternbusty/takoyaki/commit/02f8a22c09bf53e05ac3eeaad3aec9dec8a41348))
+* **exec:** apply the container's process restrictions instead of bare setns ([#46](https://github.com/ternbusty/takoyaki/issues/46)) ([70edfc4](https://github.com/ternbusty/takoyaki/commit/70edfc44fa6302c208f5d4459a5fd1206bb86247))
+* **rootfs:** add /dev/console to the default bind-mount set ([#40](https://github.com/ternbusty/takoyaki/issues/40)) ([10d159f](https://github.com/ternbusty/takoyaki/commit/10d159fa784ea5234565848c80f99125f928275b))
+
+
+### ⚡ Performance Improvements
+
+* **seccomp:** switch to binary-tree matching once the rule set exceeds 32 ([#38](https://github.com/ternbusty/takoyaki/issues/38)) ([273dbb6](https://github.com/ternbusty/takoyaki/commit/273dbb6240cc8fa47679baef99de31967e1b17a2))
+
+
+### 🔗 Dependencies
+
+* **deps:** bump org.graalvm.buildtools.native from 1.1.3 to 1.1.4 ([#43](https://github.com/ternbusty/takoyaki/issues/43)) ([e4ef69b](https://github.com/ternbusty/takoyaki/commit/e4ef69bd70245bd5c0afaf84cde0dc90175e915c))
+* **deps:** bump org.graalvm.sdk:nativeimage from 25.0.3 to 25.1.3 ([#41](https://github.com/ternbusty/takoyaki/issues/41)) ([2165bb3](https://github.com/ternbusty/takoyaki/commit/2165bb3872ae0ed7a355aa78475f0c941328e115))
+* **deps:** bump org.junit:junit-bom from 6.1.1 to 6.1.2 ([#44](https://github.com/ternbusty/takoyaki/issues/44)) ([7c050d6](https://github.com/ternbusty/takoyaki/commit/7c050d6219f34af9ce34d6026e7bbf669f249465))
+
 ## [0.2.0](https://github.com/ternbusty/takoyaki/compare/v0.1.1...v0.2.0) (2026-07-05)
 
 
