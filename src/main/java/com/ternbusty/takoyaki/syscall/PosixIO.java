@@ -171,6 +171,30 @@ public final class PosixIO {
         catch (Throwable t) { throw sneaky(t); }
     }
 
+    /**
+     * Write the whole buffer, retrying short writes and EINTR. The native
+     * segment is allocated once and advanced by slicing, so a fragmented
+     * write of a large buffer costs no per-iteration heap copies.
+     * Returns true on success, false on a write error (errno preserved).
+     */
+    public static boolean writeAll(Arena arena, int fd, byte[] buf) {
+        try {
+            MemorySegment seg = arena.allocate(buf.length);
+            MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
+            long off = 0;
+            while (off < buf.length) {
+                long n = (long) WRITE.invoke(fd, seg.asSlice(off), (long) buf.length - off);
+                if (n < 0) {
+                    if (Libc.errno() == Constants.EINTR) continue;
+                    return false;
+                }
+                if (n == 0) return false;
+                off += n;
+            }
+            return true;
+        } catch (Throwable t) { throw sneaky(t); }
+    }
+
     public static int unlink(Arena arena, String path) {
         try { return (int) UNLINK.invoke(arena.allocateFrom(path)); }
         catch (Throwable t) { throw sneaky(t); }

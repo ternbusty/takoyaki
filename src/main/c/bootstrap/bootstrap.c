@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -134,6 +135,140 @@ static pid_t clone_parent(void) {
     return pid;
 }
 
+/* exec path, mirroring the create path's stage machinery (and runc's nsexec):
+ * ExecCommand re-execs /proc/self/exe __exec__ with _TAKOYAKI_EXEC_PAYLOAD_FD
+ * (a socketpair to the CLI) and the container namespace fds in
+ * _TAKOYAKI_EXEC_NS_FDS (format type:fd,type:fd,... in the order they must be
+ * applied: user first, cgroup before mnt, mnt last).
+ *
+ * Everything namespace-related happens right here, before SubstrateVM spawns
+ * its runtime helper threads:
+ *
+ *   1. setns into every fd. Must be pre-Java: setns(mnt/user) rejects
+ *      multi-threaded callers with EINVAL. nstype 0 accepts whatever the
+ *      fd is.
+ *   2. clone_parent() the workload process. The clone is what makes Java
+ *      startup work at all inside the container: the child is BORN in the
+ *      container pid ns (setns(pid) only affects children), so the container
+ *      /proc that isolate creation reads (/proc/self/maps) has an entry for
+ *      it, and pid_ns_for_children matches its active ns so CLONE_THREAD —
+ *      i.e. the runtime threads — is permitted again. CLONE_PARENT makes the
+ *      workload a direct child of the CLI, which can then waitpid it for the
+ *      exit code (or simply exit for a detached exec, orphaning the workload
+ *      to the caller's subreaper — how containerd's shim reaps it).
+ *   3. The intermediate reports the workload's pid — as seen from the host
+ *      pid ns, since this process never left it — over the payload socket
+ *      (the CLI needs it for cgroup.procs and --pid-file) and exits.
+ *
+ * The child returns into the normal startup path: SubstrateVM boots inside
+ * the container namespaces and Main dispatches to ExecProcess, which applies
+ * the process restrictions and execve's the user command in place.
+ *
+ * Failure is fatal: silently running the exec'd command half-outside the
+ * container would defeat the restrictions the exec path exists to apply. */
+/* Walk the _TAKOYAKI_EXEC_NS_FDS list and setns each entry, restricted to
+ * either the mnt entry (want_mnt=1) or everything else (want_mnt=0). */
+static void exec_setns_pass(const char *env, int want_mnt) {
+    char *copy = strdup(env);
+    if (!copy) {
+        fprintf(stderr, "[exec-setns] strdup failed\n");
+        exit(1);
+    }
+    char *saveptr = NULL;
+    char *token = strtok_r(copy, ",", &saveptr);
+    while (token) {
+        char *colon = strchr(token, ':');
+        if (colon) {
+            *colon = '\0';
+            int fd = atoi(colon + 1);
+            int is_mnt = strcmp(token, "mnt") == 0;
+            if (is_mnt == want_mnt) {
+                if (setns(fd, 0) < 0) {
+                    fprintf(stderr, "[exec-setns] setns(%s, fd=%d) failed: %s\n",
+                            token, fd, strerror(errno));
+                    exit(1);
+                }
+                close(fd);
+            }
+        }
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    free(copy);
+}
+
+static void exec_bootstrap(void) {
+    char *sync_env = getenv("_TAKOYAKI_EXEC_PAYLOAD_FD");
+    if (!sync_env) return;
+    int sync_fd = atoi(sync_env);
+
+    char *ns_env = getenv("_TAKOYAKI_EXEC_NS_FDS");
+
+    /* Stage 2: we are the re-exec'd workload. Only the mnt join is left; it
+     * had to wait until after the execve below so ld.so could still resolve
+     * libc/libseccomp on the host, and it must happen before SubstrateVM
+     * spawns its runtime threads.
+     *
+     * Before cutting ourselves off from the host filesystem, warm the dynamic
+     * loader with the libraries SubstrateVM's FFM lookup dlopens lazily at
+     * first use (RuntimeSystemLookup wants libm). A minimal container rootfs
+     * (busybox, distroless) has no glibc at all, but dlopen by soname returns
+     * the already-loaded copy without touching the filesystem. */
+    if (getenv("_TAKOYAKI_EXEC_STAGE2")) {
+        static const char *const preload[] = {
+            "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
+        };
+        for (size_t i = 0; i < sizeof(preload) / sizeof(preload[0]); i++) {
+            if (!dlopen(preload[i], RTLD_NOW | RTLD_GLOBAL)) {
+                fprintf(stderr, "[exec-bootstrap] preload %s failed: %s\n",
+                        preload[i], dlerror());
+            }
+        }
+        if (ns_env && *ns_env) {
+            exec_setns_pass(ns_env, 1);
+        }
+        return;
+    }
+
+    /* Stage 1: join everything except mnt (mnt now would cut us off from the
+     * host libraries the stage-2 execve still needs to load). */
+    if (ns_env && *ns_env) {
+        exec_setns_pass(ns_env, 0);
+    }
+
+    pid_t workload_pid = clone_parent();
+    if (workload_pid < 0) {
+        fprintf(stderr, "[exec-bootstrap] clone failed: %s\n", strerror(errno));
+        exit(1);
+    }
+    if (workload_pid > 0) {
+        /* Intermediate: hand the workload pid to the CLI and get out of the
+         * way. Same int32 wire format MainProcess already reads for the
+         * create path's stage-2 pid. */
+        if (write(sync_fd, &workload_pid, sizeof(workload_pid)) != sizeof(workload_pid)) {
+            fprintf(stderr, "[exec-bootstrap] pid report failed: %s\n", strerror(errno));
+            _exit(1);
+        }
+        _exit(0);
+    }
+
+    /* Workload: re-exec ourselves before running any runtime code. The raw
+     * clone above bypasses glibc's fork path, so libc state cached in TLS
+     * (the tid, notably) still describes the parent — SubstrateVM would then
+     * call sched_getaffinity(stale-tid) and die with ESRCH, since that number
+     * does not exist inside the container pid ns we were born into. execve
+     * rebuilds libc from scratch for our real pid. The create path's stage-2
+     * re-execs after its raw clone for the same reason. */
+    if (setenv("_TAKOYAKI_EXEC_STAGE2", "1", 1) != 0) {
+        fprintf(stderr, "[exec-bootstrap] setenv failed: %s\n", strerror(errno));
+        _exit(1);
+    }
+    char *const argv[] = {(char *) "/proc/self/exe", (char *) "__exec__", NULL};
+    extern char **environ;
+    execve("/proc/self/exe", argv, environ);
+    fprintf(stderr, "[exec-bootstrap] re-exec failed: %s\n", strerror(errno));
+    _exit(1);
+}
+
 __attribute__((constructor))
 void takoyaki_bootstrap(void) {
     int sync_fd;
@@ -157,6 +292,7 @@ void takoyaki_bootstrap(void) {
     }
 
     if (!getenv(ENV_IS_BOOTSTRAP)) {
+        exec_bootstrap();
         return;
     }
 

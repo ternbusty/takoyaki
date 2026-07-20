@@ -1,19 +1,27 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/** Minimal waitpid wrapper for foreground subcommands like `exec`. */
-final class Wait {
+/**
+ * Minimal waitpid wrapper for foreground subcommands like `exec`. Public so
+ * the process-side half of exec (ExecProcess) shares the same status
+ * decoding and the two exit-code paths cannot drift.
+ */
+public final class Wait {
     private Wait() {}
 
-    static int waitForChild(int pid) {
+    public static int waitForChild(int pid) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment status = arena.allocate(ValueLayout.JAVA_INT);
-            int rc = Libc.waitpid(pid, status, 0);
+            int rc;
+            do {
+                rc = Libc.waitpid(pid, status, 0);
+            } while (rc < 0 && Libc.errno() == Constants.EINTR);
             if (rc < 0) return 1;
             int s = status.get(ValueLayout.JAVA_INT, 0);
             return decodeStatus(s);

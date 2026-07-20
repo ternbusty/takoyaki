@@ -222,4 +222,8 @@ graalvmNative {
 
 tasks.named("nativeCompile") {
     dependsOn(buildBootstrap)
+    // libbootstrap.a only reaches the image via -H:NativeLinkerOption, which
+    // Gradle cannot see as an input. Without this, a C-only change rebuilds
+    // the archive but leaves nativeCompile UP-TO-DATE with the stale link.
+    inputs.dir(bootstrapBuildDir)
 }

@@ -174,6 +174,7 @@ uname -r
 # An idmap mount with a separate per-mount uidMappings is independently useful
 # (and easier to set up with bundle ownership) and that's what this verifies.
 prepare_busybox_rootfs $WORK/idmap-bundle
+rm -f /tmp/idmap-source.txt
 echo testhost > /tmp/idmap-source.txt
 chown 100000:100000 /tmp/idmap-source.txt
 cat > $WORK/idmap-bundle/config.json <<EOF
@@ -194,6 +195,48 @@ echo "  ls -ln /idmap/idmap-source.txt inside container:"
 sed 's/^/    /' $WORK/idmap-bundle/rootfs/tmp/idm.txt 2>&1 || echo "    (missing)"
 grep -iE "host-prepared|uid_map|fd inherited" /tmp/H.log | head -3 | sed 's/^/  log: /'
 cleanup id id
+
+echo
+echo "===== I. exec re-applies restrictions (seccomp/caps/NNP/cgroup/rlimits/AppArmor) ====="
+# The exec'd process must NOT inherit the host-side unrestricted state: seccomp
+# filter, capability bounding set, no_new_privs, rlimits and cgroup membership
+# all have to be re-applied by the exec path itself (setns carries none of them).
+prepare_busybox_rootfs $WORK/exec-bundle
+mkdir -p $WORK/exec-bundle/rootfs/proc
+cat > $WORK/exec-bundle/config.json <<'EOF'
+{ "ociVersion":"1.0.0","root":{"path":"rootfs"},
+  "process":{"args":["/bin/sh","-c","sleep 30"],
+             "env":["PATH=/bin"],"cwd":"/","user":{"uid":0,"gid":0},
+             "noNewPrivileges":true,
+             "apparmorProfile":"takoyaki-test",
+             "capabilities":{"bounding":["CAP_KILL"],"effective":["CAP_KILL"],"permitted":["CAP_KILL"]},
+             "rlimits":[{"type":"RLIMIT_NOFILE","hard":512,"soft":512}]},
+  "hostname":"ex",
+  "linux":{"namespaces":[{"type":"pid"},{"type":"mount"},{"type":"uts"},{"type":"ipc"}],
+           "cgroupsPath":"/takoyaki-ex",
+           "seccomp":{"defaultAction":"SCMP_ACT_ALLOW",
+                      "architectures":["SCMP_ARCH_AARCH64"],
+                      "syscalls":[{"names":["mkdir","mkdirat"],"action":"SCMP_ACT_ERRNO","errnoRet":1}]}} }
+EOF
+cleanup ex ex
+run_init_log ex /tmp/I.log $WORK/exec-bundle
+sleep 1
+sudo $BIN --debug exec ex /bin/sh -c '{
+  grep Seccomp: /proc/self/status
+  grep NoNewPrivs /proc/self/status
+  grep CapBnd /proc/self/status
+  echo "cgroup=$(cat /proc/self/cgroup)"
+  echo "apparmor=$(cat /proc/self/attr/current 2>/dev/null)"
+  echo "nofile=$(ulimit -n)"
+  mkdir /tmp/mk-test 2>/dev/null && echo "mkdir=ALLOWED(BAD)" || echo "mkdir=BLOCKED(GOOD)"
+}' > /tmp/exec-out.txt 2>/tmp/I-exec.log </dev/null || echo "  exec FAILED (see /tmp/I-exec.log)"
+sed 's/^/  /' /tmp/exec-out.txt
+# Expected: Seccomp: 2, NoNewPrivs: 1, CapBnd: 0000000000000020 (CAP_KILL only),
+# cgroup path ending in takoyaki-ex, nofile=512, mkdir blocked by seccomp.
+rc=0
+sudo $BIN exec ex /bin/sh -c 'exit 7' >/dev/null 2>&1 </dev/null || rc=$?
+echo "  exit code propagation (want 7): $rc"
+cleanup ex ex
 
 echo
 echo "===== DONE ====="
