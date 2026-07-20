@@ -1,7 +1,5 @@
 package com.ternbusty.takoyaki.process;
 
-import com.ternbusty.takoyaki.apparmor.AppArmor;
-import com.ternbusty.takoyaki.capability.Capability;
 import com.ternbusty.takoyaki.console.ConsoleSocket;
 import com.ternbusty.takoyaki.hooks.Hooks;
 import com.ternbusty.takoyaki.ipc.NotifySocket;
@@ -12,14 +10,11 @@ import com.ternbusty.takoyaki.network.Loopback;
 import com.ternbusty.takoyaki.rootfs.Devices;
 import com.ternbusty.takoyaki.rootfs.Rootfs;
 import com.ternbusty.takoyaki.rootfs.UserDb;
-import com.ternbusty.takoyaki.seccomp.Seccomp;
-import com.ternbusty.takoyaki.selinux.SeLinux;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.ContainerStatus;
 import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.CloseRange;
 import com.ternbusty.takoyaki.syscall.Constants;
-import com.ternbusty.takoyaki.syscall.Groups;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.sysctl.Sysctl;
@@ -139,15 +134,8 @@ public final class InitProcess {
 
             // Apply process.oomScoreAdj. Writes to /proc/self/oom_score_adj so it
             // is inherited by the user process after exec.
-            if (spec.process != null && spec.process.oomScoreAdj != null) {
-                try {
-                    java.nio.file.Files.writeString(
-                            java.nio.file.Path.of("/proc/self/oom_score_adj"),
-                            spec.process.oomScoreAdj.toString());
-                    Logger.debug("oom_score_adj=" + spec.process.oomScoreAdj);
-                } catch (java.io.IOException e) {
-                    Logger.warn("write oom_score_adj failed: " + e.getMessage());
-                }
+            if (spec.process != null) {
+                ProcessRestrictions.applyOomScoreAdj(spec.process.oomScoreAdj);
             }
 
             // Parse pre-prepared idmap helper fds passed via env from CreateCommand.
@@ -225,103 +213,17 @@ public final class InitProcess {
                 Rootfs.setRootReadonly();
             }
 
-            if (spec.process != null && spec.process.umask != null) {
-                Libc.umask(spec.process.umask.intValue());
-            }
-
-            // Order rationale (matches runc / youki):
-            //
-            //   1. AppArmor / SELinux label staging
-            //   2. PR_SET_NO_NEW_PRIVS (only if spec asks)
-            //   3. seccomp_load (early path) — only when NNP is NOT requested.
-            //      Rationale: seccomp(2) needs CAP_SYS_ADMIN OR a pre-set NNP
-            //      (libseccomp's auto-NNP is disabled via SCMP_FLTATR_CTL_NNP=0).
-            //      When NNP is off, we cannot rely on NNP so we load seccomp
-            //      here while CAP_SYS_ADMIN is still in effective.
-            //   4. Capability bounding set / keep_caps
-            //   5. setgroups / setresgid / setresuid
-            //   6. capset (final effective/permitted/inheritable/ambient)
-            //   7. PR_SET_DUMPABLE=0
-            //   8. seccomp_load (late path) — only when NNP IS requested.
-            //      NNP satisfies seccomp's permission check without CAP_SYS_ADMIN,
-            //      so we defer the load past the cap drop. This keeps init's own
-            //      post-drop syscalls (capset, etc.) out from under the filter
-            //      and lets the profile focus on the workload only.
-            //   9. execve into user process
-
-            boolean nnpRequested = spec.process != null
-                    && Boolean.TRUE.equals(spec.process.noNewPrivileges);
-
-            if (spec.process != null && spec.process.apparmorProfile != null) {
-                AppArmor.apply(spec.process.apparmorProfile);
-            }
-            if (spec.process != null && spec.process.selinuxLabel != null) {
-                SeLinux.apply(spec.process.selinuxLabel);
-            }
-
-            if (nnpRequested) {
-                if (Libc.prctl(Constants.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
-                    Logger.warn("PR_SET_NO_NEW_PRIVS failed");
-                } else {
-                    Logger.debug("no_new_privileges set");
-                }
-            }
-
             // Join a fresh kernel session keyring unless the caller opted out via
-            // --no-new-keyring (we propagate that via env var).
+            // --no-new-keyring (we propagate that via env var). Must happen before
+            // the restriction sequence so no seccomp filter can veto keyctl.
             if (!"1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"))) {
                 Keyring.joinNewSession("takoyaki-" + Libc.getpid());
             }
 
-            // Early seccomp: NNP not set, so we need CAP_SYS_ADMIN which is still
-            // in effective at this point.
-            if (spec.linux != null && spec.linux.seccomp != null && !nnpRequested) {
-                Seccomp.apply(spec.linux.seccomp,
-                        buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
-                        seccompListenerFd);
-            }
-
-            Spec.LinuxCapabilities caps = spec.process != null ? spec.process.capabilities : null;
-            if (caps != null) {
-                Capability.applyBoundingSet(caps);
-                Capability.setKeepCaps();
-            }
-
-            if (spec.process != null && spec.process.user != null
-                    && spec.process.user.additionalGids != null) {
-                Groups.setAdditional(spec.process.user.additionalGids);
-            }
-
-            int targetGid = spec.process != null && spec.process.user != null ? spec.process.user.gid : 0;
-            int targetUid = spec.process != null && spec.process.user != null ? spec.process.user.uid : 0;
-            // setresgid/setresuid drops real/effective/saved IDs all at once so the
-            // process can't restore privileges via saved UID.
-            if (Libc.setresgid(targetGid, targetGid, targetGid) != 0) {
-                Logger.warn("setresgid " + targetGid + " failed: " + Libc.strerror(Libc.errno()));
-            }
-            if (Libc.setresuid(targetUid, targetUid, targetUid) != 0) {
-                Logger.warn("setresuid " + targetUid + " failed: " + Libc.strerror(Libc.errno()));
-            }
-            Logger.debug("set uid=" + targetUid + " gid=" + targetGid);
-
-            if (caps != null) {
-                Capability.clearKeepCaps();
-                Capability.applyFinalSets(caps);
-            }
-
-            // Re-set non-dumpable so /proc inspection by attached processes can't leak.
-            if (Libc.prctl(Constants.PR_SET_DUMPABLE, 0, 0, 0, 0) != 0) {
-                Logger.debug("PR_SET_DUMPABLE,0 failed: " + Libc.strerror(Libc.errno()));
-            }
-
-            // Late seccomp: NNP is set, so we can install seccomp without
-            // CAP_SYS_ADMIN. Deferring past cap drop keeps the filter focused on
-            // the workload and off init's own setup syscalls.
-            if (spec.linux != null && spec.linux.seccomp != null && nnpRequested) {
-                Seccomp.apply(spec.linux.seccomp,
-                        buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
-                        seccompListenerFd);
-            }
+            ProcessRestrictions.apply(spec.process,
+                    spec.linux != null ? spec.linux.seccomp : null,
+                    buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
+                    seccompListenerFd);
 
             // PTY setup: if process.terminal is true and a console socket was passed,
             // open a pty, ship the master to the console socket, and wire stdio to

@@ -57,6 +57,7 @@ public final class Constants {
     public static final int EPERM = 1;
     public static final int ENOENT = 2;
     public static final int ESRCH = 3;
+    public static final int EINTR = 4;
     public static final int EEXIST = 17;
     public static final int EBUSY = 16;
     public static final int EINVAL = 22;

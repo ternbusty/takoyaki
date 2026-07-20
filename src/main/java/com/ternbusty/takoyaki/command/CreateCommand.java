@@ -97,12 +97,7 @@ public final class CreateCommand {
             return 1;
         }
 
-        List<String> envList = new ArrayList<>();
-        for (Map.Entry<String, String> e : System.getenv().entrySet()) {
-            String k = e.getKey();
-            if (k.startsWith("_TAKOYAKI_")) continue;
-            envList.add(k + "=" + e.getValue());
-        }
+        List<String> envList = HostEnv.inherited();
         envList.add("_TAKOYAKI_IS_BOOTSTRAP=1");
         envList.add("_TAKOYAKI_SYNCPIPE=" + syncFds[1]);
         envList.add("_TAKOYAKI_CLONE_FLAGS=" + Integer.toHexString(cloneFlags));

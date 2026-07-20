@@ -14,6 +14,7 @@ import com.ternbusty.takoyaki.command.StartCommand;
 import com.ternbusty.takoyaki.command.StateCommand;
 import com.ternbusty.takoyaki.command.UpdateCommand;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.process.ExecProcess;
 import com.ternbusty.takoyaki.process.InitProcess;
 
 import java.util.ArrayList;
@@ -47,6 +48,17 @@ public final class Main {
                 Logger.setLevel(Logger.Level.DEBUG);
             }
             InitProcess.run();
+            return;
+        }
+
+        // Same trick for `exec`: ExecCommand re-execs /proc/self/exe with this
+        // sentinel (in the host namespaces) and ExecProcess does setns + the
+        // restriction sequence from a fresh process.
+        if (args.length == 1 && "__exec__".equals(args[0])) {
+            if ("1".equals(System.getenv("_TAKOYAKI_EXEC_DEBUG"))) {
+                Logger.setLevel(Logger.Level.DEBUG);
+            }
+            ExecProcess.run();
             return;
         }
 
@@ -416,14 +428,19 @@ public final class Main {
     }
 
     private static int dispatchExec(String[] args, int subStart, String rootPath) {
-        // takoyaki exec [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]... <id> [--] CMD [ARG...]
+        // takoyaki exec [-p FILE] [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]... <id> [--] CMD [ARG...]
         // We treat the first non-flag positional as the container ID and
         // everything after it (or after a literal "--") as the command + args.
+        // With -p (the containerd path) the process document replaces the
+        // flags and command entirely, so no command is expected.
+        String processJson = null;
         String user = null;
         String cwd = null;
         List<String> envs = new ArrayList<>();
         String id = null;
         List<String> command = new ArrayList<>();
+        boolean detach = false;
+        String pidFile = null;
         boolean afterPositional = false;
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
@@ -436,11 +453,25 @@ public final class Main {
                 continue;
             }
             switch (a) {
+                case "-p", "--process" -> {
+                    if (i + 1 >= args.length) return missingArg("exec", a);
+                    processJson = args[++i];
+                }
                 case "-u", "--user" -> {
                     if (i + 1 >= args.length) return missingArg("exec", a);
                     user = args[++i];
                 }
-                case "-t", "--tty" -> { /* runc compat: accepted, no-op */ }
+                case "-d", "--detach" -> detach = true;
+                case "--pid-file" -> {
+                    if (i + 1 >= args.length) return missingArg("exec", a);
+                    pidFile = args[++i];
+                }
+                case "--console-socket" -> {
+                    if (i + 1 >= args.length) return missingArg("exec", a);
+                    i++;
+                    Logger.warn("exec: --console-socket is not supported yet, ignoring");
+                }
+                case "-t", "--tty" -> Logger.warn("exec: -t/--tty is not supported yet, ignoring");
                 case "--cwd" -> {
                     if (i + 1 >= args.length) return missingArg("exec", a);
                     cwd = args[++i];
@@ -464,11 +495,12 @@ public final class Main {
             System.err.println("takoyaki exec: missing container ID");
             return 1;
         }
-        if (command.isEmpty()) {
+        if (processJson == null && command.isEmpty()) {
             System.err.println("takoyaki exec: no command specified");
             return 1;
         }
-        return ExecCommand.run(rootPath, id, user, cwd, envs, command);
+        return ExecCommand.run(rootPath, id, processJson, user, cwd, envs, command,
+                detach, pidFile);
     }
 
     // ---- small helpers ------------------------------------------------
@@ -547,7 +579,7 @@ public final class Main {
             case "resume" -> "Usage: takoyaki resume <id>";
             case "update" -> "Usage: takoyaki update [-r FILE] [--memory N] [--cpu-quota N] [--cpu-period N] [--cpu-shares N] [--pids-limit N] <id>";
             case "events" -> "Usage: takoyaki events [--stats] [--interval SEC] <id>";
-            case "exec" -> "Usage: takoyaki exec [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]... <id> CMD [ARG...]";
+            case "exec" -> "Usage: takoyaki exec [-p FILE] [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]... [-d] [--pid-file FILE] <id> CMD [ARG...]";
             default -> "Usage: takoyaki " + sub;
         };
         System.out.println(body);

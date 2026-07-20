@@ -1,27 +1,54 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.cgroup.Cgroup;
+import com.ternbusty.takoyaki.config.KontainerConfig;
+import com.ternbusty.takoyaki.ipc.SyncChannel;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.process.ExecPayload;
+import com.ternbusty.takoyaki.seccomp.SeccompListener;
+import com.ternbusty.takoyaki.spec.Spec;
+import com.ternbusty.takoyaki.state.ContainerStatus;
 import com.ternbusty.takoyaki.state.State;
+import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.util.Json;
 
 import java.lang.foreign.Arena;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.StringJoiner;
 
 /**
- * Run an additional command inside an existing container by joining all of its
- * namespaces with setns(2). Equivalent to `runc exec`.
+ * Run an additional command inside an existing container. Equivalent to
+ * `runc exec`: the new process gets the container's namespaces AND the full
+ * restriction set (cgroup membership, seccomp, capabilities, AppArmor/SELinux
+ * label, no_new_privs, rlimits) re-applied, since none of those are inherited
+ * through setns alone.
  *
- * Limitations vs runc/youki: we don't re-apply seccomp / capabilities for the new
- * process; it inherits whatever the init has, which is usually what the user wants.
+ * Host-side half: resolves the effective process document and everything else
+ * that needs host paths (config.json, cgroup path, seccomp listener socket,
+ * /proc/&lt;init&gt;/ns fds), then forks and re-execs /proc/self/exe __exec__
+ * while still in the host namespaces (see ExecProcess for why the re-exec
+ * must precede setns). The payload travels over a socketpair.
  */
 public final class ExecCommand {
     private ExecCommand() {}
 
-    public static int run(String rootPath, String containerId, String user, String cwd,
-                          List<String> envs, List<String> command) {
+    /** Namespaces to join, in application order (see ExecProcess). */
+    private static final String[] NS_ORDER =
+            {"user", "cgroup", "ipc", "uts", "net", "time", "pid", "mnt"};
+
+    public static int run(String rootPath, String containerId, String processJsonPath,
+                          String user, String cwd, List<String> envs, List<String> command,
+                          boolean detach, String pidFile) {
+        String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
+        if (exclusivity != null) {
+            Logger.error(exclusivity);
+            return 1;
+        }
+
         State state;
         try {
             state = State.load(rootPath, containerId).refreshStatus();
@@ -29,76 +56,270 @@ public final class ExecCommand {
             Logger.error("failed to load state: " + e.getMessage());
             return 1;
         }
-        if (state.pid == null) {
-            Logger.error("container has no pid");
-            return 1;
-        }
-        if (command == null || command.isEmpty()) {
-            Logger.error("no command specified");
+        if (state.statusEnum() != ContainerStatus.RUNNING || state.pid == null) {
+            Logger.error("container " + containerId + " is not running");
             return 1;
         }
 
-        int initPid = state.pid;
-        // Join container namespaces in this order: user first (so we have rights),
-        // then the rest. user_ns may be absent.
-        String[] nsTypes = {"user", "ipc", "uts", "net", "pid", "mnt"};
+        Spec spec;
+        try {
+            spec = Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson);
+        } catch (Exception e) {
+            Logger.error("failed to load config.json: " + e.getMessage());
+            return 1;
+        }
+
+        // Effective process document: `-p FILE` verbatim (runc semantics), or
+        // the container's own process section with CLI overrides applied.
+        Spec.Process process;
+        try {
+            if (processJsonPath != null) {
+                process = Json.readFile(Path.of(processJsonPath), Spec.Process::fromJson);
+                if (process == null || process.args == null || process.args.isEmpty()) {
+                    Logger.error("process.json has no args");
+                    return 1;
+                }
+            } else {
+                process = buildEffectiveProcess(spec.process, user, cwd, envs, command);
+            }
+        } catch (Exception e) {
+            Logger.error("failed to build process document: " + e.getMessage());
+            return 1;
+        }
+
+        ExecPayload payload = new ExecPayload();
+        payload.containerId = containerId;
+        payload.bundle = state.bundle;
+        payload.ociVersion = state.ociVersion;
+        payload.process = process;
+        payload.seccomp = spec.linux != null ? spec.linux.seccomp : null;
+        // A missing runtime config just means a container created before cgroup
+        // support (skip); any other load failure must NOT silently exec the
+        // process outside the container's resource limits.
+        String cgroupPath = null;
+        try {
+            cgroupPath = KontainerConfig.load(rootPath, containerId).cgroupPath;
+        } catch (java.nio.file.NoSuchFileException e) {
+            Logger.debug("no cgroup config for " + containerId);
+        } catch (Exception e) {
+            Logger.error("failed to load cgroup config: " + e.getMessage());
+            return 1;
+        }
+
         try (Arena arena = Arena.ofConfined()) {
-            for (String t : nsTypes) {
-                String path = "/proc/" + initPid + "/ns/" + t;
-                if (!java.nio.file.Files.exists(Path.of(path))) continue;
-                int fd = PosixIO.open(arena,
-                        path,
-                        com.ternbusty.takoyaki.syscall.Constants.O_RDONLY, 0);
-                if (fd < 0) {
-                    Logger.warn("open " + path + " failed: " + Libc.strerror(Libc.errno()));
-                    continue;
-                }
-                if (Libc.setns(fd, 0) != 0) {
-                    Logger.warn("setns " + t + " failed: " + Libc.strerror(Libc.errno()));
-                }
-                PosixIO.close(fd);
+            return spawn(arena, state.pid, payload, cgroupPath, detach, pidFile);
+        }
+    }
+
+    /**
+     * `-p` hands over the whole process document, so combining it with the
+     * flag-level overrides is ambiguous; runc resolves this by ignoring the
+     * flags, we reject them outright. Returns an error message, or null when
+     * the combination is fine. Package-visible for unit tests.
+     */
+    static String exclusivityError(String processJsonPath, String user, String cwd,
+                                   List<String> envs, List<String> command) {
+        if (processJsonPath == null) return null;
+        if (user != null || cwd != null
+                || (envs != null && !envs.isEmpty())
+                || (command != null && !command.isEmpty())) {
+            return "--process cannot be combined with -u/--cwd/-e or a command";
+        }
+        return null;
+    }
+
+    /**
+     * The container's process section with exec CLI overrides applied on top:
+     * positional command replaces args, -u replaces uid/gid (keeping the
+     * spec's additionalGids), -e entries append to env. The base document is
+     * deep-copied via a JSON round-trip so the caller's Spec stays untouched.
+     * Package-visible for unit tests.
+     */
+    static Spec.Process buildEffectiveProcess(Spec.Process base, String user, String cwd,
+                                              List<String> envs, List<String> command) {
+        if (base == null) {
+            throw new IllegalArgumentException("container config has no process section");
+        }
+        Spec.Process p = Json.decode(Json.encode(base.toJson()), Spec.Process::fromJson);
+
+        if (command != null && !command.isEmpty()) {
+            p.args = new ArrayList<>(command);
+        }
+        if (p.args == null || p.args.isEmpty()) {
+            throw new IllegalArgumentException("no command specified");
+        }
+        if (user != null) {
+            String[] uv = user.split(":");
+            Spec.User u = new Spec.User();
+            u.uid = Integer.parseInt(uv[0]);
+            u.gid = uv.length > 1 ? Integer.parseInt(uv[1])
+                    : (p.user != null ? p.user.gid : 0);
+            u.additionalGids = p.user != null ? p.user.additionalGids : null;
+            p.user = u;
+        }
+        if (cwd != null) {
+            p.cwd = cwd;
+        }
+        if (envs != null && !envs.isEmpty()) {
+            List<String> merged = p.env != null ? new ArrayList<>(p.env) : new ArrayList<>();
+            merged.addAll(envs);
+            p.env = merged;
+        }
+        if (p.env == null || p.env.isEmpty()) {
+            // No env anywhere in the spec: give the process a sane default PATH.
+            p.env = List.of(
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "HOME=/root");
+        }
+        return p;
+    }
+
+    /**
+     * Fork and re-exec {@code /proc/self/exe __exec__} in the host namespaces,
+     * then stream the payload to it. The child inherits the ns fds and the
+     * payload socket because none of them carry CLOEXEC.
+     */
+    private static int spawn(Arena arena, int initPid, ExecPayload payload,
+                             String cgroupPath, boolean detach, String pidFile) {
+        String exePath = PosixIO.readlink(arena, "/proc/self/exe");
+        if (exePath == null) {
+            Logger.error("readlink /proc/self/exe failed");
+            return 1;
+        }
+
+        // Seccomp notify listener: the socket path only resolves on the host,
+        // so connect here and let the fd travel to the restriction sequence.
+        int seccompListenerFd = -1;
+        if (payload.seccomp != null && payload.seccomp.listenerPath != null
+                && !payload.seccomp.listenerPath.isEmpty()) {
+            seccompListenerFd = SeccompListener.connectHostSide(payload.seccomp.listenerPath);
+            if (seccompListenerFd < 0) {
+                Logger.warn("could not connect to seccomp listener " + payload.seccomp.listenerPath
+                        + "; SCMP_ACT_NOTIFY rules will block forever");
             }
         }
 
-        // After joining PID namespace we need to fork — the current process still
-        // belongs to the original pid ns; only children see the new one.
+        // Open the container's namespaces via the init pid. Absent files (e.g.
+        // pre-timens kernel) are skipped, and so are namespaces the container
+        // shares with us (same symlink target): joining them is a no-op at
+        // best, and setns onto one's own user ns outright fails with EINVAL.
+        // The fds are consumed by bootstrap.c's constructor in the __exec__
+        // process (setns(mnt/user) must run before SubstrateVM spawns its
+        // helper threads), in the order given here; any failure there is fatal.
+        List<Integer> nsFds = new ArrayList<>();
+        StringJoiner nsFdList = new StringJoiner(",");
+        for (String type : NS_ORDER) {
+            String path = "/proc/" + initPid + "/ns/" + type;
+            if (!java.nio.file.Files.exists(Path.of(path))) continue;
+            String target = PosixIO.readlink(arena, path);
+            String own = PosixIO.readlink(arena, "/proc/self/ns/" + type);
+            if (target != null && target.equals(own)) continue;
+            int fd = PosixIO.open(arena, path, Constants.O_RDONLY, 0);
+            if (fd < 0) {
+                Logger.warn("open " + path + " failed: " + Libc.strerror(Libc.errno()));
+                continue;
+            }
+            nsFds.add(fd);
+            nsFdList.add(type + ":" + fd);
+        }
+
+        int[] payloadFds = new int[2];
+        if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, payloadFds) < 0) {
+            Logger.error("socketpair failed: " + Libc.strerror(Libc.errno()));
+            return 1;
+        }
+        int readFd = payloadFds[0];
+        int writeFd = payloadFds[1];
+
+        List<String> envList = HostEnv.inherited();
+        envList.add("_TAKOYAKI_EXEC_PAYLOAD_FD=" + readFd);
+        if (nsFdList.length() > 0) {
+            envList.add("_TAKOYAKI_EXEC_NS_FDS=" + nsFdList);
+        }
+        if (seccompListenerFd >= 0) {
+            envList.add("_TAKOYAKI_SECCOMP_LISTENER_FD=" + seccompListenerFd);
+        }
+        if (Logger.isDebugEnabled()) {
+            envList.add("_TAKOYAKI_EXEC_DEBUG=1");
+        }
+
+        String[] argv = {exePath, "__exec__"};
+        // Shared arena, never closed: the forked child touches these segments
+        // right up to execve (same pattern as CreateCommand).
+        Arena execArena = Arena.ofShared();
+        PosixIO.ExecvePayload execve = PosixIO.ExecvePayload.build(
+                execArena, exePath, argv, envList.toArray(new String[0]));
+
+        byte[] payloadBytes = Json.encode(payload.toJson()).getBytes();
+
         int childPid = PosixIO.fork();
         if (childPid < 0) {
             Logger.error("fork failed: " + Libc.strerror(Libc.errno()));
             return 1;
         }
         if (childPid == 0) {
-            try (Arena arena = Arena.ofConfined()) {
-                if (user != null) {
-                    int u, g = -1;
-                    String[] uv = user.split(":");
-                    u = Integer.parseInt(uv[0]);
-                    if (uv.length > 1) g = Integer.parseInt(uv[1]);
-                    if (g >= 0) Libc.setresgid(g, g, g);
-                    Libc.setresuid(u, u, u);
-                }
-                if (cwd != null) Libc.chdir(arena, cwd);
-
-                String[] argv = command.toArray(new String[0]);
-
-                List<String> envList = new ArrayList<>();
-                if (envs != null) envList.addAll(envs);
-                if (envList.isEmpty()) {
-                    // Inherit a sane default PATH.
-                    envList.add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
-                    envList.add("HOME=/root");
-                }
-                String[] envp = envList.toArray(new String[0]);
-                PosixIO.ExecvePayload payload = PosixIO.ExecvePayload.build(arena, argv[0], argv, envp);
-                PosixIO.invokeExecve(payload);
-                Logger.error("execve failed: " + Libc.strerror(Libc.errno()));
-            }
-            PosixIO._exit(127);
-            return 127;
+            // Close the write side so the payload read sees EOF once the
+            // parent is done; everything else is meant to be inherited.
+            PosixIO.close(writeFd);
+            PosixIO.invokeExecve(execve);
+            PosixIO._exit(1);
+            return 1;
         }
 
-        // Parent: wait for the exec'd command to finish.
-        // We use waitpid via libc since FFM gives us syscall access.
-        return Wait.waitForChild(childPid);
+        PosixIO.close(readFd);
+        for (int fd : nsFds) PosixIO.close(fd);
+        if (seccompListenerFd >= 0) PosixIO.close(seccompListenerFd);
+
+        // bootstrap.c's exec_bootstrap reports the workload pid (in host pid
+        // ns terms) as soon as it has setns'd and clone'd. EOF instead of a
+        // pid means the bootstrap died before getting that far.
+        int workloadPid;
+        try {
+            workloadPid = SyncChannel.readInt32(writeFd);
+        } catch (RuntimeException e) {
+            Logger.error("no pid report from exec bootstrap: " + e.getMessage());
+            PosixIO.close(writeFd);
+            Wait.waitForChild(childPid);
+            return 1;
+        }
+
+        // Reap the intermediate, which exits right after the pid report. The
+        // workload itself is also OUR child: exec_bootstrap clones it with
+        // CLONE_PARENT, exactly like the create path's stage-2.
+        Wait.waitForChild(childPid);
+
+        // Container cgroup membership BEFORE sending the payload: the workload
+        // proceeds past its payload read only after we finish writing, so it
+        // cannot reach user code outside the cgroup.
+        Cgroup.addPid(cgroupPath, workloadPid);
+
+        // Stream the payload; the workload drains concurrently, so there is no
+        // socket-buffer deadlock however large the profile is. Closing our end
+        // gives the workload's read its EOF.
+        boolean written = PosixIO.writeAll(arena, writeFd, payloadBytes);
+        if (!written) {
+            Logger.error("payload write failed: " + Libc.strerror(Libc.errno()));
+            // Fall through: the workload sees a truncated payload, fails its
+            // JSON parse and exits; reap it instead of leaving a zombie.
+        }
+        PosixIO.close(writeFd);
+
+        if (pidFile != null && written) {
+            try {
+                java.nio.file.Files.writeString(Path.of(pidFile), Integer.toString(workloadPid));
+            } catch (java.io.IOException e) {
+                Logger.error("write pid file failed: " + e.getMessage());
+                return 1;
+            }
+        }
+
+        if (detach && written) {
+            // Deliberately no wait: with no live ancestors the workload
+            // reparents to the caller's subreaper — containerd's shim relies
+            // on that to reap a detached exec and observe its exit.
+            return 0;
+        }
+        int code = Wait.waitForChild(workloadPid);
+        return written ? code : 1;
     }
 }
