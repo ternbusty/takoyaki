@@ -138,6 +138,41 @@ val buildBootstrap by tasks.registering(Exec::class) {
     )
 }
 
+// Generate the libseccomp bindings (SeccompH + scmp_arg_cmp) from the system
+// headers with jextract at build time. Not committed: the output is
+// regenerated per build, so it always matches the build machine's arch (syscall
+// numbers, struct layouts) instead of freezing one arch into the repo. Needs
+// jextract on PATH, at ~/.sdkman/candidates/jextract/current/bin, or -Pjextract=.
+val jextractDir = layout.buildDirectory.dir("generated/jextract")
+val jextractBin = providers.gradleProperty("jextract").orElse(
+    providers.provider {
+        val sdk = file(System.getProperty("user.home") + "/.sdkman/candidates/jextract/current/bin/jextract")
+        if (sdk.exists()) sdk.absolutePath else "jextract"
+    })
+val jextractSeccomp by tasks.registering(Exec::class) {
+    val header = layout.projectDirectory.file("src/main/c/jextract/seccomp.h")
+    inputs.file(header)
+    inputs.property("jextract", jextractBin)
+    outputs.dir(jextractDir)
+    val functions = listOf(
+        "seccomp_init", "seccomp_release", "seccomp_rule_add", "seccomp_rule_add_array",
+        "seccomp_load", "seccomp_notify_fd", "seccomp_syscall_resolve_name",
+        "seccomp_arch_add", "seccomp_arch_remove", "seccomp_arch_resolve_name", "seccomp_attr_set",
+    )
+    commandLine(buildList {
+        add(jextractBin.get())
+        add("--output"); add(jextractDir.get().asFile.absolutePath)
+        add("-t"); add("com.ternbusty.takoyaki.syscall.libseccomp")
+        add("--header-class-name"); add("SeccompH")
+        add("-l"); add(":libseccomp.so.2")
+        functions.forEach { add("--include-function"); add(it) }
+        add("--include-struct"); add("scmp_arg_cmp")
+        add(header.asFile.absolutePath)
+    })
+}
+sourceSets["main"].java.srcDir(jextractDir)
+tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp) }
+
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
 val isQuick = providers.gradleProperty("quick").isPresent

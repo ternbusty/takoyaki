@@ -33,6 +33,16 @@ jobs:
           distribution: 'graalvm-community'
           cache: 'gradle'
 
+      # jextract generates the libseccomp bindings at build time (not committed,
+      # so they match this runner's arch). The gradle build finds it under
+      # ~/.sdkman/candidates/jextract/current/bin.
+      - name: Install jextract
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          echo "sdkman_auto_answer=true" >> "$HOME/.sdkman/etc/config"
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install jextract
+
       - name: Run unit tests
         run: ./gradlew test --no-daemon
 
