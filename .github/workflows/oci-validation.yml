@@ -42,6 +42,8 @@ jobs:
           echo "sdkman_auto_answer=true" >> "$HOME/.sdkman/etc/config"
           source "$HOME/.sdkman/bin/sdkman-init.sh"
           sdk install jextract
+          echo "$HOME/.sdkman/candidates/jextract/current/bin" >> "$GITHUB_PATH"
+          "$HOME/.sdkman/candidates/jextract/current/bin/jextract" --version
 
       - name: Run unit tests
         run: ./gradlew test --no-daemon
