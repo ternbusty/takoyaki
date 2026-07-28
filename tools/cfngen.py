@@ -62,6 +62,19 @@ def parse_proto(aux, name):
     return None
 
 
+def all_func_names(aux):
+    """Every function declared by the included headers, in declaration order."""
+    names, seen = [], set()
+    for line in aux.splitlines():
+        if "extern" not in line:
+            continue
+        m = re.search(r"extern\s+.+?\s+\**(\w+)\s*\(", line)
+        if m and m.group(1) not in seen:
+            seen.add(m.group(1))
+            names.append(m.group(1))
+    return names
+
+
 def const_value(headers, macros, macro):
     """Compile+run a one-off probe; return (value, sizeof) or None if undefined."""
     d = tempfile.mkdtemp()
@@ -113,30 +126,45 @@ def emit(pkg, cls, headers, macros, funcs, consts, overrides):
           "    }", "",
           "    @CContext(Directives.class)",
           "    public static final class Posix {", "        private Posix() {}"]
-    for fn in funcs:
+    # No explicit --function list => bind EVERY scalar function the headers
+    # declare (jextract/cinterop style). New libc calls then need no cfngen
+    # change: the binding already exists. Explicit --function narrows the set.
+    explicit = set(funcs)
+    fnlist = list(funcs) if funcs else all_func_names(aux)
+    for n in overrides:
+        if n not in fnlist:
+            fnlist.append(n)
+    for fn in fnlist:
         if fn in overrides:
             ret, args = overrides[fn]
             params = ", ".join(args[i] + " a" + str(i) for i in range(len(args)))
             L.append("        @CFunction(" + Q + fn + Q + ") public static native "
                      + ret + " " + fn + "(" + params + ");")
             continue
+        reason, sig = None, None
         p = parse_proto(aux, fn)
         if not p:
-            skipped.append((fn, "prototype not found"))
+            reason = "prototype not found"
+        else:
+            ret, args = p
+            jret = jtype(ret)
+            al = [] if args.strip() in ("void", "") else [a.strip() for a in args.split(",")]
+            ja = [jtype(a) for a in al]
+            if jret is None:
+                reason = "unsupported return " + ret
+            elif "..." in args:
+                reason = "variadic (use --func-sig)"
+            elif any(x is None for x in ja):
+                reason = "unsupported arg in (" + args + ")"
+            else:
+                sig = (jret, ja)
+        if sig is None:
+            # In all-functions mode, silently skip the (many) pointer/variadic
+            # libc functions; only report misses that were explicitly requested.
+            if fn in explicit:
+                skipped.append((fn, reason))
             continue
-        ret, args = p
-        jret = jtype(ret)
-        if jret is None:
-            skipped.append((fn, "unsupported return " + ret))
-            continue
-        if "..." in args:
-            skipped.append((fn, "variadic (use --func-sig)"))
-            continue
-        al = [] if args.strip() in ("void", "") else [a.strip() for a in args.split(",")]
-        ja = [jtype(a) for a in al]
-        if any(x is None for x in ja):
-            skipped.append((fn, "unsupported arg in (" + args + ")"))
-            continue
+        jret, ja = sig
         params = ", ".join(ja[i] + " a" + str(i) for i in range(len(ja)))
         L.append("        @CFunction(" + Q + fn + Q + ") public static native "
                  + jret + " " + fn + "(" + params + ");")
@@ -156,9 +184,6 @@ def main():
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     ov = dict(parse_override(s) for s in a.func_sig)
-    for n in ov:
-        if n not in a.function:
-            a.function.append(n)
     consts = [parse_const(s) for s in a.constant]
     code, skipped = emit(a.package, a.class_name, a.header, a.macro,
                          a.function, consts, ov)

@@ -155,13 +155,13 @@ val cfngen by tasks.registering(Exec::class) {
         "--package", "com.ternbusty.takoyaki.syscall", "--class-name", "CGen",
         "--out", outFile.absolutePath,
         "--macro", "_GNU_SOURCE",
+        // Bind every scalar function these headers declare — no per-function
+        // list, so calling a new libc function needs no change here (add a
+        // header only if the declaration lives elsewhere). Variadic functions
+        // need an explicit signature.
         "--header", "<sched.h>", "--header", "<signal.h>", "--header", "<sys/prctl.h>",
         "--header", "<sys/stat.h>", "--header", "<stdlib.h>", "--header", "<unistd.h>",
         "--header", "<fcntl.h>", "--header", "<sys/syscall.h>",
-        "--function", "unshare", "--function", "setns", "--function", "kill",
-        "--function", "umask", "--function", "getpid", "--function", "getppid",
-        "--function", "clearenv", "--function", "geteuid", "--function", "getegid",
-        "--function", "setresuid", "--function", "setresgid",
         "--func-sig", "prctl=int:int,long,long,long,long",
         "--func-sig", "syscall=long:long,long,long,long,long,long",
         "--constant", "O_DIRECTORY",
