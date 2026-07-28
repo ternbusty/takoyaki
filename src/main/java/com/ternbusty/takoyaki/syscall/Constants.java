@@ -72,7 +72,7 @@ public final class Constants {
     public static final int O_RDONLY = 0;
     public static final int O_RDWR = 2;
     public static final int O_CREAT = 0100;
-    public static final int O_DIRECTORY = isAarch64() ? 0x4000 : 0x10000;
+    public static final int O_DIRECTORY = CGen.O_DIRECTORY;
 
     public static boolean isAarch64() {
         String a = System.getProperty("os.arch", "").toLowerCase();
@@ -108,8 +108,8 @@ public final class Constants {
 
     public static final int LINUX_CAPABILITY_VERSION_3 = 0x20080522;
 
-    public static final long NR_capset = isAarch64() ? 91L : 126L;
-    public static final long NR_close_range = 436L; // same on aarch64 and x86_64
+    public static final long NR_capset = CGen.NR_capset;
+    public static final long NR_close_range = CGen.NR_close_range;
     public static final int CLOSE_RANGE_CLOEXEC = 4;
 
     // ioctl request codes

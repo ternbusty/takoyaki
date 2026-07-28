@@ -138,6 +138,40 @@ val buildBootstrap by tasks.registering(Exec::class) {
     )
 }
 
+// Generate the scalar libc C-interface bindings (CGen) from the build machine's
+// system headers via tools/cfngen.py. Unlike jextract's FFM output, @CFunction /
+// static-final-from-header output binds at native link time and needs no foreign
+// downcall registration. Regenerated per build, so syscall numbers and O_* come
+// from headers (the arch branch collapses to a build-time constant).
+val cfngenDir = layout.buildDirectory.dir("generated/cfngen")
+val cfngen by tasks.registering(Exec::class) {
+    val outFile = cfngenDir.get().file("com/ternbusty/takoyaki/syscall/CGen.java").asFile
+    val script = layout.projectDirectory.file("tools/cfngen.py")
+    inputs.file(script)
+    outputs.dir(cfngenDir)
+    doFirst { outFile.parentFile.mkdirs() }
+    commandLine(
+        "python3", script.asFile.absolutePath,
+        "--package", "com.ternbusty.takoyaki.syscall", "--class-name", "CGen",
+        "--out", outFile.absolutePath,
+        "--macro", "_GNU_SOURCE",
+        "--header", "<sched.h>", "--header", "<signal.h>", "--header", "<sys/prctl.h>",
+        "--header", "<sys/stat.h>", "--header", "<stdlib.h>", "--header", "<unistd.h>",
+        "--header", "<fcntl.h>", "--header", "<sys/syscall.h>",
+        "--function", "unshare", "--function", "setns", "--function", "kill",
+        "--function", "umask", "--function", "getpid", "--function", "getppid",
+        "--function", "clearenv", "--function", "geteuid", "--function", "getegid",
+        "--function", "setresuid", "--function", "setresgid",
+        "--func-sig", "prctl=int:int,long,long,long,long",
+        "--func-sig", "syscall=long:long,long,long,long,long,long",
+        "--constant", "O_DIRECTORY",
+        "--constant", "NR_capset=SYS_capset",
+        "--constant", "NR_close_range=SYS_close_range",
+    )
+}
+sourceSets["main"].java.srcDir(cfngenDir)
+tasks.named<JavaCompile>("compileJava") { dependsOn(cfngen) }
+
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
 val isQuick = providers.gradleProperty("quick").isPresent
