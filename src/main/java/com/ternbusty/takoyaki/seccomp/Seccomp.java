@@ -3,67 +3,36 @@ package com.ternbusty.takoyaki.seccomp;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
+import com.ternbusty.takoyaki.syscall.libseccomp.SeccompH;
+import com.ternbusty.takoyaki.syscall.libseccomp.scmp_arg_cmp;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
-import java.lang.foreign.ValueLayout;
-import java.lang.invoke.MethodHandle;
 
+/**
+ * libseccomp facade over the jextract-generated {@link SeccompH} bindings. The
+ * plumbing moved from hand-written FFM downcalls to generated ones; the filter
+ * semantics are unchanged.
+ */
 public final class Seccomp {
     private Seccomp() {}
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static volatile SymbolLookup libseccomp;
-    private static volatile MethodHandle SECCOMP_INIT;
-    private static volatile MethodHandle SECCOMP_RELEASE;
-    private static volatile MethodHandle SECCOMP_RULE_ADD;
-    private static volatile MethodHandle SECCOMP_RULE_ADD_ARRAY;
-    private static volatile MethodHandle SECCOMP_LOAD;
-    private static volatile MethodHandle SECCOMP_NOTIFY_FD;
-    private static volatile MethodHandle SECCOMP_SYSCALL_RESOLVE_NAME;
-    private static volatile MethodHandle SECCOMP_ARCH_ADD;
-    private static volatile MethodHandle SECCOMP_ARCH_REMOVE;
-    private static volatile MethodHandle SECCOMP_ARCH_RESOLVE_NAME;
-    private static volatile MethodHandle SECCOMP_ATTR_SET;
+    /**
+     * Force libseccomp to be dlopen'd now. Must run before pivot_root cuts the
+     * process off from the host filesystem: the container rootfs does not ship
+     * libseccomp and the C bootstrap only preloads libc/libm/libdl/libpthread/
+     * librt. Touching any SeccompH entry point triggers its class initializer,
+     * whose {@code libraryLookup("libseccomp.so.2")} loads the library.
+     */
+    public static boolean preload() {
+        return ensureLoaded();
+    }
 
     private static synchronized boolean ensureLoaded() {
-        if (libseccomp != null) return true;
-        try {
-            SymbolLookup s = libraryLookupWithFallback();
-            libseccomp = s;
-            SECCOMP_INIT = LINKER.downcallHandle(s.find("seccomp_init").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            SECCOMP_RELEASE = LINKER.downcallHandle(s.find("seccomp_release").orElseThrow(),
-                    FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
-            SECCOMP_RULE_ADD = LINKER.downcallHandle(s.find("seccomp_rule_add").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
-                            ValueLayout.JAVA_INT));
-            // int seccomp_rule_add_array(scmp_filter_ctx, uint32_t action, int syscall,
-            //                            unsigned int arg_cnt, const struct scmp_arg_cmp *arg_array);
-            SECCOMP_RULE_ADD_ARRAY = LINKER.downcallHandle(
-                    s.find("seccomp_rule_add_array").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
-                            ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-            SECCOMP_LOAD = LINKER.downcallHandle(s.find("seccomp_load").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-            SECCOMP_NOTIFY_FD = LINKER.downcallHandle(s.find("seccomp_notify_fd").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-            SECCOMP_SYSCALL_RESOLVE_NAME = LINKER.downcallHandle(s.find("seccomp_syscall_resolve_name").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-            SECCOMP_ARCH_ADD = LINKER.downcallHandle(s.find("seccomp_arch_add").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            SECCOMP_ARCH_REMOVE = LINKER.downcallHandle(s.find("seccomp_arch_remove").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-            SECCOMP_ARCH_RESOLVE_NAME = LINKER.downcallHandle(s.find("seccomp_arch_resolve_name").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-            SECCOMP_ATTR_SET = LINKER.downcallHandle(s.find("seccomp_attr_set").orElseThrow(),
-                    FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                            ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG));
+        try (Arena arena = Arena.ofConfined()) {
+            // Harmless call — resolves a syscall name — that forces SeccompH's
+            // <clinit> (the library load) to run and surfaces a load failure.
+            SeccompH.seccomp_syscall_resolve_name(arena.allocateFrom("read"));
             return true;
         } catch (Throwable t) {
             Logger.warn("libseccomp not loadable: " + t.getMessage());
@@ -87,7 +56,7 @@ public final class Seccomp {
         }
         try (Arena arena = Arena.ofConfined()) {
             int defaultAction = actionToken(sec.defaultAction, sec.defaultErrnoRet);
-            MemorySegment ctx = (MemorySegment) SECCOMP_INIT.invoke(defaultAction);
+            MemorySegment ctx = SeccompH.seccomp_init(defaultAction);
             if (ctx == null || ctx.address() == 0) {
                 Logger.error("seccomp_init returned NULL");
                 return;
@@ -103,7 +72,7 @@ public final class Seccomp {
                 int SCMP_FLTATR_CTL_TSYNC = 4;
                 int SCMP_FLTATR_CTL_LOG = 5;
                 int SCMP_FLTATR_CTL_SSB = 6;
-                SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_NNP, 0L);
+                SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, 0);
 
                 // Translate the OCI spec's filter flags into the libseccomp
                 // attributes that back them. Unknown flags are warned about
@@ -112,11 +81,11 @@ public final class Seccomp {
                     for (String flag : sec.flags) {
                         switch (flag) {
                             case "SECCOMP_FILTER_FLAG_TSYNC" ->
-                                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_TSYNC, 1L);
+                                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
                             case "SECCOMP_FILTER_FLAG_LOG" ->
-                                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_LOG, 1L);
+                                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_LOG, 1);
                             case "SECCOMP_FILTER_FLAG_SPEC_ALLOW" ->
-                                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_SSB, 1L);
+                                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_SSB, 1);
                             default -> Logger.warn("unknown seccomp filter flag: " + flag);
                         }
                     }
@@ -129,7 +98,7 @@ public final class Seccomp {
                 // runc uses the same 32-rule threshold.
                 int SCMP_FLTATR_CTL_OPTIMIZE = 8;
                 if (sec.syscalls != null && countSyscalls(sec.syscalls) > 32) {
-                    SECCOMP_ATTR_SET.invoke(ctx, SCMP_FLTATR_CTL_OPTIMIZE, 2L);
+                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_OPTIMIZE, 2);
                 }
 
                 // architectures - libseccomp wants lowercase, no SCMP_ARCH_ prefix
@@ -139,12 +108,12 @@ public final class Seccomp {
                         if (n.startsWith("SCMP_ARCH_")) n = n.substring("SCMP_ARCH_".length());
                         n = n.toLowerCase();
                         MemorySegment nameSeg = arena.allocateFrom(n);
-                        int token = (int) SECCOMP_ARCH_RESOLVE_NAME.invoke(nameSeg);
+                        int token = SeccompH.seccomp_arch_resolve_name(nameSeg);
                         if (token == 0) {
                             Logger.warn("unknown seccomp arch: " + archName);
                             continue;
                         }
-                        SECCOMP_ARCH_ADD.invoke(ctx, token);
+                        SeccompH.seccomp_arch_add(ctx, token);
                     }
                 }
 
@@ -167,7 +136,7 @@ public final class Seccomp {
                         }
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
-                            int nr = (int) SECCOMP_SYSCALL_RESOLVE_NAME.invoke(nameSeg);
+                            int nr = SeccompH.seccomp_syscall_resolve_name(nameSeg);
                             if (nr == 0x7fffffff /* __NR_SCMP_ERROR */) {
                                 Logger.debug("syscall " + name + " unknown to libseccomp, skipping");
                                 continue;
@@ -188,7 +157,7 @@ public final class Seccomp {
                                 // notify state under Panama FFM (seccomp_notify_fd
                                 // returns -EFAULT afterwards), while the non-variadic
                                 // array variant works.
-                                rc = (int) SECCOMP_RULE_ADD_ARRAY.invoke(
+                                rc = SeccompH.seccomp_rule_add_array(
                                         ctx, action, nr, 0, MemorySegment.NULL);
                             } else {
                                 rc = addRuleWithArgs(arena, ctx, action, nr, sc.args);
@@ -200,7 +169,7 @@ public final class Seccomp {
                     }
                 }
 
-                int loadRc = (int) SECCOMP_LOAD.invoke(ctx);
+                int loadRc = SeccompH.seccomp_load(ctx);
                 if (loadRc != 0) {
                     // Silently returning here would let the container come up
                     // with no filter at all, which is worse than failing to
@@ -218,7 +187,7 @@ public final class Seccomp {
                     Logger.debug("seccomp ctx address=0x"
                             + Long.toHexString(ctx.address())
                             + " (about to call seccomp_notify_fd)");
-                    int notifyFd = (int) SECCOMP_NOTIFY_FD.invoke(ctx);
+                    int notifyFd = SeccompH.seccomp_notify_fd(ctx);
                     if (notifyFd < 0) {
                         Logger.warn("seccomp_notify_fd returned " + notifyFd);
                     } else if (sec.listenerPath == null || sec.listenerPath.isEmpty()) {
@@ -233,7 +202,7 @@ public final class Seccomp {
                     }
                 }
             } finally {
-                SECCOMP_RELEASE.invoke(ctx);
+                SeccompH.seccomp_release(ctx);
             }
         } catch (Throwable t) {
             Logger.error("seccomp apply error: " + t.getMessage());
@@ -242,23 +211,23 @@ public final class Seccomp {
 
     /**
      * Encode SeccompArg entries into struct scmp_arg_cmp[] and call seccomp_rule_add_array.
-     * struct scmp_arg_cmp layout: unsigned int arg; enum scmp_compare op; uint64_t datum_a; uint64_t datum_b;
-     * Padding bumps the struct to 24 bytes on aarch64/x86_64.
+     * struct scmp_arg_cmp layout: unsigned int arg; enum scmp_compare op; uint64_t datum_a; uint64_t datum_b.
+     * Offsets come from the jextract-generated {@link scmp_arg_cmp} (header-derived), not a
+     * hand-computed stride.
      */
     private static int addRuleWithArgs(Arena arena, MemorySegment ctx, int action, int nr,
-                                       java.util.List<Spec.SeccompArg> args) throws Throwable {
+                                       java.util.List<Spec.SeccompArg> args) {
         int n = args.size();
-        MemorySegment arr = arena.allocate(24L * n);
+        MemorySegment arr = scmp_arg_cmp.allocateArray(n, arena);
         for (int i = 0; i < n; i++) {
             Spec.SeccompArg a = args.get(i);
-            long base = 24L * i;
-            arr.set(ValueLayout.JAVA_INT, base, a.index);
-            arr.set(ValueLayout.JAVA_INT, base + 4, mapCompare(a.op));
-            arr.set(ValueLayout.JAVA_LONG, base + 8, a.value);
-            arr.set(ValueLayout.JAVA_LONG, base + 16,
-                    a.valueTwo == null ? 0 : a.valueTwo);
+            MemorySegment e = scmp_arg_cmp.asSlice(arr, i);
+            scmp_arg_cmp.arg(e, a.index);
+            scmp_arg_cmp.op(e, mapCompare(a.op));
+            scmp_arg_cmp.datum_a(e, a.value);
+            scmp_arg_cmp.datum_b(e, a.valueTwo == null ? 0 : a.valueTwo);
         }
-        return (int) SECCOMP_RULE_ADD_ARRAY.invoke(ctx, action, nr, n, arr);
+        return SeccompH.seccomp_rule_add_array(ctx, action, nr, n, arr);
     }
 
     private static int mapCompare(String op) {
@@ -316,22 +285,5 @@ public final class Seccomp {
             case "SCMP_ACT_NOTIFY" -> ACT_NOTIFY;
             default -> 0x7fff0000;
         };
-    }
-
-    private static SymbolLookup libraryLookupWithFallback() {
-        String[] candidates = {
-                "libseccomp.so.2",
-                "/usr/lib/aarch64-linux-gnu/libseccomp.so.2",
-                "/usr/lib/x86_64-linux-gnu/libseccomp.so.2",
-                "/lib/aarch64-linux-gnu/libseccomp.so.2",
-                "/lib/x86_64-linux-gnu/libseccomp.so.2",
-        };
-        Throwable last = null;
-        for (String c : candidates) {
-            try {
-                return SymbolLookup.libraryLookup(c, Arena.global());
-            } catch (Throwable t) { last = t; }
-        }
-        throw new RuntimeException("libseccomp.so.2 not loadable", last);
     }
 }

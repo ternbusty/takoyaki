@@ -197,6 +197,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.command.Wait",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.seccomp",
+                "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.libseccomp",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
             )
