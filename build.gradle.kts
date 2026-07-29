@@ -170,6 +170,9 @@ val jextractSeccomp by tasks.registering(Exec::class) {
         "SCMP_CMP_NE", "SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_EQ", "SCMP_CMP_GE",
         "SCMP_CMP_GT", "SCMP_CMP_MASKED_EQ",
         "__NR_SCMP_ERROR",
+        // ERRNO/TRACE are function-like macros; seccomp.h wraps their zero-arg
+        // expansion in an enum so the base values stay header-derived.
+        "TAKOYAKI_SCMP_ACT_ERRNO_BASE", "TAKOYAKI_SCMP_ACT_TRACE_BASE",
     )
     commandLine(buildList {
         add(jextractBin.get())

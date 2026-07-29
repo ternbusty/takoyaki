@@ -273,10 +273,11 @@ public final class Seccomp {
             case "SCMP_ACT_KILL", "SCMP_ACT_KILL_THREAD" -> SeccompH.SCMP_ACT_KILL_THREAD();
             case "SCMP_ACT_KILL_PROCESS" -> SeccompH.SCMP_ACT_KILL_PROCESS();
             case "SCMP_ACT_TRAP" -> SeccompH.SCMP_ACT_TRAP();
-            // ERRNO and TRACE carry their data in the low 16 bits; the macros
-            // are function-like so the base values are spelled out here.
-            case "SCMP_ACT_ERRNO" -> 0x00050000 | (errno & 0xffff);
-            case "SCMP_ACT_TRACE" -> 0x7ff00000 | (errno & 0xffff);
+            // ERRNO and TRACE carry their data in the low 16 bits. The macros
+            // are function-like, so seccomp.h exposes their base values through
+            // an enum that jextract can emit.
+            case "SCMP_ACT_ERRNO" -> SeccompH.TAKOYAKI_SCMP_ACT_ERRNO_BASE() | (errno & 0xffff);
+            case "SCMP_ACT_TRACE" -> SeccompH.TAKOYAKI_SCMP_ACT_TRACE_BASE() | (errno & 0xffff);
             case "SCMP_ACT_LOG" -> SeccompH.SCMP_ACT_LOG();
             case "SCMP_ACT_ALLOW" -> SeccompH.SCMP_ACT_ALLOW();
             case "SCMP_ACT_NOTIFY" -> ACT_NOTIFY;
