@@ -68,11 +68,7 @@ public final class Seccomp {
                 // mask cases where the runtime is supposed to be in charge of NNP.
                 // Disable libseccomp's auto-NNP — the runtime sets NNP earlier
                 // based on spec.process.noNewPrivileges.
-                int SCMP_FLTATR_CTL_NNP = 3;
-                int SCMP_FLTATR_CTL_TSYNC = 4;
-                int SCMP_FLTATR_CTL_LOG = 5;
-                int SCMP_FLTATR_CTL_SSB = 6;
-                SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_NNP, 0);
+                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_NNP(), 0);
 
                 // Translate the OCI spec's filter flags into the libseccomp
                 // attributes that back them. Unknown flags are warned about
@@ -81,11 +77,11 @@ public final class Seccomp {
                     for (String flag : sec.flags) {
                         switch (flag) {
                             case "SECCOMP_FILTER_FLAG_TSYNC" ->
-                                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
+                                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_TSYNC(), 1);
                             case "SECCOMP_FILTER_FLAG_LOG" ->
-                                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_LOG, 1);
+                                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_LOG(), 1);
                             case "SECCOMP_FILTER_FLAG_SPEC_ALLOW" ->
-                                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_SSB, 1);
+                                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
                             default -> Logger.warn("unknown seccomp filter flag: " + flag);
                         }
                     }
@@ -96,9 +92,8 @@ public final class Seccomp {
                 // Docker's default profile has hundreds of syscalls; without
                 // this every allowed syscall pays for walking the whole list.
                 // runc uses the same 32-rule threshold.
-                int SCMP_FLTATR_CTL_OPTIMIZE = 8;
                 if (sec.syscalls != null && countSyscalls(sec.syscalls) > 32) {
-                    SeccompH.seccomp_attr_set(ctx, SCMP_FLTATR_CTL_OPTIMIZE, 2);
+                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_OPTIMIZE(), 2);
                 }
 
                 // architectures - libseccomp wants lowercase, no SCMP_ARCH_ prefix
@@ -137,7 +132,7 @@ public final class Seccomp {
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
                             int nr = SeccompH.seccomp_syscall_resolve_name(nameSeg);
-                            if (nr == 0x7fffffff /* __NR_SCMP_ERROR */) {
+                            if (nr == SeccompH.__NR_SCMP_ERROR()) {
                                 Logger.debug("syscall " + name + " unknown to libseccomp, skipping");
                                 continue;
                             }
@@ -233,19 +228,19 @@ public final class Seccomp {
     private static int mapCompare(String op) {
         if (op == null) return 0;
         return switch (op) {
-            case "SCMP_CMP_NE" -> 1;
-            case "SCMP_CMP_LT" -> 2;
-            case "SCMP_CMP_LE" -> 3;
-            case "SCMP_CMP_EQ" -> 4;
-            case "SCMP_CMP_GE" -> 5;
-            case "SCMP_CMP_GT" -> 6;
-            case "SCMP_CMP_MASKED_EQ" -> 7;
+            case "SCMP_CMP_NE" -> SeccompH.SCMP_CMP_NE();
+            case "SCMP_CMP_LT" -> SeccompH.SCMP_CMP_LT();
+            case "SCMP_CMP_LE" -> SeccompH.SCMP_CMP_LE();
+            case "SCMP_CMP_EQ" -> SeccompH.SCMP_CMP_EQ();
+            case "SCMP_CMP_GE" -> SeccompH.SCMP_CMP_GE();
+            case "SCMP_CMP_GT" -> SeccompH.SCMP_CMP_GT();
+            case "SCMP_CMP_MASKED_EQ" -> SeccompH.SCMP_CMP_MASKED_EQ();
             default -> 0;
         };
     }
 
     // libseccomp action code for SCMP_ACT_NOTIFY, from seccomp.h.
-    private static final int ACT_NOTIFY = 0x7fc00000;
+    private static final int ACT_NOTIFY = SeccompH.SCMP_ACT_NOTIFY();
 
     /**
      * Count the total number of rules (name × action pairs) the spec will
@@ -275,15 +270,17 @@ public final class Seccomp {
         }
         // libseccomp action codes from seccomp.h
         return switch (action == null ? "SCMP_ACT_ALLOW" : action) {
-            case "SCMP_ACT_KILL", "SCMP_ACT_KILL_THREAD" -> 0x00000000;
-            case "SCMP_ACT_KILL_PROCESS" -> 0x80000000;
-            case "SCMP_ACT_TRAP" -> 0x00030000;
+            case "SCMP_ACT_KILL", "SCMP_ACT_KILL_THREAD" -> SeccompH.SCMP_ACT_KILL_THREAD();
+            case "SCMP_ACT_KILL_PROCESS" -> SeccompH.SCMP_ACT_KILL_PROCESS();
+            case "SCMP_ACT_TRAP" -> SeccompH.SCMP_ACT_TRAP();
+            // ERRNO and TRACE carry their data in the low 16 bits; the macros
+            // are function-like so the base values are spelled out here.
             case "SCMP_ACT_ERRNO" -> 0x00050000 | (errno & 0xffff);
             case "SCMP_ACT_TRACE" -> 0x7ff00000 | (errno & 0xffff);
-            case "SCMP_ACT_LOG" -> 0x7ffc0000;
-            case "SCMP_ACT_ALLOW" -> 0x7fff0000;
+            case "SCMP_ACT_LOG" -> SeccompH.SCMP_ACT_LOG();
+            case "SCMP_ACT_ALLOW" -> SeccompH.SCMP_ACT_ALLOW();
             case "SCMP_ACT_NOTIFY" -> ACT_NOTIFY;
-            default -> 0x7fff0000;
+            default -> SeccompH.SCMP_ACT_ALLOW();
         };
     }
 }

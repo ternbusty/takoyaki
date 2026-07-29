@@ -159,6 +159,18 @@ val jextractSeccomp by tasks.registering(Exec::class) {
         "seccomp_load", "seccomp_notify_fd", "seccomp_syscall_resolve_name",
         "seccomp_arch_add", "seccomp_arch_remove", "seccomp_arch_resolve_name", "seccomp_attr_set",
     )
+    // Filter attributes, actions and comparison ops. Taking these from the
+    // header matters: the enum has gaps (SCMP_FLTATR_API_TSKIP sits between
+    // CTL_TSYNC and CTL_LOG), which hand-counted values get wrong.
+    val constants = listOf(
+        "SCMP_FLTATR_CTL_NNP", "SCMP_FLTATR_CTL_TSYNC", "SCMP_FLTATR_CTL_LOG",
+        "SCMP_FLTATR_CTL_SSB", "SCMP_FLTATR_CTL_OPTIMIZE",
+        "SCMP_ACT_KILL_PROCESS", "SCMP_ACT_KILL_THREAD", "SCMP_ACT_KILL", "SCMP_ACT_TRAP",
+        "SCMP_ACT_NOTIFY", "SCMP_ACT_LOG", "SCMP_ACT_ALLOW",
+        "SCMP_CMP_NE", "SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_EQ", "SCMP_CMP_GE",
+        "SCMP_CMP_GT", "SCMP_CMP_MASKED_EQ",
+        "__NR_SCMP_ERROR",
+    )
     commandLine(buildList {
         add(jextractBin.get())
         add("--output"); add(jextractDir.get().asFile.absolutePath)
@@ -166,6 +178,7 @@ val jextractSeccomp by tasks.registering(Exec::class) {
         add("--header-class-name"); add("SeccompH")
         add("-l"); add(":libseccomp.so.2")
         functions.forEach { add("--include-function"); add(it) }
+        constants.forEach { add("--include-constant"); add(it) }
         add("--include-struct"); add("scmp_arg_cmp")
         add(header.asFile.absolutePath)
     })
