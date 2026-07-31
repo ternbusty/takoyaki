@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/ternbusty/takoyaki/compare/v0.3.0...v0.3.1) (2026-07-21)
+
+
+### 🐛 Bug Fixes
+
+* **examples:** add inheritable to busybox-sleep capability sets ([#48](https://github.com/ternbusty/takoyaki/issues/48)) ([cbec78a](https://github.com/ternbusty/takoyaki/commit/cbec78a6b8eb68bc5708388bc199c4f9316917b6))
+
+
+### 🔗 Dependencies
+
+* **deps:** bump org.graalvm.buildtools.native from 1.1.4 to 1.1.5 ([#47](https://github.com/ternbusty/takoyaki/issues/47)) ([f7e1d6e](https://github.com/ternbusty/takoyaki/commit/f7e1d6e84c9f8aa078bcef4ea0dc485b118f9301))
+
 ## [0.3.0](https://github.com/ternbusty/takoyaki/compare/v0.2.0...v0.3.0) (2026-07-20)
 
 
