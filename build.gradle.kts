@@ -264,8 +264,47 @@ val jextractConsts by tasks.registering(Exec::class) {
     })
 }
 
+val jextractPosix by tasks.registering(Exec::class) {
+    val header = layout.projectDirectory.file("src/main/c/jextract/posix.h")
+    inputs.file(header)
+    inputs.property("jextract", jextractBin)
+    inputs.property("multiarch", multiarch)
+    outputs.dir(jextractDir)
+    val functions = listOf(
+        "sendmsg", "recvmsg",
+        "socketpair", "socket", "listen", "bind", "connect", "accept",
+        "read", "write", "send", "recv", "close", "unlink", "access",
+        "fchdir", "fork", "_exit", "execve", "readlink",
+        // pty handling for --console-socket
+        "posix_openpt", "grantpt", "unlockpt", "ptsname_r", "dup2", "setsid",
+        // variadic; jextract emits an invoker factory for these
+        "open", "fcntl",
+    )
+    // struct msghdr / iovec / cmsghdr: ScmRights used to hand-compute these
+    // offsets (msghdr = 56 bytes, msg_iov at 16, ...). sockaddr_un likewise had
+    // sun_family/sun_path spelled out. Generated accessors take them from the
+    // headers instead.
+    val structs = listOf("msghdr", "iovec", "cmsghdr", "sockaddr_un")
+    // glibc declares bind/connect/accept with transparent unions over sockaddr*.
+    // The union is pointer-sized; callers wrap the sockaddr in it (see PosixIO).
+    val typedefs = listOf("__SOCKADDR_ARG", "__CONST_SOCKADDR_ARG")
+    val constants = listOf("SOL_SOCKET", "SCM_RIGHTS", "AF_UNIX")
+    commandLine(buildList {
+        add(jextractBin.get())
+        add("--output"); add(jextractDir.get().asFile.absolutePath)
+        add("-t"); add("com.ternbusty.takoyaki.syscall.posix")
+        add("--header-class-name"); add("PosixH")
+        add("-I"); add("/usr/include/" + multiarch.get())
+        functions.forEach { add("--include-function"); add(it) }
+        structs.forEach { add("--include-struct"); add(it) }
+        typedefs.forEach { add("--include-typedef"); add(it) }
+        constants.forEach { add("--include-constant"); add(it) }
+        add(header.asFile.absolutePath)
+    })
+}
+
 sourceSets["main"].java.srcDir(jextractDir)
-tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp, jextractLibc, jextractConsts) }
+tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp, jextractLibc, jextractConsts, jextractPosix) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
@@ -313,6 +352,7 @@ graalvmNative {
                 "-H:NativeLinkerOption=-Wl,--whole-archive,${bootstrapBuildDir.get().asFile.absolutePath}/libbootstrap.a,--no-whole-archive",
                 seccompLinkerOpt,
                 "--features=com.ternbusty.takoyaki.nativeimage.ForeignFeature",
+                "--features=com.ternbusty.takoyaki.nativeimage.GeneratedForeignFeature",
                 "--enable-native-access=ALL-UNNAMED",
                 "--enable-preview",
                 // Build-time-initialize most of takoyaki. Classes that have
