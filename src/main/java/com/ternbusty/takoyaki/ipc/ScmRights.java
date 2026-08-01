@@ -2,13 +2,14 @@ package com.ternbusty.takoyaki.ipc;
 
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Libc;
+import com.ternbusty.takoyaki.syscall.posix.PosixH;
+import com.ternbusty.takoyaki.syscall.posix.cmsghdr;
+import com.ternbusty.takoyaki.syscall.posix.iovec;
+import com.ternbusty.takoyaki.syscall.posix.msghdr;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.invoke.MethodHandle;
 
 /**
  * Pass open file descriptors over a unix domain socket using SCM_RIGHTS.
@@ -17,62 +18,53 @@ import java.lang.invoke.MethodHandle;
  * 1. Console socket: ship a pty master fd back to whoever invoked the runtime.
  * 2. Seccomp notify: forward the notify fd to the listener path.
  *
- * Layout (glibc x86_64/aarch64) for the structures involved:
- *   struct msghdr     56 bytes (name=8 namelen=4 pad=4 iov=8 iovlen=8 control=8 controllen=8 flags=4 pad=4)
- *   struct iovec      16 bytes (base=8 len=8)
- *   cmsghdr header    16 bytes (len=8 level=4 type=4); the fd payload follows.
+ * Struct layouts come from the jextract-generated {@link msghdr} / {@link iovec}
+ * / {@link cmsghdr}, so field offsets follow the system headers rather than
+ * hand-computed constants.
  */
 public final class ScmRights {
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final MethodHandle SENDMSG;
-    private static final MethodHandle RECVMSG;
-    static {
-        SENDMSG = LINKER.downcallHandle(LINKER.defaultLookup().find("sendmsg").orElseThrow(),
-                FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                        ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-        RECVMSG = LINKER.downcallHandle(LINKER.defaultLookup().find("recvmsg").orElseThrow(),
-                FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                        ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+    private ScmRights() {}
+
+    /** Bytes a cmsghdr carrying one fd occupies, including trailing alignment. */
+    private static final long CMSG_LEN_ONE_FD = cmsghdr.sizeof() + Integer.BYTES;
+    private static final long CMSG_SPACE_ONE_FD = align8(CMSG_LEN_ONE_FD);
+    /** The fd payload sits immediately after the cmsghdr header. */
+    private static final long CMSG_DATA_OFFSET = cmsghdr.sizeof();
+
+    private static long align8(long n) {
+        return (n + 7) & ~7L;
     }
 
-    private static final int SOL_SOCKET = 1;
-    private static final int SCM_RIGHTS = 1;
+    /** Point msg at a single-byte iovec plus a control buffer, like the C macros do. */
+    private static MemorySegment buildMsg(Arena arena, MemorySegment iovBuf, MemorySegment cmsg) {
+        MemorySegment iov = iovec.allocate(arena);
+        iovec.iov_base(iov, iovBuf);
+        iovec.iov_len(iov, 1L);
 
-    private ScmRights() {}
+        MemorySegment msg = msghdr.allocate(arena);
+        msghdr.msg_name(msg, MemorySegment.NULL);
+        msghdr.msg_namelen(msg, 0);
+        msghdr.msg_iov(msg, iov);
+        msghdr.msg_iovlen(msg, 1L);
+        msghdr.msg_control(msg, cmsg);
+        msghdr.msg_controllen(msg, CMSG_SPACE_ONE_FD);
+        msghdr.msg_flags(msg, 0);
+        return msg;
+    }
 
     /** Send one byte (and {@code fd} via SCM_RIGHTS) to the connected socket. */
     public static boolean sendFd(int sockFd, int fd, byte tag) {
         try (Arena arena = Arena.ofConfined()) {
-            // iovec with a single byte payload
             MemorySegment iovBuf = arena.allocate(1);
             iovBuf.set(ValueLayout.JAVA_BYTE, 0, tag);
-            MemorySegment iov = arena.allocate(16);
-            iov.set(ValueLayout.ADDRESS, 0, iovBuf);
-            iov.set(ValueLayout.JAVA_LONG, 8, 1L);
 
-            // cmsg buffer: 16 byte header + 4 byte fd (8 byte aligned by data section)
-            int cmsgLen = 16 + 4;
-            int cmsgSpace = 16 + 8;
-            MemorySegment cmsg = arena.allocate(cmsgSpace);
-            cmsg.set(ValueLayout.JAVA_LONG, 0, (long) cmsgLen); // cmsg_len
-            cmsg.set(ValueLayout.JAVA_INT, 8, SOL_SOCKET); // cmsg_level
-            cmsg.set(ValueLayout.JAVA_INT, 12, SCM_RIGHTS); // cmsg_type
-            cmsg.set(ValueLayout.JAVA_INT, 16, fd); // payload
+            MemorySegment cmsg = arena.allocate(CMSG_SPACE_ONE_FD);
+            cmsghdr.cmsg_len(cmsg, CMSG_LEN_ONE_FD);
+            cmsghdr.cmsg_level(cmsg, PosixH.SOL_SOCKET());
+            cmsghdr.cmsg_type(cmsg, PosixH.SCM_RIGHTS());
+            cmsg.set(ValueLayout.JAVA_INT, CMSG_DATA_OFFSET, fd);
 
-            MemorySegment msg = arena.allocate(56);
-            // msg_name=NULL, msg_namelen=0
-            msg.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-            msg.set(ValueLayout.JAVA_INT, 8, 0);
-            // msg_iov, msg_iovlen
-            msg.set(ValueLayout.ADDRESS, 16, iov);
-            msg.set(ValueLayout.JAVA_LONG, 24, 1L);
-            // msg_control, msg_controllen
-            msg.set(ValueLayout.ADDRESS, 32, cmsg);
-            msg.set(ValueLayout.JAVA_LONG, 40, (long) cmsgSpace);
-            // msg_flags
-            msg.set(ValueLayout.JAVA_INT, 48, 0);
-
-            long rc = (long) SENDMSG.invoke(sockFd, msg, 0);
+            long rc = PosixH.sendmsg(sockFd, buildMsg(arena, iovBuf, cmsg), 0);
             if (rc < 0) {
                 Logger.warn("sendmsg failed: " + Libc.strerror(Libc.errno()));
                 return false;
@@ -88,34 +80,20 @@ public final class ScmRights {
     public static int recvFd(int sockFd) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment iovBuf = arena.allocate(1);
-            MemorySegment iov = arena.allocate(16);
-            iov.set(ValueLayout.ADDRESS, 0, iovBuf);
-            iov.set(ValueLayout.JAVA_LONG, 8, 1L);
+            MemorySegment cmsg = arena.allocate(CMSG_SPACE_ONE_FD);
 
-            int cmsgSpace = 16 + 8;
-            MemorySegment cmsg = arena.allocate(cmsgSpace);
-
-            MemorySegment msg = arena.allocate(56);
-            msg.set(ValueLayout.ADDRESS, 0, MemorySegment.NULL);
-            msg.set(ValueLayout.JAVA_INT, 8, 0);
-            msg.set(ValueLayout.ADDRESS, 16, iov);
-            msg.set(ValueLayout.JAVA_LONG, 24, 1L);
-            msg.set(ValueLayout.ADDRESS, 32, cmsg);
-            msg.set(ValueLayout.JAVA_LONG, 40, (long) cmsgSpace);
-            msg.set(ValueLayout.JAVA_INT, 48, 0);
-
-            long rc = (long) RECVMSG.invoke(sockFd, msg, 0);
+            long rc = PosixH.recvmsg(sockFd, buildMsg(arena, iovBuf, cmsg), 0);
             if (rc < 0) {
                 Logger.warn("recvmsg failed: " + Libc.strerror(Libc.errno()));
                 return -1;
             }
-            int level = cmsg.get(ValueLayout.JAVA_INT, 8);
-            int type = cmsg.get(ValueLayout.JAVA_INT, 12);
-            if (level != SOL_SOCKET || type != SCM_RIGHTS) {
+            int level = cmsghdr.cmsg_level(cmsg);
+            int type = cmsghdr.cmsg_type(cmsg);
+            if (level != PosixH.SOL_SOCKET() || type != PosixH.SCM_RIGHTS()) {
                 Logger.warn("recvmsg returned unexpected cmsg level=" + level + " type=" + type);
                 return -1;
             }
-            return cmsg.get(ValueLayout.JAVA_INT, 16);
+            return cmsg.get(ValueLayout.JAVA_INT, CMSG_DATA_OFFSET);
         } catch (Throwable t) {
             Logger.warn("scmrights recvFd error: " + t.getMessage());
             return -1;
