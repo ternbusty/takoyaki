@@ -4,6 +4,7 @@ import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.hosted.RuntimeForeignAccess;
 
 import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.ValueLayout;
 
 public final class ForeignFeature implements Feature {
@@ -122,6 +123,25 @@ public final class ForeignFeature implements Feature {
         // (ptr,int)->int  (seccomp_arch_add / seccomp_arch_remove)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
+
+        // Variadic libc functions reached through jextract's makeInvoker
+        // factory (Libc.PRCTL/SYSCALL/IOCTL). firstVariadicArg makes these a
+        // distinct registration from a plain descriptor of the same shape.
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG),
+                Linker.Option.firstVariadicArg(1));
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG),
+                Linker.Option.firstVariadicArg(1));
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS),
+                Linker.Option.firstVariadicArg(2));
+    }
+
+    private static void reg(FunctionDescriptor desc, Linker.Option... options) {
+        RuntimeForeignAccess.registerForDowncall(desc, options);
     }
 
     private static void reg(FunctionDescriptor desc) {
