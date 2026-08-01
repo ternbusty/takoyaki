@@ -82,14 +82,10 @@ public final class LinuxSyscalls implements Syscalls {
         }
     }
 
-    private static final int KEYCTL_JOIN_SESSION_KEYRING = 1;
-    // glibc-side syscall numbers (same on aarch64 and x86_64).
-    private static final long NR_keyctl_aarch64 = 219L;
-    private static final long NR_keyctl_x86_64  = 250L;
 
     @Override
     public long keyctlJoinSessionKeyring(String name) {
-        long nr = Constants.isAarch64() ? NR_keyctl_aarch64 : NR_keyctl_x86_64;
+        long nr = Constants.NR_keyctl;
         long arg = 0L;
         Arena arena = null;
         try {
@@ -97,7 +93,7 @@ public final class LinuxSyscalls implements Syscalls {
                 arena = Arena.ofConfined();
                 arg = arena.allocateFrom(name).address();
             }
-            return Libc.syscall(nr, (long) KEYCTL_JOIN_SESSION_KEYRING,
+            return Libc.syscall(nr, (long) Constants.KEYCTL_JOIN_SESSION_KEYRING,
                     arg, 0, 0, 0);
         } finally {
             if (arena != null) arena.close();

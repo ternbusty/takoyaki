@@ -186,8 +186,86 @@ val jextractSeccomp by tasks.registering(Exec::class) {
         add(header.asFile.absolutePath)
     })
 }
+// The libc headers pull in arch-specific bits from /usr/include/<triplet>;
+// derive the triplet so the build works on aarch64 and x86_64 alike.
+val multiarch = providers.exec { commandLine("gcc", "-print-multiarch") }
+    .standardOutput.asText.map(String::trim)
+
+val jextractLibc by tasks.registering(Exec::class) {
+    val header = layout.projectDirectory.file("src/main/c/jextract/libc.h")
+    inputs.file(header)
+    inputs.property("jextract", jextractBin)
+    inputs.property("multiarch", multiarch)
+    outputs.dir(jextractDir)
+    val functions = listOf(
+        "unshare", "setns", "mount", "umount2", "chdir", "sethostname",
+        "kill", "prctl", "umask", "getpid", "getppid", "__errno_location", "strerror",
+        "execvp", "clearenv", "setenv", "setgroups", "prlimit64", "syscall", "geteuid",
+        "getegid", "setresuid", "setresgid", "mknod", "ioctl", "waitpid",
+    )
+    commandLine(buildList {
+        add(jextractBin.get())
+        add("--output"); add(jextractDir.get().asFile.absolutePath)
+        add("-t"); add("com.ternbusty.takoyaki.syscall.libc")
+        add("--header-class-name"); add("LibcH")
+        add("-I"); add("/usr/include/" + multiarch.get())
+        functions.forEach { add("--include-function"); add(it) }
+        add(header.asFile.absolutePath)
+    })
+}
+
+val jextractConsts by tasks.registering(Exec::class) {
+    val header = layout.projectDirectory.file("src/main/c/jextract/consts.h")
+    inputs.file(header)
+    inputs.property("jextract", jextractBin)
+    outputs.dir(jextractDir)
+    val constants = listOf(
+        // syscall numbers
+        "SYS_capset", "SYS_close_range", "SYS_pivot_root", "SYS_keyctl", "SYS_bpf",
+        // namespaces
+        "CLONE_NEWNS", "CLONE_NEWUTS", "CLONE_NEWIPC", "CLONE_NEWUSER",
+        "CLONE_NEWPID", "CLONE_NEWNET", "CLONE_NEWCGROUP", "CLONE_NEWTIME",
+        // mount flags
+        "MS_RDONLY", "MS_NOSUID", "MS_NODEV", "MS_NOEXEC", "MS_REMOUNT", "MS_BIND",
+        "MS_REC", "MS_NOATIME", "MS_RELATIME", "MS_STRICTATIME", "MS_NOSYMFOLLOW",
+        "MS_PRIVATE", "MS_SLAVE", "MS_SHARED", "MS_UNBINDABLE", "MNT_DETACH",
+        // prctl
+        "PR_SET_DUMPABLE", "PR_SET_KEEPCAPS", "PR_SET_NO_NEW_PRIVS", "PR_CAPBSET_DROP",
+        "PR_CAP_AMBIENT", "PR_CAP_AMBIENT_RAISE", "PR_CAP_AMBIENT_CLEAR_ALL",
+        "PR_SET_CHILD_SUBREAPER",
+        // signals
+        "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGABRT", "SIGFPE", "SIGKILL",
+        "SIGSEGV", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGUSR1", "SIGUSR2", "SIGCHLD",
+        "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU",
+        // errno
+        "EPERM", "ENOENT", "ESRCH", "EINTR", "EEXIST", "EBUSY", "EINVAL", "ENOSYS",
+        // sockets / files
+        "AF_UNIX", "AF_INET", "SOCK_STREAM", "SOCK_DGRAM",
+        "F_OK", "O_RDONLY", "O_RDWR", "O_CREAT", "O_DIRECTORY",
+        "F_GETFD", "F_SETFD", "FD_CLOEXEC",
+        // rlimits
+        "RLIMIT_CPU", "RLIMIT_FSIZE", "RLIMIT_DATA", "RLIMIT_STACK", "RLIMIT_CORE",
+        "RLIMIT_RSS", "RLIMIT_NPROC", "RLIMIT_NOFILE", "RLIMIT_MEMLOCK", "RLIMIT_AS",
+        "RLIMIT_LOCKS", "RLIMIT_SIGPENDING", "RLIMIT_MSGQUEUE", "RLIMIT_NICE",
+        "RLIMIT_RTPRIO", "RLIMIT_RTTIME",
+        // misc
+        "_LINUX_CAPABILITY_VERSION_3", "CLOSE_RANGE_CLOEXEC",
+        "SIOCGIFFLAGS", "SIOCSIFFLAGS", "IFF_UP",
+        "S_IFCHR", "S_IFBLK", "S_IFIFO",
+        "KEYCTL_JOIN_SESSION_KEYRING",
+    )
+    commandLine(buildList {
+        add(jextractBin.get())
+        add("--output"); add(jextractDir.get().asFile.absolutePath)
+        add("-t"); add("com.ternbusty.takoyaki.syscall.hdr")
+        add("--header-class-name"); add("Consts")
+        constants.forEach { add("--include-constant"); add(it) }
+        add(header.asFile.absolutePath)
+    })
+}
+
 sourceSets["main"].java.srcDir(jextractDir)
-tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp) }
+tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp, jextractLibc, jextractConsts) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.

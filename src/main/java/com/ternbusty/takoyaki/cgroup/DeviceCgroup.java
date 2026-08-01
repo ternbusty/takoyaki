@@ -36,8 +36,6 @@ import java.util.List;
  */
 public final class DeviceCgroup {
     // bpf syscall numbers (same on aarch64 and x86_64 thanks to generic syscalls)
-    private static final long NR_bpf_aarch64 = 280L;
-    private static final long NR_bpf_x86_64  = 321L;
 
     private static final int BPF_PROG_LOAD   = 5;
     private static final int BPF_PROG_ATTACH = 8;
@@ -269,6 +267,6 @@ public final class DeviceCgroup {
     }
 
     private static long bpfNr() {
-        return Constants.isAarch64() ? NR_bpf_aarch64 : NR_bpf_x86_64;
+        return Constants.NR_bpf;
     }
 }
