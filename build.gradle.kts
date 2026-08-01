@@ -138,6 +138,57 @@ val buildBootstrap by tasks.registering(Exec::class) {
     )
 }
 
+// Generate the libseccomp bindings (SeccompH + scmp_arg_cmp) from the system
+// headers with jextract at build time. Not committed: the output is
+// regenerated per build, so it always matches the build machine's arch (syscall
+// numbers, struct layouts) instead of freezing one arch into the repo. Needs
+// jextract on PATH, at ~/.sdkman/candidates/jextract/current/bin, or -Pjextract=.
+val jextractDir = layout.buildDirectory.dir("generated/jextract")
+val jextractBin = providers.gradleProperty("jextract").orElse(
+    providers.provider {
+        val sdk = file(System.getProperty("user.home") + "/.sdkman/candidates/jextract/current/bin/jextract")
+        if (sdk.exists()) sdk.absolutePath else "jextract"
+    })
+val jextractSeccomp by tasks.registering(Exec::class) {
+    val header = layout.projectDirectory.file("src/main/c/jextract/seccomp.h")
+    inputs.file(header)
+    inputs.property("jextract", jextractBin)
+    outputs.dir(jextractDir)
+    val functions = listOf(
+        "seccomp_init", "seccomp_release", "seccomp_rule_add", "seccomp_rule_add_array",
+        "seccomp_load", "seccomp_notify_fd", "seccomp_syscall_resolve_name",
+        "seccomp_arch_add", "seccomp_arch_remove", "seccomp_arch_resolve_name", "seccomp_attr_set",
+    )
+    // Filter attributes, actions and comparison ops. Taking these from the
+    // header matters: the enum has gaps (SCMP_FLTATR_API_TSKIP sits between
+    // CTL_TSYNC and CTL_LOG), which hand-counted values get wrong.
+    val constants = listOf(
+        "SCMP_FLTATR_CTL_NNP", "SCMP_FLTATR_CTL_TSYNC", "SCMP_FLTATR_CTL_LOG",
+        "SCMP_FLTATR_CTL_SSB", "SCMP_FLTATR_CTL_OPTIMIZE",
+        "SCMP_ACT_KILL_PROCESS", "SCMP_ACT_KILL_THREAD", "SCMP_ACT_KILL", "SCMP_ACT_TRAP",
+        "SCMP_ACT_NOTIFY", "SCMP_ACT_LOG", "SCMP_ACT_ALLOW",
+        "SCMP_CMP_NE", "SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_EQ", "SCMP_CMP_GE",
+        "SCMP_CMP_GT", "SCMP_CMP_MASKED_EQ",
+        "__NR_SCMP_ERROR",
+        // ERRNO/TRACE are function-like macros; seccomp.h wraps their zero-arg
+        // expansion in an enum so the base values stay header-derived.
+        "TAKOYAKI_SCMP_ACT_ERRNO_BASE", "TAKOYAKI_SCMP_ACT_TRACE_BASE",
+    )
+    commandLine(buildList {
+        add(jextractBin.get())
+        add("--output"); add(jextractDir.get().asFile.absolutePath)
+        add("-t"); add("com.ternbusty.takoyaki.syscall.libseccomp")
+        add("--header-class-name"); add("SeccompH")
+        add("-l"); add(":libseccomp.so.2")
+        functions.forEach { add("--include-function"); add(it) }
+        constants.forEach { add("--include-constant"); add(it) }
+        add("--include-struct"); add("scmp_arg_cmp")
+        add(header.asFile.absolutePath)
+    })
+}
+sourceSets["main"].java.srcDir(jextractDir)
+tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp) }
+
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
 val isQuick = providers.gradleProperty("quick").isPresent
@@ -197,6 +248,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.command.Wait",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.seccomp",
+                "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.libseccomp",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
             )

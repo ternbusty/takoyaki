@@ -116,6 +116,12 @@ public final class ForeignFeature implements Feature {
         // (ptr,int,long)->int  (seccomp_attr_set)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG));
+        // (ptr,int,int)->int  (jextract seccomp_attr_set — uint32_t value)
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+        // (ptr,int)->int  (seccomp_arch_add / seccomp_arch_remove)
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
     }
 
     private static void reg(FunctionDescriptor desc) {
