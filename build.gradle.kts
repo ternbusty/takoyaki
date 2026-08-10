@@ -4,7 +4,7 @@ import java.time.Duration
 plugins {
     application
     jacoco
-    id("org.graalvm.buildtools.native") version "1.1.6"
+    id("org.graalvm.buildtools.native") version "1.1.7"
 }
 
 group = "com.ternbusty"
