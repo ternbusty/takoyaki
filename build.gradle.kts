@@ -31,7 +31,7 @@ dependencies {
     // at native-image build time, all for our small OCI schemas.
     compileOnly("org.graalvm.sdk:nativeimage:25.2.4")
 
-    testImplementation(platform("org.junit:junit-bom:6.1.2"))
+    testImplementation(platform("org.junit:junit-bom:6.1.3"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.mockito:mockito-core:5.23.0")
