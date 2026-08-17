@@ -72,7 +72,7 @@ jobs:
           cache: 'gradle'
 
       - name: Build native takoyaki
-        run: ./gradlew nativeCompile --no-daemon
+        run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
 
       - name: Stage binary + checksum
         run: |

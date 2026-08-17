@@ -50,7 +50,7 @@ jobs:
 
       - name: Build native takoyaki
         run: |
-          ./gradlew nativeCompile --no-daemon --info
+          ./gradlew nativeCompile --no-daemon --no-configuration-cache --info
           sudo mkdir -p /opt/takoyaki
           sudo cp build/native/nativeCompile/takoyaki /opt/takoyaki/bin
           sudo chmod +x /opt/takoyaki/bin
