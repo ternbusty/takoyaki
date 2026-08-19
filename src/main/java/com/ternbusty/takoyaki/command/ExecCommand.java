@@ -315,6 +315,24 @@ public final class ExecCommand {
         int readFd = payloadFds[0];
         int writeFd = payloadFds[1];
 
+        // Console socketpair for exec -t: one end goes to ExecProcess so it
+        // can send back the PTY master fd via SCM_RIGHTS after opening a pty
+        // in the container's devpts.
+        boolean wantTerminal = payload.process != null
+                && Boolean.TRUE.equals(payload.process.terminal);
+        int consoleReadFd = -1; // ExecCommand's end: receives master
+        int consoleWriteFd = -1; // ExecProcess's end: sends master
+        if (wantTerminal) {
+            int[] consoleFds = new int[2];
+            if (PosixIO.socketpair(arena, Constants.AF_UNIX,
+                    Constants.SOCK_STREAM, 0, consoleFds) < 0) {
+                Logger.warn("console socketpair failed, PTY will be skipped");
+            } else {
+                consoleReadFd = consoleFds[0];
+                consoleWriteFd = consoleFds[1];
+            }
+        }
+
         List<String> envList = HostEnv.inherited();
         envList.add("_TAKOYAKI_EXEC_PAYLOAD_FD=" + readFd);
         if (nsFdList.length() > 0) {
@@ -322,6 +340,9 @@ public final class ExecCommand {
         }
         if (seccompListenerFd >= 0) {
             envList.add("_TAKOYAKI_SECCOMP_LISTENER_FD=" + seccompListenerFd);
+        }
+        if (consoleWriteFd >= 0) {
+            envList.add("_TAKOYAKI_EXEC_CONSOLE_FD=" + consoleWriteFd);
         }
         if (Logger.isDebugEnabled()) {
             envList.add("_TAKOYAKI_EXEC_DEBUG=1");
@@ -425,6 +446,22 @@ public final class ExecCommand {
             // JSON parse and exits; reap it instead of leaving a zombie.
         }
         PosixIO.close(writeFd);
+        if (consoleWriteFd >= 0) PosixIO.close(consoleWriteFd);
+
+        // Receive the PTY master fd from ExecProcess. The workload opens a
+        // pty in the container's devpts and sends the master back via
+        // SCM_RIGHTS on the console socketpair.
+        int masterFd = -1;
+        Thread ioThread = null;
+        if (consoleReadFd >= 0) {
+            masterFd = com.ternbusty.takoyaki.console.InternalConsole
+                    .receiveMasterFromSocket(consoleReadFd);
+            PosixIO.close(consoleReadFd);
+            if (masterFd >= 0 && !detach) {
+                ioThread = com.ternbusty.takoyaki.console.InternalConsole
+                        .startIOCopyForFd(masterFd);
+            }
+        }
 
         if (pidFile != null && written) {
             try {
@@ -439,9 +476,14 @@ public final class ExecCommand {
             // Deliberately no wait: with no live ancestors the workload
             // reparents to the caller's subreaper — containerd's shim relies
             // on that to reap a detached exec and observe its exit.
+            if (masterFd >= 0) PosixIO.close(masterFd);
             return 0;
         }
         int code = Wait.waitForChild(workloadPid);
+        if (masterFd >= 0) PosixIO.close(masterFd);
+        if (ioThread != null) {
+            try { ioThread.join(2000); } catch (InterruptedException ignored) {}
+        }
         return written ? code : EXIT_RUNTIME_ERROR;
     }
 

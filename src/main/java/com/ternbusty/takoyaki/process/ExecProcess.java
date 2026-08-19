@@ -56,10 +56,13 @@ public final class ExecProcess {
 
         int payloadFd;
         int seccompListenerFd;
+        int consoleFd;
         try {
             payloadFd = Integer.parseInt(System.getenv("_TAKOYAKI_EXEC_PAYLOAD_FD"));
             String listenerFdStr = System.getenv("_TAKOYAKI_SECCOMP_LISTENER_FD");
             seccompListenerFd = listenerFdStr != null ? Integer.parseInt(listenerFdStr) : -1;
+            String consoleFdStr = System.getenv("_TAKOYAKI_EXEC_CONSOLE_FD");
+            consoleFd = consoleFdStr != null ? Integer.parseInt(consoleFdStr) : -1;
         } catch (RuntimeException e) {
             Logger.error("bad exec env vars: " + e.getMessage());
             PosixIO._exit(1);
@@ -133,6 +136,24 @@ public final class ExecProcess {
             for (var envEntry : envMap.entrySet()) {
                 Libc.setenv(arena, envEntry.getKey(), envEntry.getValue(), true);
             }
+
+            // PTY setup for exec -t: allocate a pty from the container's devpts,
+            // ship the master back to ExecCommand via the console socketpair,
+            // and wire the slave to stdin/stdout/stderr.
+            if (Boolean.TRUE.equals(payload.process.terminal) && consoleFd >= 0) {
+                com.ternbusty.takoyaki.console.ConsoleSocket.PtyPair pty =
+                        com.ternbusty.takoyaki.console.ConsoleSocket.openPty();
+                if (pty != null) {
+                    if (com.ternbusty.takoyaki.console.ConsoleSocket
+                            .sendMasterVia(consoleFd, pty.master)) {
+                        com.ternbusty.takoyaki.console.ConsoleSocket.wireStdio(pty.slave);
+                    }
+                    PosixIO.close(pty.master);
+                }
+                PosixIO.close(consoleFd);
+                consoleFd = -1;
+            }
+            if (consoleFd >= 0) PosixIO.close(consoleFd);
 
             // Flag every inherited runtime fd CLOEXEC so nothing leaks into the
             // user process (the payload fd is closed; the seccomp listener fd

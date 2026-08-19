@@ -71,21 +71,40 @@ public final class Seccomp {
                 SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_NNP(), 0);
 
                 // Translate the OCI spec's filter flags into the libseccomp
-                // attributes that back them. Unknown flags are warned about
-                // rather than ignored so the caller sees the mismatch.
+                // attributes that back them. When no flags field is present in
+                // the spec, default to SPEC_ALLOW (matches runc behaviour).
+                // Unknown flags are warned about rather than ignored so the
+                // caller sees the mismatch.
+                //
+                // filterFlagsValue tracks the numeric seccomp(2) flags that
+                // libseccomp will pass to the kernel. TSYNC contributes 0
+                // because libseccomp handles it internally through its own
+                // attribute, not through the kernel flags argument.
+                int filterFlagsValue = 0;
                 if (sec.flags != null) {
                     for (String flag : sec.flags) {
                         switch (flag) {
-                            case "SECCOMP_FILTER_FLAG_TSYNC" ->
-                                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_TSYNC(), 1);
-                            case "SECCOMP_FILTER_FLAG_LOG" ->
-                                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_LOG(), 1);
-                            case "SECCOMP_FILTER_FLAG_SPEC_ALLOW" ->
-                                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
+                            case "SECCOMP_FILTER_FLAG_TSYNC" -> {
+                                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_TSYNC(), 1);
+                                // TSYNC contributes 0 to the kernel flags
+                            }
+                            case "SECCOMP_FILTER_FLAG_LOG" -> {
+                                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_LOG(), 1);
+                                filterFlagsValue |= 2;
+                            }
+                            case "SECCOMP_FILTER_FLAG_SPEC_ALLOW" -> {
+                                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
+                                filterFlagsValue |= 4;
+                            }
                             default -> Logger.warn("unknown seccomp filter flag: " + flag);
                         }
                     }
+                } else {
+                    // No flags field in the spec: default to SPEC_ALLOW.
+                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
+                    filterFlagsValue = 4;
                 }
+                Logger.debug("seccomp filter flags: " + filterFlagsValue);
 
                 // Ask libseccomp to compile the rule set into a binary tree
                 // once it gets large enough for the linear match to hurt.
@@ -261,7 +280,9 @@ public final class Seccomp {
         // masking it would turn EINVAL(22) into … well, still 22, but ENOSYS
         // (38 with a bit 16 set) into 38 with the top bit dropped. Refuse
         // rather than mislead.
-        int errno = errnoRet == null ? 0 : errnoRet.intValue();
+        // OCI spec: when errnoRet is not set for SCMP_ACT_ERRNO, default to
+        // EPERM (1). SCMP_ACT_ERRNO(0) would make the syscall succeed silently.
+        int errno = errnoRet == null ? 1 : errnoRet.intValue();
         if (("SCMP_ACT_ERRNO".equals(action) || "SCMP_ACT_TRACE".equals(action))
                 && (errno < 0 || errno > 0xffff)) {
             throw new IllegalArgumentException(

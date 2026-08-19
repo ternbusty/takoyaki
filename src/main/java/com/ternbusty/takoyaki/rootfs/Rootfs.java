@@ -236,27 +236,13 @@ public final class Rootfs {
                 }
             }
         }
-        // Determine if cgroupns is enabled. With cgroupns, we mount a fresh
-        // cgroup2 filesystem (showing the container's cgroup root at /).
-        // Without cgroupns, we bind-mount the host cgroup path.
-        boolean hasCgroupNs = false;
-        if (spec != null && spec.linux != null && spec.linux.namespaces != null) {
-            for (Spec.Namespace ns : spec.linux.namespaces) {
-                if ("cgroup".equals(ns.type)) { hasCgroupNs = true; break; }
-            }
-        }
-        if (hasCgroupNs) {
-            long cgFlags = Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC;
-            if (cgroupRo) cgFlags |= Constants.MS_RDONLY;
-            if (Libc.mount(arena, "cgroup2", cg, "cgroup2", cgFlags, null) != 0) {
-                Logger.warn("mount cgroup2: " + Libc.strerror(Libc.errno())
-                        + "; falling back to bind mount");
-                mountCgroupBind(arena, cg, containerCgPath, cgroupRo);
-            } else {
-                Logger.debug("mounted cgroup2 at /sys/fs/cgroup"
-                        + (cgroupRo ? " (ro)" : " (rw)"));
-            }
-        } else if (containerCgPath != null) {
+        // Bind-mount the container's cgroup directory to /sys/fs/cgroup.
+        // We always use bind mount rather than a fresh cgroup2 filesystem
+        // because CLONE_NEWCGROUP runs before addPid, so the cgroupns root
+        // would be the parent's cgroup, not the container's. Bind-mounting
+        // the correct path sidesteps this ordering issue and works with or
+        // without cgroupns.
+        if (containerCgPath != null) {
             mountCgroupBind(arena, cg, containerCgPath, cgroupRo);
         }
     }
@@ -322,6 +308,7 @@ public final class Rootfs {
             // is a regular file, create a file (not a directory). runc follows
             // symlinks in the destination path within the rootfs and creates
             // intermediate directories as needed.
+            boolean targetExisted = Files.isDirectory(Path.of(target));
             createMountTarget(rootfsPath, m, target, isBind);
 
             // Id-mapped mounts: if uidMappings/gidMappings are present we route the
@@ -349,7 +336,10 @@ public final class Rootfs {
             // runc compat: for tmpfs mounts without an explicit "mode=" option,
             // inherit the permission bits from the existing target directory.
             // This makes "mount tmpfs on /tmp" keep /tmp's chmod'd mode.
-            if ("tmpfs".equals(type) && !isBind) {
+            // Only inherit when the target directory existed BEFORE createMountTarget
+            // made it; freshly-created directories would just reflect the default
+            // mkdir mode (755) which is not the user's intent.
+            if ("tmpfs".equals(type) && !isBind && targetExisted) {
                 data = inheritTmpfsMode(target, data);
             }
 

@@ -37,9 +37,16 @@ public final class EventsCommand {
         // Start OOM watcher thread that monitors memory.events for oom_kill.
         Thread oomWatcher = startOomWatcher(cg, containerId);
 
+        // State directory disappears when the container is deleted; use it
+        // as the liveness signal so the loop exits instead of spinning on a
+        // removed cgroup path.
+        Path statePath = Path.of(rootPath, containerId);
+
         do {
+            if (!Files.isDirectory(cg) || !Files.isDirectory(statePath)) break;
             Map<String, Object> snap = snapshot(cg, containerId);
             System.out.println(Json.encodeCompact(snap));
+            System.out.flush();
             if (once) break;
             try { Thread.sleep(intervalMs); } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

@@ -3,6 +3,7 @@ package com.ternbusty.takoyaki;
 import com.ternbusty.takoyaki.command.CreateCommand;
 import com.ternbusty.takoyaki.command.DeleteCommand;
 import com.ternbusty.takoyaki.command.EventsCommand;
+import com.ternbusty.takoyaki.command.FeaturesCommand;
 import com.ternbusty.takoyaki.command.ExecCommand;
 import com.ternbusty.takoyaki.command.KillCommand;
 import com.ternbusty.takoyaki.command.ListCommand;
@@ -160,6 +161,7 @@ public final class Main {
             case "events" -> dispatchEvents(args, subStart, rootPath);
             case "exec" -> dispatchExec(args, subStart, rootPath);
             case "spec" -> SpecCommand.run(args, subStart);
+            case "features" -> FeaturesCommand.run();
             default -> {
                 System.err.println("takoyaki: unknown command: " + subName);
                 yield 1;
