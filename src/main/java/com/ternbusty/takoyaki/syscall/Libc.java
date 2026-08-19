@@ -57,6 +57,11 @@ public final class Libc {
         return LibcH.chdir(arena.allocateFrom(path));
     }
 
+    public static int chroot(Arena arena, String path) {
+        MemorySegment p = arena.allocateFrom(path);
+        return (int) syscall(Constants.NR_chroot, p.address(), 0, 0, 0, 0);
+    }
+
     public static int sethostname(Arena arena, String name) {
         return LibcH.sethostname(arena.allocateFrom(name), name.getBytes().length);
     }

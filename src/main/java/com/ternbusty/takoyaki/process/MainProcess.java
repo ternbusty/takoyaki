@@ -137,6 +137,14 @@ public final class MainProcess {
             PosixIO.close(mainSenderFd);
             Logger.debug("init ready");
 
+            // Apply pids.max now that the init process has fully initialized.
+            // This is deferred from Cgroup.setup because the Java init
+            // process needs multiple threads (for GraalVM internals) during
+            // startup. A low pids.max (e.g. 1 from pids.limit=0) would
+            // prevent the init from starting if applied before INIT_READY.
+            Cgroup.applyDeferredPids(effectiveCgroupsPath,
+                    spec.linux != null ? spec.linux.resources : null);
+
             State state = State.create(spec.ociVersion, containerId,
                     ContainerStatus.CREATED, stage2Pid, bundlePath, spec.annotations);
             state.save(rootPath);

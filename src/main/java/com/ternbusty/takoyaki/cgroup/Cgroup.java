@@ -85,7 +85,10 @@ public final class Cgroup {
         // can use them. Walk from root downward.
         enableControllers(full, linux != null ? linux.resources : null);
 
-        applyLimits(full, linux != null ? linux.resources : null, true);
+        // Skip pids.max here; it's applied after INIT_READY by
+        // MainProcess.applyDeferredPids so the Java init process can create
+        // threads needed for GraalVM startup without hitting a low pids limit.
+        applyLimits(full, linux != null ? linux.resources : null, true, true);
 
         addPid(cgroupPath, pid);
 
@@ -201,6 +204,11 @@ public final class Cgroup {
     }
 
     private static void applyLimits(Path full, Spec.LinuxResources r, boolean strict) {
+        applyLimits(full, r, strict, false);
+    }
+
+    private static void applyLimits(Path full, Spec.LinuxResources r, boolean strict,
+                                     boolean skipPids) {
         if (r == null) return;
         // Realtime scheduling limits are a cgroup v1 concept — v2 removed
         // cpu.rt_period_us / cpu.rt_runtime_us entirely. Silently ignoring
@@ -211,10 +219,29 @@ public final class Cgroup {
                     + " on cgroup v2; ignoring");
         }
         for (Map.Entry<String, String> e : plannedWrites(r)) {
+            if (skipPids && e.getKey().equals("pids.max")) continue;
             if (strict && STRICT_FILES.contains(e.getKey())) {
                 writeRequired(full.resolve(e.getKey()), e.getValue());
             } else {
                 writeIfPossible(full.resolve(e.getKey()), e.getValue());
+            }
+        }
+    }
+
+    /**
+     * Apply deferred pids.max to an already-configured cgroup. Called from
+     * MainProcess after INIT_READY so the Java init process (which needs
+     * multiple threads for GraalVM's internal machinery) has already
+     * finished initialization. Without this deferral, a low pids.max value
+     * (e.g. 1 from pids.limit=0) would prevent the init from starting.
+     */
+    public static void applyDeferredPids(String cgroupPath, Spec.LinuxResources r) {
+        if (cgroupPath == null || r == null || r.pids == null) return;
+        Path full = dir(cgroupPath);
+        for (Map.Entry<String, String> e : plannedWrites(r)) {
+            if (e.getKey().equals("pids.max")) {
+                writeIfPossible(full.resolve("pids.max"), e.getValue());
+                Logger.debug("deferred pids.max=" + e.getValue());
             }
         }
     }

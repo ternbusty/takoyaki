@@ -462,6 +462,50 @@ public final class Rootfs {
         }
     }
 
+    /**
+     * Alternative to {@link #pivot} when {@code --no-pivot} is requested.
+     * Moves the rootfs mount to "/" via {@code mount(MS_MOVE)} and then
+     * calls {@code chroot(".")} + {@code chdir("/")}. This is the same
+     * approach runc uses in its {@code msMoveRoot} function.
+     *
+     * Unlike pivot_root, this does NOT detach the old root. The old root's
+     * mounts remain in the mount namespace (but are inaccessible from
+     * userspace because they're hidden under the new root).
+     */
+    public static void msMoveRoot(String newRoot, String rootfsPropagation) {
+        try (Arena arena = Arena.ofConfined()) {
+            Logger.debug("msMoveRoot (no-pivot) to " + newRoot);
+            if (Libc.mount(arena, newRoot, "/", null, Constants.MS_MOVE, null) != 0) {
+                throw new RuntimeException("mount MS_MOVE " + newRoot + " to /: "
+                        + Libc.strerror(Libc.errno()));
+            }
+            if (Libc.chroot(arena, ".") != 0) {
+                throw new RuntimeException("chroot: " + Libc.strerror(Libc.errno()));
+            }
+            if (Libc.chdir(arena, "/") != 0) {
+                throw new RuntimeException("chdir /: " + Libc.strerror(Libc.errno()));
+            }
+            // Apply rootfsPropagation the same way as pivot().
+            if (rootfsPropagation != null) {
+                long prop = MountOptions.propagationFlag(rootfsPropagation);
+                if (prop != 0) {
+                    prop |= Constants.MS_REC;
+                    if ((prop & Constants.MS_SHARED) != 0) {
+                        Libc.mount(arena, null, "/", null,
+                                Constants.MS_PRIVATE | Constants.MS_REC, null);
+                    }
+                    if (Libc.mount(arena, null, "/", null, prop, null) != 0) {
+                        Logger.warn("set / to " + rootfsPropagation + " failed: "
+                                + Libc.strerror(Libc.errno()));
+                    } else {
+                        Logger.debug("/ propagation set to " + rootfsPropagation);
+                    }
+                }
+            }
+            Logger.debug("msMoveRoot completed");
+        }
+    }
+
     public static void setRootReadonly() {
         try (Arena arena = Arena.ofConfined()) {
             // Preserve MS_NOSUID we set earlier — MS_REMOUNT replaces the flag set
@@ -659,9 +703,10 @@ public final class Rootfs {
 
     /**
      * Snapshot a directory tree into a list of entries, each represented as
-     * {@code {type, relativePath, payload}}. Types are "dir", "file", or
-     * "symlink". Payload is {@code byte[]} for files, a symlink-target string
-     * for symlinks, and null for directories.
+     * {@code {type, relativePath, payload, mode}}. Types are "dir", "file",
+     * or "symlink". Payload is {@code byte[]} for files, a symlink-target
+     * string for symlinks, and null for directories. Mode is the Unix
+     * permission bits (int), preserved so tmpcopyup restores chmod'd modes.
      */
     private static java.util.List<Object[]> snapshotDirectory(Path dir) {
         java.util.List<Object[]> entries = new java.util.ArrayList<>();
@@ -671,14 +716,19 @@ public final class Rootfs {
                 if (p.equals(dir)) return;
                 String rel = dir.relativize(p).toString();
                 try {
+                    int mode = -1;
+                    try {
+                        mode = ((int) Files.getAttribute(p, "unix:mode",
+                                java.nio.file.LinkOption.NOFOLLOW_LINKS)) & 07777;
+                    } catch (Exception ignored) {}
                     if (Files.isSymbolicLink(p)) {
                         entries.add(new Object[]{
-                                "symlink", rel, Files.readSymbolicLink(p).toString()});
+                                "symlink", rel, Files.readSymbolicLink(p).toString(), mode});
                     } else if (Files.isDirectory(p)) {
-                        entries.add(new Object[]{"dir", rel, null});
+                        entries.add(new Object[]{"dir", rel, null, mode});
                     } else if (Files.isRegularFile(p)) {
                         entries.add(new Object[]{
-                                "file", rel, Files.readAllBytes(p)});
+                                "file", rel, Files.readAllBytes(p), mode});
                     }
                 } catch (IOException ignored) {}
             });
@@ -688,20 +738,32 @@ public final class Rootfs {
 
     /**
      * Restore a snapshot produced by {@link #snapshotDirectory} into the
-     * given target directory (typically a freshly-mounted tmpfs).
+     * given target directory (typically a freshly-mounted tmpfs), preserving
+     * Unix permission bits.
      */
     private static void restoreDirectory(Path dir, java.util.List<Object[]> entries) {
         for (Object[] e : entries) {
             String type = (String) e[0];
             Path target = dir.resolve((String) e[1]);
+            int mode = (int) e[3];
             try {
                 switch (type) {
                     case "dir":
                         Files.createDirectories(target);
+                        if (mode >= 0) {
+                            Files.setPosixFilePermissions(target,
+                                    java.nio.file.attribute.PosixFilePermissions.fromString(
+                                            modeToPerms(mode)));
+                        }
                         break;
                     case "file":
                         Files.createDirectories(target.getParent());
                         Files.write(target, (byte[]) e[2]);
+                        if (mode >= 0) {
+                            Files.setPosixFilePermissions(target,
+                                    java.nio.file.attribute.PosixFilePermissions.fromString(
+                                            modeToPerms(mode)));
+                        }
                         break;
                     case "symlink":
                         Files.createDirectories(target.getParent());
@@ -714,6 +776,21 @@ public final class Rootfs {
                 Logger.debug("tmpcopyup restore " + e[1] + ": " + ex.getMessage());
             }
         }
+    }
+
+    /** Convert a Unix permission mode (0777, etc.) to a PosixFilePermissions string. */
+    private static String modeToPerms(int mode) {
+        char[] p = new char[9];
+        p[0] = (mode & 0400) != 0 ? 'r' : '-';
+        p[1] = (mode & 0200) != 0 ? 'w' : '-';
+        p[2] = (mode & 0100) != 0 ? 'x' : '-';
+        p[3] = (mode & 040) != 0 ? 'r' : '-';
+        p[4] = (mode & 020) != 0 ? 'w' : '-';
+        p[5] = (mode & 010) != 0 ? 'x' : '-';
+        p[6] = (mode & 04) != 0 ? 'r' : '-';
+        p[7] = (mode & 02) != 0 ? 'w' : '-';
+        p[8] = (mode & 01) != 0 ? 'x' : '-';
+        return new String(p);
     }
 
     /**

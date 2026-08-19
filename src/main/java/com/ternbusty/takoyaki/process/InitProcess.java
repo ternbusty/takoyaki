@@ -195,8 +195,14 @@ public final class InitProcess {
                                     ContainerStatus.CREATING),
                             "createContainer");
                 }
-                Rootfs.pivot(rootfsPath,
-                        spec.linux != null ? spec.linux.rootfsPropagation : null);
+                boolean noPivot = "1".equals(System.getenv("_TAKOYAKI_NO_PIVOT"));
+                if (noPivot) {
+                    Rootfs.msMoveRoot(rootfsPath,
+                            spec.linux != null ? spec.linux.rootfsPropagation : null);
+                } else {
+                    Rootfs.pivot(rootfsPath,
+                            spec.linux != null ? spec.linux.rootfsPropagation : null);
+                }
             } else {
                 Logger.debug("no mount namespace, skipping rootfs prep");
             }

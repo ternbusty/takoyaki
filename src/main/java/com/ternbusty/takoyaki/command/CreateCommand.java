@@ -136,6 +136,7 @@ public final class CreateCommand {
         if (logFmt != null) envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
         if (consoleSocket != null) envList.add("_TAKOYAKI_CONSOLE_SOCKET=" + consoleSocket);
         if (noNewKeyring) envList.add("_TAKOYAKI_NO_NEW_KEYRING=1");
+        if (noPivot) envList.add("_TAKOYAKI_NO_PIVOT=1");
 
         // Namespaces with an explicit `path` field: open the path on the host so
         // bootstrap.c can join via setns() instead of unshare(). The fd survives
