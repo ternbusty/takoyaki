@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.2](https://github.com/ternbusty/takoyaki/compare/v0.3.1...v0.3.2) (2026-08-17)
+
+
+### 🔗 Dependencies
+
+* **deps:** bump gradle-wrapper from 9.6.1 to 9.7.0 ([#58](https://github.com/ternbusty/takoyaki/issues/58)) ([6c588b9](https://github.com/ternbusty/takoyaki/commit/6c588b9013535ca4f5c4560ec14d48b3489a6afe))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.5 to 1.1.6 ([#50](https://github.com/ternbusty/takoyaki/issues/50)) ([5ed0a49](https://github.com/ternbusty/takoyaki/commit/5ed0a490858a44882cbee22ae37d2c8618b8b7a7))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.6 to 1.1.7 ([#57](https://github.com/ternbusty/takoyaki/issues/57)) ([4f4bbe6](https://github.com/ternbusty/takoyaki/commit/4f4bbe60beddf9f5166c1a56d7af23e4dd79862a))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.7 to 1.1.9 ([#60](https://github.com/ternbusty/takoyaki/issues/60)) ([cb20117](https://github.com/ternbusty/takoyaki/commit/cb201178d8af625da1ba3b5802e1a849a2fbf240))
+* **deps:** bump org.graalvm.sdk:nativeimage from 25.1.3 to 25.2.4 ([#56](https://github.com/ternbusty/takoyaki/issues/56)) ([cba4200](https://github.com/ternbusty/takoyaki/commit/cba4200780a538742fddb71fb0daa9061c5ec920))
+* **deps:** bump org.junit:junit-bom from 6.1.2 to 6.1.3 ([#59](https://github.com/ternbusty/takoyaki/issues/59)) ([f81dcbf](https://github.com/ternbusty/takoyaki/commit/f81dcbf15fb980048e7702cc77f69af5a195b4c8))
+
 ## [0.3.1](https://github.com/ternbusty/takoyaki/compare/v0.3.0...v0.3.1) (2026-07-21)
 
 
