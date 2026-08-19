@@ -45,6 +45,18 @@ public final class Cgroup {
             return;
         }
 
+        // Reject if the cgroup already has processes (runc compat: error for
+        // a non-empty cgroup to avoid resource conflicts).
+        try {
+            String procs = Files.readString(full.resolve("cgroup.procs")).trim();
+            if (!procs.isEmpty()) {
+                throw new RuntimeException(
+                        "container's cgroup is not empty: " + full);
+            }
+        } catch (IOException ignored) {
+            // cgroup.procs not readable yet (newly created directory)
+        }
+
         // Ensure controllers are enabled in the parent's subtree_control so this cgroup
         // can use them. Walk from root downward.
         enableControllers(full, linux != null ? linux.resources : null);
@@ -181,9 +193,12 @@ public final class Cgroup {
             }
         }
         if (r.pids != null) {
-            if (r.pids.limit == -1L || r.pids.limit == 0L) {
-                // runc: -1 means unlimited ("max"), 0 also means unlimited
+            if (r.pids.limit == -1L) {
+                // runc: -1 means unlimited ("max")
                 writes.add(Map.entry("pids.max", "max"));
+            } else if (r.pids.limit == 0L) {
+                // runc: 0 is silently remapped to 1 (TasksMax=0 is invalid)
+                writes.add(Map.entry("pids.max", "1"));
             } else if (r.pids.limit > 0) {
                 writes.add(Map.entry("pids.max", Long.toString(r.pids.limit)));
             }

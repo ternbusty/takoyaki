@@ -48,14 +48,19 @@ public final class ListCommand {
             return 0;
         }
         if ("json".equals(format)) {
-            // runc list --format json includes a "rootfs" field derived from
-            // the bundle path + "/rootfs".
+            // runc list --format json emits a fixed field order:
+            //   ociVersion, id, pid, status, bundle, rootfs, created
+            // "rootfs" is derived from the bundle path and "annotations" is
+            // omitted entirely.
             System.out.println(Json.encode(states.stream().map(s -> {
-                @SuppressWarnings("unchecked")
-                java.util.Map<String, Object> m =
-                        new java.util.LinkedHashMap<>((java.util.Map<String, Object>) s.toJson());
-                String rootfs = s.bundle != null ? s.bundle + "/rootfs" : "";
-                m.put("rootfs", rootfs);
+                java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+                m.put("ociVersion", s.ociVersion);
+                m.put("id", s.id);
+                m.put("pid", s.pid);
+                m.put("status", s.status);
+                m.put("bundle", s.bundle);
+                m.put("rootfs", s.bundle != null ? s.bundle + "/rootfs" : "");
+                m.put("created", s.created);
                 return m;
             }).toList()));
             return 0;

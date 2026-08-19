@@ -22,6 +22,7 @@ public final class Spec {
     public Root root;
     public Process process;
     public String hostname;
+    public String domainname;
     public Linux linux;
     public List<Mount> mounts;
     public Hooks hooks;
@@ -44,6 +45,7 @@ public final class Spec {
         s.root = Root.fromJson(o.get("root"));
         s.process = Process.fromJson(o.get("process"));
         s.hostname = JsonMap.str(o, "hostname");
+        s.domainname = JsonMap.str(o, "domainname");
         s.linux = Linux.fromJson(o.get("linux"));
         s.mounts = JsonMap.list(o, "mounts", Mount::fromJson);
         s.hooks = Hooks.fromJson(o.get("hooks"));
@@ -57,6 +59,7 @@ public final class Spec {
         if (root != null) JsonMap.put(o, "root", root.toJson());
         if (process != null) JsonMap.put(o, "process", process.toJson());
         JsonMap.put(o, "hostname", hostname);
+        JsonMap.put(o, "domainname", domainname);
         if (linux != null) JsonMap.put(o, "linux", linux.toJson());
         JsonMap.put(o, "mounts", JsonMap.encList(mounts, Mount::toJson));
         if (hooks != null) JsonMap.put(o, "hooks", hooks.toJson());
@@ -99,6 +102,8 @@ public final class Spec {
         public Boolean terminal;
         public Box consoleSize;
         public Integer oomScoreAdj;
+        public IOPriority ioPriority;
+        public Scheduler scheduler;
 
         public static Process fromJson(Object node) {
             if (node == null) return null;
@@ -120,6 +125,8 @@ public final class Spec {
             p.terminal = JsonMap.boolBoxed(o, "terminal");
             p.consoleSize = Box.fromJson(o.get("consoleSize"));
             p.oomScoreAdj = JsonMap.intBoxed(o, "oomScoreAdj");
+            p.ioPriority = IOPriority.fromJson(o.get("ioPriority"));
+            p.scheduler = Scheduler.fromJson(o.get("scheduler"));
             return p;
         }
 
@@ -138,7 +145,111 @@ public final class Spec {
             JsonMap.put(o, "terminal", terminal);
             if (consoleSize != null) JsonMap.put(o, "consoleSize", consoleSize.toJson());
             JsonMap.put(o, "oomScoreAdj", oomScoreAdj);
+            if (ioPriority != null) JsonMap.put(o, "ioPriority", ioPriority.toJson());
+            if (scheduler != null) JsonMap.put(o, "scheduler", scheduler.toJson());
             return o;
+        }
+    }
+
+    public static final class IOPriority {
+        public String clazz;
+        public int priority;
+
+        public static IOPriority fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            IOPriority p = new IOPriority();
+            p.clazz = JsonMap.str(o, "class");
+            p.priority = JsonMap.intOr(o, "priority", 0);
+            return p;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "class", clazz);
+            JsonMap.putAlways(o, "priority", priority);
+            return o;
+        }
+
+        /** Map the OCI class string to the kernel constant. */
+        public int classValue() {
+            if (clazz == null) return 2; // IOPRIO_CLASS_BE
+            return switch (clazz) {
+                case "IOPRIO_CLASS_RT" -> 1;
+                case "IOPRIO_CLASS_BE" -> 2;
+                case "IOPRIO_CLASS_IDLE" -> 3;
+                default -> 2;
+            };
+        }
+    }
+
+    public static final class Scheduler {
+        public String policy;
+        public Integer nice;
+        public Integer priority;
+        public List<String> flags;
+        public Long runtime;
+        public Long deadline;
+        public Long period;
+
+        public static Scheduler fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            Scheduler s = new Scheduler();
+            s.policy = JsonMap.str(o, "policy");
+            s.nice = JsonMap.intBoxed(o, "nice");
+            s.priority = JsonMap.intBoxed(o, "priority");
+            s.flags = JsonMap.strList(o, "flags");
+            s.runtime = JsonMap.longBoxed(o, "runtime");
+            s.deadline = JsonMap.longBoxed(o, "deadline");
+            s.period = JsonMap.longBoxed(o, "period");
+            return s;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "policy", policy);
+            JsonMap.put(o, "nice", nice);
+            JsonMap.put(o, "priority", priority);
+            JsonMap.put(o, "flags", flags);
+            JsonMap.put(o, "runtime", runtime);
+            JsonMap.put(o, "deadline", deadline);
+            JsonMap.put(o, "period", period);
+            return o;
+        }
+
+        /** Map the OCI policy string to the kernel constant. */
+        public int policyValue() {
+            if (policy == null) return 0; // SCHED_OTHER
+            return switch (policy) {
+                case "SCHED_OTHER" -> 0;
+                case "SCHED_FIFO" -> 1;
+                case "SCHED_RR" -> 2;
+                case "SCHED_BATCH" -> 3;
+                case "SCHED_ISO" -> 4;
+                case "SCHED_IDLE" -> 5;
+                case "SCHED_DEADLINE" -> 6;
+                default -> 0;
+            };
+        }
+
+        /** Combine flag strings into a bitmask. */
+        public long flagBits() {
+            if (flags == null) return 0;
+            long bits = 0;
+            for (String f : flags) {
+                bits |= switch (f) {
+                    case "SCHED_FLAG_RESET_ON_FORK" -> 0x01;
+                    case "SCHED_FLAG_RECLAIM" -> 0x02;
+                    case "SCHED_FLAG_DL_OVERRUN" -> 0x04;
+                    case "SCHED_FLAG_KEEP_POLICY" -> 0x08;
+                    case "SCHED_FLAG_KEEP_PARAMS" -> 0x10;
+                    case "SCHED_FLAG_UTIL_CLAMP_MIN" -> 0x20;
+                    case "SCHED_FLAG_UTIL_CLAMP_MAX" -> 0x40;
+                    default -> 0L;
+                };
+            }
+            return bits;
         }
     }
 
@@ -227,6 +338,7 @@ public final class Spec {
         public int uid = 0;
         public int gid = 0;
         public List<Integer> additionalGids;
+        public Long umask;
 
         public static User fromJson(Object node) {
             if (node == null) return null;
@@ -235,6 +347,7 @@ public final class Spec {
             u.uid = JsonMap.intOr(o, "uid", 0);
             u.gid = JsonMap.intOr(o, "gid", 0);
             u.additionalGids = JsonMap.intList(o, "additionalGids");
+            u.umask = JsonMap.longBoxed(o, "umask");
             return u;
         }
 
@@ -243,6 +356,7 @@ public final class Spec {
             JsonMap.putAlways(o, "uid", uid);
             JsonMap.putAlways(o, "gid", gid);
             JsonMap.put(o, "additionalGids", additionalGids);
+            JsonMap.put(o, "umask", umask);
             return o;
         }
     }

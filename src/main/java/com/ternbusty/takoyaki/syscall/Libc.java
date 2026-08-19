@@ -61,6 +61,10 @@ public final class Libc {
         return LibcH.sethostname(arena.allocateFrom(name), name.getBytes().length);
     }
 
+    public static int setdomainname(Arena arena, String name) {
+        return LibcH.setdomainname(arena.allocateFrom(name), name.getBytes().length);
+    }
+
     public static int kill(int pid, int signal) {
         return LibcH.kill(pid, signal);
     }

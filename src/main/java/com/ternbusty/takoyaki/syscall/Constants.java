@@ -135,4 +135,11 @@ public final class Constants {
     public static final int S_IFIFO = Consts.S_IFIFO();
 
     public static final int KEYCTL_JOIN_SESSION_KEYRING = Consts.KEYCTL_JOIN_SESSION_KEYRING();
+
+    // ioprio / scheduler syscall numbers
+    public static final long NR_ioprio_set = Consts.SYS_ioprio_set();
+    public static final long NR_sched_setattr = Consts.SYS_sched_setattr();
+
+    // ioprio constants (from linux/ioprio.h)
+    public static final int IOPRIO_WHO_PROCESS = 1;
 }

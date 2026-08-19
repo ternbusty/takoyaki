@@ -141,8 +141,8 @@ public final class State {
         Map<String, Object> o = JsonMap.obj();
         JsonMap.put(o, "ociVersion", ociVersion);
         JsonMap.put(o, "id", id);
-        JsonMap.put(o, "status", status);
         JsonMap.put(o, "pid", pid);
+        JsonMap.put(o, "status", status);
         JsonMap.put(o, "bundle", bundle);
         JsonMap.put(o, "annotations", annotations);
         JsonMap.put(o, "created", created);

@@ -86,6 +86,10 @@ public final class ExecProcess {
             // oom_score_adj first, while still privileged; inherited across execve.
             ProcessRestrictions.applyOomScoreAdj(payload.process.oomScoreAdj);
 
+            // I/O priority and scheduler before the restriction sequence.
+            ProcessRestrictions.applyIOPriority(payload.process.ioPriority);
+            ProcessRestrictions.applyScheduler(payload.process.scheduler);
+
             // getpid() is the pid inside the container's pid ns — the same
             // perspective the init path reports to a SCMP_ACT_NOTIFY listener,
             // and the pid the seccomp filter actually applies to.

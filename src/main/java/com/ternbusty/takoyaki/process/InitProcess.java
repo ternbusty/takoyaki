@@ -224,6 +224,14 @@ public final class InitProcess {
                 }
             }
 
+            if (spec.domainname != null && !spec.domainname.isEmpty()) {
+                if (Libc.setdomainname(arena, spec.domainname) != 0) {
+                    Logger.warn("setdomainname failed: " + Libc.strerror(Libc.errno()));
+                } else {
+                    Logger.debug("domainname set to " + spec.domainname);
+                }
+            }
+
             // Mask sensitive paths and remount others read-only BEFORE the root is made RO,
             // so the bind / remount itself can still succeed.
             if (spec.linux != null) {
@@ -245,6 +253,17 @@ public final class InitProcess {
             // the restriction sequence so no seccomp filter can veto keyctl.
             if (!"1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"))) {
                 Keyring.joinNewSession("takoyaki-" + Libc.getpid());
+            }
+
+            // Default umask 0022 for the init path (runc compat). The
+            // restriction sequence may override it from the spec.
+            Libc.umask(0022);
+
+            // I/O priority and scheduler must be applied while still
+            // fully privileged, before the restriction sequence drops caps.
+            if (spec.process != null) {
+                ProcessRestrictions.applyIOPriority(spec.process.ioPriority);
+                ProcessRestrictions.applyScheduler(spec.process.scheduler);
             }
 
             ProcessRestrictions.apply(spec.process,
