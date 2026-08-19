@@ -672,6 +672,7 @@ public final class Spec {
         public Long limit;
         public Long reservation;
         public Long swap;
+        public Boolean checkBeforeUpdate;
 
         public static LinuxMemory fromJson(Object node) {
             if (node == null) return null;
@@ -680,6 +681,7 @@ public final class Spec {
             m.limit = JsonMap.longBoxed(o, "limit");
             m.reservation = JsonMap.longBoxed(o, "reservation");
             m.swap = JsonMap.longBoxed(o, "swap");
+            m.checkBeforeUpdate = JsonMap.boolBoxed(o, "checkBeforeUpdate");
             return m;
         }
 
@@ -688,6 +690,7 @@ public final class Spec {
             JsonMap.put(o, "limit", limit);
             JsonMap.put(o, "reservation", reservation);
             JsonMap.put(o, "swap", swap);
+            JsonMap.put(o, "checkBeforeUpdate", checkBeforeUpdate);
             return o;
         }
     }

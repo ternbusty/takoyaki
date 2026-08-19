@@ -43,6 +43,9 @@ public final class ListCommand {
             return 1;
         }
 
+        // runc sorts containers by ID (alphabetical order).
+        states.sort(java.util.Comparator.comparing(s -> s.id));
+
         if (quiet) {
             for (State s : states) System.out.println(s.id);
             return 0;

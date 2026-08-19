@@ -24,6 +24,18 @@ public final class Cgroup {
     private static final Set<String> KNOWN_CONTROLLERS =
             Set.of("cpu", "cpuset", "memory", "pids", "io", "hugetlb");
 
+    /**
+     * Control files whose write failures should propagate as exceptions during
+     * container setup (strict mode). These are the core resource files; an
+     * invalid value (e.g. too-small period) should abort create rather than
+     * silently succeed.
+     */
+    private static final Set<String> STRICT_FILES = Set.of(
+            "cpu.max", "cpu.weight", "cpu.idle",
+            "cpuset.cpus", "cpuset.mems",
+            "memory.max", "memory.low", "memory.swap.max",
+            "pids.max");
+
     private Cgroup() {}
 
     /**
@@ -72,7 +84,7 @@ public final class Cgroup {
         // can use them. Walk from root downward.
         enableControllers(full, linux != null ? linux.resources : null);
 
-        applyLimits(full, linux != null ? linux.resources : null);
+        applyLimits(full, linux != null ? linux.resources : null, true);
 
         addPid(cgroupPath, pid);
 
@@ -139,6 +151,10 @@ public final class Cgroup {
     }
 
     private static void applyLimits(Path full, Spec.LinuxResources r) {
+        applyLimits(full, r, false);
+    }
+
+    private static void applyLimits(Path full, Spec.LinuxResources r, boolean strict) {
         if (r == null) return;
         // Realtime scheduling limits are a cgroup v1 concept — v2 removed
         // cpu.rt_period_us / cpu.rt_runtime_us entirely. Silently ignoring
@@ -149,7 +165,11 @@ public final class Cgroup {
                     + " on cgroup v2; ignoring");
         }
         for (Map.Entry<String, String> e : plannedWrites(r)) {
-            writeIfPossible(full.resolve(e.getKey()), e.getValue());
+            if (strict && STRICT_FILES.contains(e.getKey())) {
+                writeRequired(full.resolve(e.getKey()), e.getValue());
+            } else {
+                writeIfPossible(full.resolve(e.getKey()), e.getValue());
+            }
         }
     }
 
@@ -183,8 +203,7 @@ public final class Cgroup {
                 writes.add(Map.entry("cpuset.mems", r.cpu.mems));
             }
             if (r.cpu.shares != null && r.cpu.shares > 0) {
-                long w = 1 + ((r.cpu.shares - 2L) * 9999L / 262142L);
-                if (w > 10000L) w = 10000L;
+                long w = convertSharesToWeight(r.cpu.shares);
                 writes.add(Map.entry("cpu.weight", Long.toString(w)));
             }
             if (r.cpu.quota != null || r.cpu.period != null) {
@@ -272,6 +291,16 @@ public final class Cgroup {
         }
     }
 
+    private static void writeRequired(Path p, String v) {
+        try {
+            Files.writeString(p, v);
+            Logger.debug("set " + p.getFileName() + "=" + v);
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "unable to set " + p.getFileName() + " to \"" + v + "\": " + e.getMessage());
+        }
+    }
+
     private static void writeIfPossible(Path p, String v) {
         try {
             Files.writeString(p, v);
@@ -286,24 +315,79 @@ public final class Cgroup {
         Path full = dir(cgroupPath);
         if (!Files.exists(full)) return;
 
-        // cgroup v2: writing "1" to cgroup.kill sends SIGKILL to every process
-        // in this cgroup (Linux 5.14+). Best-effort — older kernels don't have
-        // the file and the parent's SIGKILL on state.pid handles that path.
+        // Kill all processes in this cgroup tree (including subcgroups).
+        killCgroupTree(full);
+
+        // Remove subcgroup directories bottom-up, then the main directory.
+        // Subcgroups must be removed before the parent (kernel requirement).
         try {
-            Files.writeString(full.resolve("cgroup.kill"), "1");
-        } catch (IOException ignored) {}
+            removeSubcgroups(full);
+        } catch (IOException e) {
+            Logger.debug("subcgroup cleanup: " + e.getMessage());
+        }
 
         // rmdir(2) on a cgroup v2 directory returns EBUSY ("Device or resource
         // busy") even briefly after the cgroup empties — the kernel runs an
         // async tear-down (cgroup_destroy_locked schedules work). Polling
         // cgroup.procs isn't enough to gate rmdir; we need to retry rmdir
         // itself. runc does the same in libcontainer/cgroups/fs2.
+        retryRmdir(full);
+    }
+
+    /**
+     * Send SIGKILL to every process in the cgroup tree rooted at {@code dir}.
+     * Uses cgroup.kill (Linux 5.14+) where available, falling back to reading
+     * cgroup.procs.
+     */
+    private static void killCgroupTree(Path dir) {
+        // Try cgroup.kill first (applies to subtree)
+        try {
+            Files.writeString(dir.resolve("cgroup.kill"), "1");
+            return;
+        } catch (IOException ignored) {}
+
+        // Fallback: iterate subcgroups and kill manually
+        try (java.util.stream.Stream<Path> children = Files.list(dir)) {
+            children.filter(Files::isDirectory).forEach(Cgroup::killCgroupTree);
+        } catch (IOException ignored) {}
+        try {
+            String procs = Files.readString(dir.resolve("cgroup.procs")).trim();
+            if (!procs.isEmpty()) {
+                for (String line : procs.split("\n")) {
+                    try {
+                        int pid = Integer.parseInt(line.trim());
+                        com.ternbusty.takoyaki.syscall.Libc.kill(pid,
+                                com.ternbusty.takoyaki.syscall.Constants.SIGKILL);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        } catch (IOException ignored) {}
+    }
+
+    /**
+     * Recursively remove subcgroup directories (depth-first). Each subcgroup is
+     * removed with retryRmdir to handle the async kernel teardown. Leaves the
+     * top-level {@code dir} in place for the caller to remove.
+     */
+    private static void removeSubcgroups(Path dir) throws IOException {
+        try (java.util.stream.Stream<Path> children = Files.list(dir)) {
+            for (Path child : children.toList()) {
+                if (Files.isDirectory(child) && !Files.isSymbolicLink(child)) {
+                    removeSubcgroups(child);
+                    retryRmdir(child);
+                }
+            }
+        }
+    }
+
+    /** Retry rmdir with back-off for up to 5 seconds. */
+    private static void retryRmdir(Path dir) {
         IOException last = null;
         long deadlineNs = System.nanoTime() + 5_000_000_000L;
         while (System.nanoTime() < deadlineNs) {
             try {
-                Files.delete(full);
-                Logger.debug("cgroup dir removed: " + full);
+                Files.delete(dir);
+                Logger.debug("cgroup dir removed: " + dir);
                 return;
             } catch (java.nio.file.NoSuchFileException e) {
                 return;
@@ -316,7 +400,24 @@ public final class Cgroup {
                 }
             }
         }
-        Logger.warn("cgroup cleanup failed (" + full + "): "
+        Logger.warn("cgroup cleanup failed (" + dir + "): "
                 + (last != null ? last.getMessage() : "deadline elapsed"));
+    }
+
+    /**
+     * Convert cgroup v1 CPU shares to cgroup v2 weight using the same
+     * logarithmic formula as runc's {@code ConvertCPUSharesToCgroupV2Value}.
+     * cgroup v1 shares (2..262144) are on an exponential scale, while v2
+     * weights (1..10000) are linear.  A naive linear interpolation would
+     * compress the low end; this log-based conversion preserves proportional
+     * relationships.
+     */
+    static long convertSharesToWeight(long shares) {
+        if (shares == 0) return 0;
+        if (shares <= 2) return 1;
+        if (shares >= 262144) return 10000;
+        double l = Math.log(shares) / Math.log(2);
+        double exponent = (l * l + 125.0 * l) / 612.0 - 7.0 / 34.0;
+        return (long) (Math.pow(10, exponent) + 0.99);
     }
 }

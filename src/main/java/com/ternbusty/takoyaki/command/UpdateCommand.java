@@ -42,6 +42,11 @@ public final class UpdateCommand {
         if (memory != null) {
             if (r.memory == null) r.memory = new Spec.LinuxMemory();
             r.memory.limit = memory;
+            // runc compat: when memory limit is removed (-1), swap is also
+            // removed unless an explicit --memory-swap value was given.
+            if (memory == -1L && memorySwap == null && r.memory.swap == null) {
+                r.memory.swap = -1L;
+            }
         }
         if (memoryReservation != null) {
             if (r.memory == null) r.memory = new Spec.LinuxMemory();
@@ -70,7 +75,13 @@ public final class UpdateCommand {
             if (cpuPeriod != null) r.cpu.period = cpuPeriod;
             if (cpuShares != null) r.cpu.shares = cpuShares;
             if (cpuBurst != null) r.cpu.burst = cpuBurst;
-            if (cpuIdle != null) r.cpu.idle = cpuIdle;
+            if (cpuIdle != null) {
+                if (cpuIdle != 0 && cpuIdle != 1) {
+                    System.err.println("invalid value for cpu.idle: must be 0 or 1, got " + cpuIdle);
+                    return 1;
+                }
+                r.cpu.idle = cpuIdle;
+            }
         }
         if (cpusetCpus != null) {
             if (r.cpu == null) r.cpu = new Spec.LinuxCpu();
@@ -81,7 +92,47 @@ public final class UpdateCommand {
             r.pids.limit = pidsLimit;
         }
 
+        // Validate cpu.idle regardless of source (CLI or JSON).
+        if (r.cpu != null && r.cpu.idle != null && r.cpu.idle != 0 && r.cpu.idle != 1) {
+            System.err.println("invalid value for cpu.idle: must be 0 or 1, got " + r.cpu.idle);
+            return 1;
+        }
+
+        // runc compat: checkBeforeUpdate prevents setting memory limits
+        // below current usage, avoiding instant OOM kills.
+        if (r.memory != null && Boolean.TRUE.equals(r.memory.checkBeforeUpdate)) {
+            java.nio.file.Path cgDir = Cgroup.dir(cgroupPath);
+            if (r.memory.limit != null && r.memory.limit > 0) {
+                long usage = readCgroupLong(cgDir.resolve("memory.current"));
+                if (usage > 0 && r.memory.limit < usage) {
+                    System.err.println("rejecting memory limit " + r.memory.limit
+                            + " (current usage is " + usage + ")");
+                    return 1;
+                }
+            }
+            if (r.memory.swap != null && r.memory.swap > 0 && r.memory.limit != null) {
+                long memUsage = readCgroupLong(cgDir.resolve("memory.current"));
+                long swapUsage = readCgroupLong(cgDir.resolve("memory.swap.current"));
+                long totalUsage = memUsage + swapUsage;
+                if (totalUsage > 0 && r.memory.swap < totalUsage) {
+                    System.err.println("rejecting memory+swap limit " + r.memory.swap
+                            + " (current usage is " + totalUsage + ")");
+                    return 1;
+                }
+            }
+        }
+
         Cgroup.applyLimitsOnly(cgroupPath, r);
         return 0;
+    }
+
+    private static long readCgroupLong(java.nio.file.Path p) {
+        try {
+            String v = java.nio.file.Files.readString(p).trim();
+            if ("max".equals(v)) return Long.MAX_VALUE;
+            return Long.parseLong(v);
+        } catch (Exception e) {
+            return -1;
+        }
     }
 }

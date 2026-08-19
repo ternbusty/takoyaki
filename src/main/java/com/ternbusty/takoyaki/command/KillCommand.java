@@ -24,9 +24,28 @@ public final class KillCommand {
             return 1;
         }
         if (!state.statusEnum().canKill()) {
-            if (all) return 0; // -a suppresses error for stopped containers
-            System.err.println("container not running");
-            return 1;
+            // runc compat: when the container uses the host PID namespace, the
+            // init process may die while worker processes remain alive in the
+            // cgroup. Allow kill if the cgroup still has processes.
+            boolean cgroupAlive = false;
+            if (state.statusEnum() == com.ternbusty.takoyaki.state.ContainerStatus.STOPPED) {
+                try {
+                    var kc = com.ternbusty.takoyaki.config.KontainerConfig.load(rootPath, containerId);
+                    if (kc.cgroupPath != null) {
+                        java.nio.file.Path procsFile = com.ternbusty.takoyaki.cgroup.Cgroup.dir(kc.cgroupPath)
+                                .resolve("cgroup.procs");
+                        if (java.nio.file.Files.exists(procsFile)) {
+                            String content = java.nio.file.Files.readString(procsFile).trim();
+                            cgroupAlive = !content.isEmpty();
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (!cgroupAlive) {
+                if (all) return 0; // -a suppresses error for stopped containers
+                System.err.println("container not running");
+                return 1;
+            }
         }
 
         // Try cgroup-based kill first (covers host pidns and multi-process
