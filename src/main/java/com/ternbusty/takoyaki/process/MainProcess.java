@@ -57,8 +57,12 @@ public final class MainProcess {
             // inside InitProcess, AFTER the JVM has come up, so only the user
             // process inherits the spec's resource caps.
 
-            boolean hasUserNs = spec.hasNamespace("user");
-            if (hasUserNs) {
+            // The uid/gid map handshake only happens when the user namespace
+            // is being *created* (no .path on the namespace entry). When the
+            // config specifies a .path the bootstrap joins that existing userns
+            // via setns(2) and never sends SYNC_USERMAP_PLS.
+            boolean creatingUserNs = spec.isCreatingNamespace("user");
+            if (creatingUserNs) {
                 int req = SyncChannel.readInt32(syncFd);
                 if (req != SyncChannel.MSG_USERMAP_PLS) {
                     throw new RuntimeException("expected USERMAP_PLS, got 0x" + Integer.toHexString(req));

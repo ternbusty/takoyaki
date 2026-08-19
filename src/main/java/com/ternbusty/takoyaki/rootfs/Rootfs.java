@@ -126,7 +126,7 @@ public final class Rootfs {
         String pts = dev + "/pts";
         try { Files.createDirectories(Path.of(pts)); } catch (IOException ignored) {}
         if (Libc.mount(arena, "devpts", pts, "devpts",
-                Constants.MS_NOSUID | Constants.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620") != 0) {
+                Constants.MS_NOSUID | Constants.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620,gid=5") != 0) {
             Logger.debug("mount /dev/pts: " + Libc.strerror(Libc.errno()));
         }
 

@@ -107,11 +107,36 @@ public final class ConsoleSocket {
         }
     }
 
+    /**
+     * Set the terminal window size on the given pty fd. Must be called before
+     * wireStdio so the slave inherits the size. struct winsize is {rows, cols,
+     * xpixel, ypixel} = 4 unsigned shorts = 8 bytes.
+     */
+    public static void setWinsize(int fd, int rows, int cols) {
+        if (rows <= 0 && cols <= 0) return;
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment ws = arena.allocate(8);
+            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 0, (short) rows);
+            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 2, (short) cols);
+            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 4, (short) 0);
+            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 6, (short) 0);
+            if (Libc.ioctl(fd, Constants.TIOCSWINSZ, ws) != 0) {
+                Logger.warn("TIOCSWINSZ failed: " + Libc.strerror(Libc.errno()));
+            }
+        }
+    }
+
     /** Replace stdin/stdout/stderr with the slave fd and become the controlling tty. */
     public static void wireStdio(int slaveFd) {
         try {
             // setsid creates a new session and detaches from the current controlling tty.
             PosixH.setsid();
+            // Make the slave the controlling terminal for this session. Without
+            // TIOCSCTTY the slave is just an open fd, not the controlling tty, so
+            // `tty` / `stty size` and job control would not work.
+            if (Libc.ioctl(slaveFd, Constants.TIOCSCTTY, MemorySegment.NULL) != 0) {
+                Logger.warn("TIOCSCTTY failed: " + Libc.strerror(Libc.errno()));
+            }
             PosixH.dup2(slaveFd, 0);
             PosixH.dup2(slaveFd, 1);
             PosixH.dup2(slaveFd, 2);

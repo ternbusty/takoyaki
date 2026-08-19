@@ -304,6 +304,11 @@ public final class InitProcess {
             PosixIO.close(mainSenderFd);
 
             if (ptySlave >= 0) {
+                if (spec.process != null && spec.process.consoleSize != null) {
+                    ConsoleSocket.setWinsize(ptySlave,
+                            spec.process.consoleSize.height,
+                            spec.process.consoleSize.width);
+                }
                 ConsoleSocket.wireStdio(ptySlave);
             }
 

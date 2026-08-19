@@ -129,6 +129,10 @@ public final class Constants {
     public static final long SIOCGIFFLAGS = Consts.SIOCGIFFLAGS();
     public static final long SIOCSIFFLAGS = Consts.SIOCSIFFLAGS();
     public static final int IFF_UP = Consts.IFF_UP();
+    // TTY ioctl codes (not in jextract headers, stable across Linux architectures)
+    public static final long TIOCSCTTY  = 0x540EL;
+    public static final long TIOCSWINSZ = 0x5414L;
+    public static final long TIOCGWINSZ = 0x5413L;
 
     // mknod / stat mode bits
     public static final int S_IFCHR = Consts.S_IFCHR();

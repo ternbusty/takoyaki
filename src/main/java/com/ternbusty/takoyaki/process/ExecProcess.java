@@ -146,6 +146,12 @@ public final class ExecProcess {
                 if (pty != null) {
                     if (com.ternbusty.takoyaki.console.ConsoleSocket
                             .sendMasterVia(consoleFd, pty.master)) {
+                        if (payload.process.consoleSize != null) {
+                            com.ternbusty.takoyaki.console.ConsoleSocket.setWinsize(
+                                    pty.slave,
+                                    payload.process.consoleSize.height,
+                                    payload.process.consoleSize.width);
+                        }
                         com.ternbusty.takoyaki.console.ConsoleSocket.wireStdio(pty.slave);
                     }
                     PosixIO.close(pty.master);

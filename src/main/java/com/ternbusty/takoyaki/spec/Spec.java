@@ -36,6 +36,15 @@ public final class Spec {
         return false;
     }
 
+    /** True when the spec creates a NEW namespace of this type (no .path). */
+    public boolean isCreatingNamespace(String type) {
+        if (linux == null || linux.namespaces == null) return false;
+        for (Namespace ns : linux.namespaces) {
+            if (type.equals(ns.type) && (ns.path == null || ns.path.isEmpty())) return true;
+        }
+        return false;
+    }
+
     public static Spec fromJson(Object node) {
         if (node == null) return null;
         Map<String, Object> o = JsonMap.asObject(node);

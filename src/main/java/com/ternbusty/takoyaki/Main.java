@@ -16,6 +16,7 @@ import com.ternbusty.takoyaki.command.StartCommand;
 import com.ternbusty.takoyaki.command.StateCommand;
 import com.ternbusty.takoyaki.command.UpdateCommand;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.process.ExecProcess;
 import com.ternbusty.takoyaki.process.InitProcess;
 
@@ -564,6 +565,7 @@ public final class Main {
         int preserveFds = 0;
         String consoleSocket = null;
         String cgroupPath = null;
+        String consoleSizeStr = null;
         boolean afterPositional = false;
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
@@ -638,6 +640,11 @@ public final class Main {
                     else if (i + 1 >= args.length) return missingArg("exec", a);
                     else cgroupPath = args[++i];
                 }
+                case "--console-size" -> {
+                    if (flagVal != null) { consoleSizeStr = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else consoleSizeStr = args[++i];
+                }
                 case "--no-new-privs" -> { /* accepted for compat, always-on in takoyaki */ }
                 case "--apparmor", "--process-label" -> {
                     // Accept and skip these flags with their values
@@ -670,9 +677,24 @@ public final class Main {
                 return 1;
             }
         }
+        // Parse --console-size WIDTH:HEIGHT (runc uses WIDTH:HEIGHT order)
+        Spec.Box consoleSize = null;
+        if (consoleSizeStr != null) {
+            String[] parts = consoleSizeStr.split(":");
+            if (parts.length == 2) {
+                try {
+                    consoleSize = new Spec.Box();
+                    consoleSize.width = Integer.parseInt(parts[0]);
+                    consoleSize.height = Integer.parseInt(parts[1]);
+                } catch (NumberFormatException e) {
+                    System.err.println("takoyaki exec: bad console-size: " + consoleSizeStr);
+                    return 1;
+                }
+            }
+        }
         return ExecCommand.run(rootPath, id, processJson, user, cwd, envs, command,
                 detach, pidFile, tty, consoleSocket, additionalGids, caps,
-                preserveFds, cgroupPath);
+                preserveFds, cgroupPath, consoleSize);
     }
 
     // ---- small helpers ------------------------------------------------

@@ -47,7 +47,7 @@ public final class ExecCommand {
                           String user, String cwd, List<String> envs, List<String> command,
                           boolean detach, String pidFile, boolean tty, String consoleSocket,
                           List<String> additionalGids, List<String> caps, int preserveFds,
-                          String subCgroupPath) {
+                          String subCgroupPath, Spec.Box consoleSize) {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
             System.err.println(exclusivity);
@@ -97,6 +97,11 @@ public final class ExecCommand {
         } catch (Exception e) {
             System.err.println("failed to build process document: " + e.getMessage());
             return EXIT_RUNTIME_ERROR;
+        }
+
+        // Apply --console-size if provided by the CLI.
+        if (consoleSize != null) {
+            process.consoleSize = consoleSize;
         }
 
         // Resolve effective execCPUAffinity: process.json overrides config.json.
