@@ -8,6 +8,8 @@ import com.ternbusty.takoyaki.syscall.PosixIO;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -85,6 +87,7 @@ public final class InternalConsole {
                 masterFd = ScmRights.recvFd(connFd);
                 PosixIO.close(connFd);
                 if (masterFd >= 0) {
+                    clearONLCR(masterFd);
                     Logger.debug("internal console: received master fd " + masterFd);
                 } else {
                     Logger.warn("internal console: failed to receive master fd");
@@ -109,6 +112,7 @@ public final class InternalConsole {
     public static int receiveMasterFromSocket(int sockFd) {
         int fd = ScmRights.recvFd(sockFd);
         if (fd >= 0) {
+            clearONLCR(fd);
             Logger.debug("internal console (exec): received master fd " + fd);
         }
         return fd;
@@ -159,6 +163,30 @@ public final class InternalConsole {
         writer.start();
 
         return reader;
+    }
+
+    /**
+     * Clear the ONLCR flag on a PTY master fd so that output newlines are
+     * passed through verbatim instead of being converted to CR+LF. This
+     * matches runc's {@code console.ClearONLCR()} and is essential for bats
+     * test output comparisons.
+     */
+    public static void clearONLCR(int fd) {
+        try (Arena arena = Arena.ofConfined()) {
+            // struct termios (kernel version): c_iflag(4) c_oflag(4) c_cflag(4)
+            // c_lflag(4) c_line(1) c_cc[19] = 36 bytes. Allocate 64 for safety.
+            MemorySegment termios = arena.allocate(64);
+            if (Libc.ioctl(fd, Constants.TCGETS, termios) != 0) {
+                Logger.debug("clearONLCR: TCGETS failed: " + Libc.strerror(Libc.errno()));
+                return;
+            }
+            int oflag = termios.get(ValueLayout.JAVA_INT, 4);
+            oflag &= ~Constants.ONLCR;
+            termios.set(ValueLayout.JAVA_INT, 4, oflag);
+            if (Libc.ioctl(fd, Constants.TCSETS, termios) != 0) {
+                Logger.debug("clearONLCR: TCSETS failed: " + Libc.strerror(Libc.errno()));
+            }
+        }
     }
 
     /** Clean up: close master fd, remove socket file. */

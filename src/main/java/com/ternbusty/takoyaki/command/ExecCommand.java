@@ -196,9 +196,11 @@ public final class ExecCommand {
         if (p.args == null || p.args.isEmpty()) {
             throw new IllegalArgumentException("no command specified");
         }
-        if (tty) {
-            p.terminal = true;
-        }
+        // runc compat: exec defaults to terminal=false unless -t is
+        // explicitly passed. Without this, exec inherits terminal=true from
+        // the container spec and allocates a PTY for every exec, breaking
+        // output comparison in bats tests.
+        p.terminal = tty;
         if (user != null) {
             String[] uv = user.split(":");
             Spec.User u = new Spec.User();

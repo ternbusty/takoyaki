@@ -133,6 +133,11 @@ public final class Constants {
     public static final long TIOCSCTTY  = 0x540EL;
     public static final long TIOCSWINSZ = 0x5414L;
     public static final long TIOCGWINSZ = 0x5413L;
+    // termios ioctl codes (asm-generic, same on x86_64 and aarch64)
+    public static final long TCGETS = 0x5401L;
+    public static final long TCSETS = 0x5402L;
+    // termios c_oflag bits
+    public static final int ONLCR = 0x4;
 
     // mknod / stat mode bits
     public static final int S_IFCHR = Consts.S_IFCHR();

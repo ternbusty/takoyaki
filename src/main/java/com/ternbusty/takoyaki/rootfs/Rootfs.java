@@ -297,7 +297,12 @@ public final class Rootfs {
                 || m.destination.equals("/sys") || m.destination.equals("/dev/shm")
                 || m.destination.equals("/dev/pts") || m.destination.equals("/dev/mqueue")
                 || m.destination.equals("/sys/fs/cgroup")) continue;
-            String target = rootfsPath + m.destination;
+            // Resolve symlinks in the destination path within the rootfs
+            // scope, so bind mounts through dangling symlinks end up at the
+            // correct host-side path. The resolved target is used for both
+            // mkdir and mount(2); the original destination stays for logging.
+            String resolved = resolveInRootfs(rootfsPath, m.destination);
+            String target = resolved;
             String type = m.type != null ? m.type : "none";
             MountOptions.Parsed parsed = MountOptions.parse(m.options);
             long flags = parsed.flags;
@@ -513,35 +518,34 @@ public final class Rootfs {
      * create a directory. Also resolves symlinks in the destination path within
      * the rootfs scope, creating intermediate directories as needed.
      */
+    /**
+     * Create the mount target directory or file at the already-resolved host
+     * path {@code target}. For bind mounts where the source is a regular file,
+     * create a file (not a directory).
+     */
     private static void createMountTarget(String rootfsPath, Spec.Mount m,
                                           String target, boolean isBind) {
         try {
-            // Resolve the full target path within rootfs, following symlinks.
-            String resolved = resolveInRootfs(rootfsPath, m.destination);
             boolean isFile = false;
             if (isBind && m.source != null) {
-                // Check if the source is a file (not a directory).
                 Path srcPath = Path.of(m.source);
                 if (!srcPath.isAbsolute()) {
-                    // Relative source: resolve against CWD (spec bundle dir).
                     srcPath = Path.of(System.getProperty("user.dir", ".")).resolve(srcPath);
                 }
                 if (Files.isRegularFile(srcPath)) {
                     isFile = true;
                 }
             }
+            Path targetPath = Path.of(target);
             if (isFile) {
-                // Create parent directories then touch the target file.
-                Path resolvedPath = Path.of(resolved);
-                Files.createDirectories(resolvedPath.getParent());
-                if (!Files.exists(resolvedPath)) {
-                    Files.createFile(resolvedPath);
+                Files.createDirectories(targetPath.getParent());
+                if (!Files.exists(targetPath)) {
+                    Files.createFile(targetPath);
                 }
             } else {
-                Files.createDirectories(Path.of(resolved));
+                Files.createDirectories(targetPath);
             }
         } catch (IOException e) {
-            // Fallback: use the literal target path.
             try { Files.createDirectories(Path.of(target)); }
             catch (IOException ignored) {}
         }
@@ -551,28 +555,46 @@ public final class Rootfs {
      * Resolve a container-relative path within rootfsPath, following symlinks
      * component by component but keeping the result under rootfsPath.
      * Returns the fully resolved host-side path.
+     *
+     * <p>When a symlink target is itself an absolute path (e.g. /tmp/foo), it
+     * is re-rooted under rootfsPath. Its components are then resolved
+     * recursively so multi-hop chains (A -> /B -> /C/D) work.
      */
     private static String resolveInRootfs(String rootfsPath, String destination) {
         Path rootfs = Path.of(rootfsPath);
-        // Split destination into components and resolve one at a time.
-        String[] components = destination.split("/");
-        Path current = rootfs;
-        for (String comp : components) {
+        return resolveComponents(rootfs, destination.split("/"), 0, rootfs, 0).toString();
+    }
+
+    private static Path resolveComponents(Path rootfs, String[] components,
+                                           int startIdx, Path current, int depth) {
+        if (depth > 255) return current; // symlink loop guard
+        for (int i = startIdx; i < components.length; i++) {
+            String comp = components[i];
             if (comp.isEmpty()) continue;
             Path next = current.resolve(comp);
             if (Files.isSymbolicLink(next)) {
                 try {
                     Path linkTarget = Files.readSymbolicLink(next);
+                    Path base;
                     if (linkTarget.isAbsolute()) {
-                        // Absolute symlink: re-root under rootfs.
-                        current = rootfs.resolve(linkTarget.toString().substring(1)).normalize();
+                        base = rootfs;
                     } else {
-                        current = current.resolve(linkTarget).normalize();
+                        base = current;
                     }
+                    // Resolve the symlink target's components recursively so
+                    // multi-hop chains are followed correctly.
+                    String linkStr = linkTarget.toString();
+                    if (linkTarget.isAbsolute()) linkStr = linkStr.substring(1);
+                    String[] linkParts = linkStr.split("/");
+                    // Concatenate remaining original components after the link parts.
+                    int remaining = components.length - i - 1;
+                    String[] merged = new String[linkParts.length + remaining];
+                    System.arraycopy(linkParts, 0, merged, 0, linkParts.length);
+                    System.arraycopy(components, i + 1, merged, linkParts.length, remaining);
+                    Path resolved = resolveComponents(rootfs, merged, 0, base, depth + 1);
                     // Security: ensure we're still under rootfs.
-                    if (!current.startsWith(rootfs)) {
-                        current = rootfs;
-                    }
+                    if (!resolved.normalize().startsWith(rootfs)) return rootfs;
+                    return resolved;
                 } catch (IOException e) {
                     current = next;
                 }
@@ -580,7 +602,7 @@ public final class Rootfs {
                 current = next;
             }
         }
-        return current.toString();
+        return current;
     }
 
     /**
