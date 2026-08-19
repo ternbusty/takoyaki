@@ -29,8 +29,7 @@ public final class ExecPayload {
         p.ociVersion = JsonMap.str(o, "ociVersion");
         p.process = Spec.Process.fromJson(o.get("process"));
         p.seccomp = Spec.LinuxSeccomp.fromJson(o.get("seccomp"));
-        Number pf = JsonMap.num(o, "preserveFds");
-        p.preserveFds = pf != null ? pf.intValue() : 0;
+        p.preserveFds = JsonMap.intOr(o, "preserveFds", 0);
         return p;
     }
 
