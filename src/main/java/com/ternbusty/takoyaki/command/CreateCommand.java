@@ -65,6 +65,15 @@ public final class CreateCommand {
         // validates, but the conformance suite settles it). We therefore
         // defer this check to StartCommand below.
 
+        // OCI spec: when process.terminal is true, the runtime MUST provide
+        // a pseudo-terminal. Without --console-socket we have no way to ship
+        // the master fd to the caller, so fail early (runc compat).
+        if (spec.process != null && Boolean.TRUE.equals(spec.process.terminal)
+                && consoleSocket == null) {
+            System.err.println("terminal enabled but console-socket not provided");
+            return 1;
+        }
+
         String rootfsPath = spec.root.path.startsWith("/")
                 ? spec.root.path
                 : bundle + "/" + spec.root.path;

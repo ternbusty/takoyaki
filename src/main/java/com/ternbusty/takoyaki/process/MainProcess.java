@@ -130,7 +130,12 @@ public final class MainProcess {
             }
 
             if (pidFile != null) {
-                Files.writeString(Path.of(pidFile), Integer.toString(stage2Pid));
+                try {
+                    Files.writeString(Path.of(pidFile), Integer.toString(stage2Pid));
+                } catch (java.nio.file.NoSuchFileException nsf) {
+                    throw new RuntimeException(
+                            "open " + pidFile + ": no such file or directory");
+                }
             }
 
             Logger.info("container " + containerId + " created with init pid " + stage2Pid);

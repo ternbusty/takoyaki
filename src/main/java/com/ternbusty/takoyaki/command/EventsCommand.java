@@ -24,11 +24,11 @@ public final class EventsCommand {
         try {
             cgroupPath = KontainerConfig.load(rootPath, containerId).cgroupPath;
         } catch (IOException e) {
-            Logger.error("no cgroup recorded: " + e.getMessage());
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         if (cgroupPath == null) {
-            Logger.error("no cgroupsPath for container");
+            System.err.println("no cgroupsPath for container");
             return 1;
         }
         long intervalMs = parseInterval(interval);
@@ -93,8 +93,34 @@ public final class EventsCommand {
         pids.put("current", readLong(cg.resolve("pids.current")));
         pids.put("limit", readLong(cg.resolve("pids.max")));
         data.put("pids", pids);
+        // hugetlb stats: scan for hugetlb.<pagesize>.current files
+        Map<String, Object> hugetlb = readHugetlb(cg);
+        if (hugetlb != null && !hugetlb.isEmpty()) {
+            data.put("hugetlb", hugetlb);
+        }
         ev.put("data", data);
         return ev;
+    }
+
+    /** Collect hugetlb stats from hugetlb.<pagesize>.{current,max,events} files. */
+    private static Map<String, Object> readHugetlb(Path cg) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        try {
+            for (Path p : Files.newDirectoryStream(cg, "hugetlb.*.current")) {
+                // filename: hugetlb.<pagesize>.current
+                String name = p.getFileName().toString();
+                int dot1 = name.indexOf('.');
+                int dot2 = name.lastIndexOf('.');
+                if (dot1 < 0 || dot2 <= dot1) continue;
+                String pageSize = name.substring(dot1 + 1, dot2);
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("usage", readLong(p));
+                entry.put("max", readLong(cg.resolve("hugetlb." + pageSize + ".max")));
+                entry.put("failcnt", readLong(cg.resolve("hugetlb." + pageSize + ".events"), "max"));
+                result.put(pageSize, entry);
+            }
+        } catch (IOException ignored) {}
+        return result;
     }
 
     /** Read a single-value cgroup file as a stats map or as a raw long. */
