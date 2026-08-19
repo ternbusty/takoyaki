@@ -63,7 +63,9 @@ for name in "${TEST_NAMES[@]}"; do
     # Use script(1) to wrap bats in a pseudo-terminal, avoiding hangs
     # that occur when bats tests use the terminal for console-socket tests
     # in a non-TTY CI environment.
-    sudo -E PATH="$PATH" script -q -e -c \
+    # timeout(1) kills the test if it takes longer than 60 seconds,
+    # preventing a single hanging test from consuming the entire CI budget.
+    sudo -E PATH="$PATH" timeout 60 script -q -e -c \
         "bats -f \"^$TEST_CASE\$\" -t tests/integration" /dev/null
     rc=$?
 

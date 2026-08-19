@@ -150,6 +150,20 @@ public final class InitProcess {
 
             String containerId = System.getenv("_TAKOYAKI_CONTAINER_ID");
 
+            // Connect to the console socket BEFORE pivot_root while the host
+            // filesystem (and the socket path on it) is still reachable. The fd
+            // survives across pivot_root; PTY allocation + sendMasterVia happen
+            // later, after the container devpts is visible at /dev/pts.
+            String consoleSocketPath = System.getenv("_TAKOYAKI_CONSOLE_SOCKET");
+            boolean wantTerminal = spec.process != null && Boolean.TRUE.equals(spec.process.terminal);
+            int consoleSocketFd = -1;
+            if (wantTerminal && consoleSocketPath != null) {
+                consoleSocketFd = ConsoleSocket.connectTo(consoleSocketPath);
+                if (consoleSocketFd < 0) {
+                    Logger.warn("failed to connect to console socket " + consoleSocketPath);
+                }
+            }
+
             if (spec.hasNamespace("mount")) {
                 Rootfs.prepare(rootfsPath, spec, idmapFds);
                 // Additional devices declared in spec.linux.devices, before pivot_root.
@@ -225,24 +239,23 @@ public final class InitProcess {
                     buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
                     seccompListenerFd);
 
-            // PTY setup: if process.terminal is true and a console socket was passed,
-            // open a pty, ship the master to the console socket, and wire stdio to
-            // the slave. The new session leadership has to happen before wiring so the
-            // slave can become the controlling terminal of this process.
-            String consoleSocketPath = System.getenv("_TAKOYAKI_CONSOLE_SOCKET");
-            boolean wantTerminal = spec.process != null && Boolean.TRUE.equals(spec.process.terminal);
+            // PTY setup: if process.terminal is true and the console socket was
+            // pre-connected (before pivot_root), open a pty from the container's
+            // devpts, ship the master to the console socket, and wire stdio to
+            // the slave. The new session leadership has to happen before wiring so
+            // the slave can become the controlling terminal of this process.
             int ptySlave = -1;
-            if (wantTerminal && consoleSocketPath != null) {
+            if (consoleSocketFd >= 0) {
                 ConsoleSocket.PtyPair pty = ConsoleSocket.openPty();
                 if (pty != null) {
-                    if (!ConsoleSocket.sendMasterTo(consoleSocketPath, pty.master)) {
+                    if (!ConsoleSocket.sendMasterVia(consoleSocketFd, pty.master)) {
                         Logger.warn("failed to ship pty master, falling back to no-tty");
                     } else {
-                        Logger.debug("pty master sent to " + consoleSocketPath);
                         ptySlave = pty.slave;
                     }
                     PosixIO.close(pty.master);
                 }
+                PosixIO.close(consoleSocketFd);
             }
 
             SyncChannel.writeInt32(mainSenderFd, SyncChannel.MSG_INIT_READY);

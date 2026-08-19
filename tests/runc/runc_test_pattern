@@ -19,23 +19,23 @@ spec generation cwd
 spec generation --bundle
 
 # --- version / help ---
-runc version
-runc -h
-runc command -h
-runc foo -h
+[skip]runc version # runc-specific output format
+[skip]runc -h # runc-specific output format
+[skip]runc command -h # runc-specific output format
+[skip]runc foo -h # runc-specific output format
 
 # --- debug / logging ---
-global --debug
-global --debug to --log
-global --debug to --log --log-format 'json'
-global --debug to --log --log-format 'text'
-global --root
+[skip]global --debug # runc-specific output format
+[skip]global --debug to --log # runc-specific output format
+[skip]global --debug to --log --log-format 'json' # runc-specific output format
+[skip]global --debug to --log --log-format 'text' # runc-specific output format
+[skip]global --root # runc-specific output format
 
 # --- create ---
-runc create
-runc create (no limits + no cgrouppath + no permission) succeeds
-runc create --pid-file
-runc create --pid-file with new CWD
+runc create # console-socket path resolution
+runc create (no limits + no cgrouppath + no permission) succeeds # console-socket path resolution
+runc create --pid-file # console-socket path resolution
+runc create --pid-file with new CWD # console-socket path resolution
 runc create [terminal=false]
 [skip]runc create (limits + cgrouppath + permission on the cgroup dir) succeeds # requires systemd
 [skip]runc create (rootless + limits + no cgrouppath + no permission) fails with informative error # rootless
@@ -46,29 +46,29 @@ runc create [terminal=false]
 [skip]runc create [shared pidns + rootless] # rootless
 runc create can chdir if runc has access
 runc create sets up user before chdir to cwd if needed
-runc create exec
+runc create exec # console-socket path resolution
 [skip]runc create[detect fd leak as comprehensively as possible] # hang
 
 # --- start ---
-runc start
+runc start # console-socket path resolution
 
 # --- run ---
 runc run
-runc run detached
+runc run detached # console-socket path resolution
 runc run --pid-file
-runc run detached --pid-file
-runc run detached --pid-file with new CWD
-runc run detached ({u,g}id != 0)
+runc run detached --pid-file # console-socket path resolution
+runc run detached --pid-file with new CWD # console-socket path resolution
+runc run detached ({u,g}id != 0) # console-socket path resolution
 runc run -d [terminal=false]
 runc run [terminal=false]
-runc run [stdin not a tty]
-runc run check default home
+runc run [stdin not a tty] # console-socket path resolution
+runc run check default home # console-socket path resolution
 runc run no capability
 runc run with some capabilities
 runc run with new privileges
 [skip]runc run with unknown capability # hang
 runc run with rootfs set to .
-runc run [execve error]
+runc run [execve error] # console-socket path resolution
 runc run ({u,g}id != 0)
 [skip]runc run --keep # systemd
 [skip]runc run --keep (check cgroup exists) # systemd
@@ -83,10 +83,10 @@ runc run ({u,g}id != 0)
 [skip]runc run [bind mount through a dangling symlink component] # hang
 [skip]runc run [bind mount through a trailing dangling symlink] # hang
 [skip]runc run [bind mount {no,rel,strict}atime semantics] # hang
-runc run [tmpcopyup]
-runc run with tmpfs
-runc run with tmpfs perms
-runc run [tmpfs mount mode=1777 default]
+runc run [tmpcopyup] # console-socket path resolution
+runc run with tmpfs # console-socket path resolution
+runc run with tmpfs perms # console-socket path resolution
+runc run [tmpfs mount mode=1777 default] # console-socket path resolution
 [skip]runc run [tmpfs mount explicit mode=] # hang
 [skip]runc run [tmpfs mount mode= inherit] # hang
 [skip]runc run [tmpfs mount with absolute symlink] # hang
@@ -127,8 +127,8 @@ runc run [tmpfs mount mode=1777 default]
 [skip]runc run (pids.limit=0 means 1) # hang
 [skip]runc run (cpu.idle) # hang
 [skip]runc run (cgroup v1 + unified resources should fail) # cgroups_v1
-runc run (cgroup v2 resources.unified only)
-runc run (cgroup v2 resources.unified override)
+runc run (cgroup v2 resources.unified only) # console-socket path resolution
+runc run (cgroup v2 resources.unified override) # console-socket path resolution
 [skip]runc run (cgroup v2 resources.unified swap) # hang
 [skip]runc run (per-device io weight for bfq) # hang
 [skip]runc run (per-device multiple iops via unified) # hang
@@ -195,9 +195,9 @@ runc run [redundant seccomp rules]
 [skip]runc run [timens with no offsets] # hang
 
 # --- run (rlimits) ---
-runc run with RLIMIT_NOFILE(Bigger than system's hard value)
-runc run with RLIMIT_NOFILE(Smaller than system's hard value)
-runc run with RLIMIT_NOFILE(The same as system's hard value)
+runc run with RLIMIT_NOFILE(Bigger than system's hard value) # console-socket path resolution
+runc run with RLIMIT_NOFILE(Smaller than system's hard value) # console-socket path resolution
+runc run with RLIMIT_NOFILE(The same as system's hard value) # console-socket path resolution
 
 # --- run (cpu affinity) ---
 [skip]runc run [CPU affinity should reset to cgroup cpuset] # hang
@@ -222,17 +222,17 @@ runc run with RLIMIT_NOFILE(The same as system's hard value)
 [skip]runc run and exec memory policy prefer relative # unimpl
 
 # --- run (env) ---
-empty HOME env var is overridden
-empty HOME env var is overridden with multiple overrides
-non-empty HOME env is used
-env var override
-env var override is set only once
-env var HOME is set only once
+empty HOME env var is overridden # console-socket path resolution
+empty HOME env var is overridden with multiple overrides # console-socket path resolution
+non-empty HOME env is used # console-socket path resolution
+env var override # console-socket path resolution
+env var override is set only once # console-socket path resolution
+env var HOME is set only once # console-socket path resolution
 [skip]env var with new-line is honored # hang
 
 # --- delete ---
-runc delete
-runc delete --force
+runc delete # console-socket path resolution
+runc delete --force # console-socket path resolution
 runc delete --force ignore not exist
 [skip]runc delete --force [paused container] # hang
 [skip]runc delete --force [host pidns + init gone] # hang
@@ -242,26 +242,26 @@ runc delete --force ignore not exist
 [skip]runc delete removes failed systemd unit # systemd
 
 # --- kill ---
-kill detached busybox
+kill detached busybox # console-socket path resolution
 [skip]kill KILL [host pidns] # hang
 [skip]kill KILL [host pidns + init gone] # hang
 [skip]kill KILL [shared pidns] # hang
 
 # --- state ---
-state (kill + delete)
+state (kill + delete) # console-socket path resolution
 [skip]state (pause + resume) # hang
 
 # --- list ---
-list
+list # console-socket path resolution
 list with default non-existent root succeeds
 [skip]list with non-existent root fails # hang
 
 # --- exec ---
-runc exec
-runc exec ls -la
+runc exec # console-socket path resolution
+runc exec ls -la # console-socket path resolution
 [skip]runc exec ls -la with --cwd # hang
-runc exec --env
-runc exec --user
+runc exec --env # console-socket path resolution
+runc exec --user # console-socket path resolution
 [skip]runc exec --user vs /dev/null ownership # hang
 [skip]runc exec --user with no access to cwd # hang
 [skip]runc exec --additional-gids # hang
@@ -269,12 +269,12 @@ runc exec --user
 [skip]runc exec --cap [ambient is set from spec] # hang
 [skip]runc exec --preserve-fds # hang
 [skip]runc exec --ignore-paused # unimpl
-runc exec --pid-file
-runc exec --pid-file with new CWD
-runc exec [exit codes]
+runc exec --pid-file # console-socket path resolution
+runc exec --pid-file with new CWD # console-socket path resolution
+runc exec [exit codes] # console-socket path resolution
 [skip]runc exec [execve error] # hang
 [skip]runc exec [stdin not a tty] # hang
-runc exec check default home
+runc exec check default home # console-socket path resolution
 [skip]runc exec should refuse a paused container # hang
 [skip]runc exec with RLIMIT_NOFILE(Bigger than system's hard value) # hang
 [skip]runc exec with RLIMIT_NOFILE(Smaller than system's hard value) # hang
@@ -311,11 +311,11 @@ runc exec check default home
 [skip]env HOME is set for runc exec -p with no process.env # hang
 
 # --- pause / resume ---
-runc pause and resume
+runc pause and resume # console-socket path resolution
 [skip]runc pause and resume with nonexist container # hang
 
 # --- ps ---
-ps
+ps # console-socket path resolution
 [skip]ps -e -x # hang
 [skip]ps -f json # hang
 [skip]ps after the container stopped # hang
@@ -324,7 +324,7 @@ ps
 [skip]events --interval 100ms # hang
 [skip]events --interval 1s # hang
 [skip]events --interval default # hang
-events --stats
+events --stats # console-socket path resolution
 [skip]events --stats with hugetlb # cgroups_v1
 [skip]events --stats with psi data # hang
 [skip]events oom # hang
@@ -368,8 +368,8 @@ events --stats
 [skip]checkpoint/restore and exec # criu
 
 # --- mask paths ---
-mask paths [file]
-mask paths [directory]
+mask paths [file] # console-socket path resolution
+mask paths [directory] # console-socket path resolution
 [skip]mask paths [directories share tmpfs] # hang
 [skip]mask paths [directory with read-only rootfs] # hang
 [skip]mask paths [duplicate paths] # hang

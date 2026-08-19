@@ -65,21 +65,45 @@ public final class ConsoleSocket {
         }
     }
 
-    public static boolean sendMasterTo(String consoleSocketPath, int masterFd) {
+    /**
+     * Connect to the console socket at the given path and return the connected fd.
+     * Returns -1 on failure.
+     *
+     * This must be called BEFORE pivot_root while the host filesystem (and the
+     * socket path on it) is still reachable. The returned fd stays valid across
+     * pivot_root and can be passed to {@link #sendMasterVia} afterwards.
+     */
+    public static int connectTo(String consoleSocketPath) {
         try (Arena arena = Arena.ofConfined()) {
             int sock = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
-            if (sock < 0) return false;
-            try {
-                if (PosixIO.connectUnix(arena, sock, consoleSocketPath) < 0) {
-                    Logger.warn("connect " + consoleSocketPath + ": " + Libc.strerror(Libc.errno()));
-                    return false;
-                }
-                boolean ok = ScmRights.sendFd(sock, masterFd, (byte) 0);
-                if (ok) Logger.debug("pty master sent to " + consoleSocketPath);
-                return ok;
-            } finally {
+            if (sock < 0) return -1;
+            if (PosixIO.connectUnix(arena, sock, consoleSocketPath) < 0) {
+                Logger.warn("connect " + consoleSocketPath + ": " + Libc.strerror(Libc.errno()));
                 PosixIO.close(sock);
+                return -1;
             }
+            Logger.debug("connected to console socket " + consoleSocketPath);
+            return sock;
+        }
+    }
+
+    /**
+     * Send the pty master fd over an already-connected console socket.
+     * The caller is responsible for closing {@code sockFd} afterwards.
+     */
+    public static boolean sendMasterVia(int sockFd, int masterFd) {
+        boolean ok = ScmRights.sendFd(sockFd, masterFd, (byte) 0);
+        if (ok) Logger.debug("pty master sent via console socket fd " + sockFd);
+        return ok;
+    }
+
+    public static boolean sendMasterTo(String consoleSocketPath, int masterFd) {
+        int sock = connectTo(consoleSocketPath);
+        if (sock < 0) return false;
+        try {
+            return sendMasterVia(sock, masterFd);
+        } finally {
+            PosixIO.close(sock);
         }
     }
 
