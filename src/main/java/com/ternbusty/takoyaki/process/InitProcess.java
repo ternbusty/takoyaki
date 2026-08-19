@@ -258,6 +258,7 @@ public final class InitProcess {
                 PosixIO.close(consoleSocketFd);
             }
 
+            Logger.debug("init: closing the pipe to signal completion");
             SyncChannel.writeInt32(mainSenderFd, SyncChannel.MSG_INIT_READY);
             PosixIO.close(mainSenderFd);
 

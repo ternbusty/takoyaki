@@ -11,11 +11,11 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
 public final class Logger {
-    public enum Level { DEBUG, INFO, WARN, ERROR }
+    public enum Level { DEBUG, INFO, WARN, ERROR, OFF }
 
     public enum Format { TEXT, JSON }
 
-    private static volatile Level level = Level.INFO;
+    private static volatile Level level = Level.OFF;
     private static volatile String context = "main";
     private static volatile PrintStream out = System.err;
     private static volatile Format format = Format.TEXT;
@@ -51,8 +51,12 @@ public final class Logger {
                     + "\",\"msg\":\"" + escape(msg)
                     + "\",\"time\":\"" + ts + "\"}");
         } else {
-            String ts = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-            out.println("[" + ts + "] [" + l + "] [" + context + "] " + msg);
+            // logrus-compatible text format so runc bats tests can match
+            // "level=debug" and similar substrings.
+            String ts = OffsetDateTime.now(ZoneOffset.UTC)
+                    .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+            out.println("time=\"" + ts + "\" level=" + l.name().toLowerCase()
+                    + " msg=\"" + msg + "\"");
         }
         out.flush();
     }

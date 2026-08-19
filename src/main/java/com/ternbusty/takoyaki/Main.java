@@ -33,7 +33,9 @@ import java.util.List;
  * {@code takoyaki [root-opts...] SUBCOMMAND [sub-args...]}.
  */
 public final class Main {
-    private static final String VERSION_STRING = "takoyaki 0.1.1";
+    private static final String VERSION = "0.1.1";
+    /** OCI runtime-spec version this build targets. */
+    private static final String OCI_SPEC_VERSION = "1.0.2";
 
     public static void main(String[] args) {
         boolean trace = "1".equals(System.getenv("_TAKOYAKI_TRACE_STARTUP"));
@@ -67,7 +69,7 @@ public final class Main {
         // straight to the print to avoid even the small dispatch overhead.
         // Trace mode falls through so we can still measure the dispatch cost.
         if (args.length == 1 && "--version".equals(args[0]) && !trace) {
-            System.out.println(VERSION_STRING);
+            printVersion();
             System.exit(0);
         }
 
@@ -75,6 +77,8 @@ public final class Main {
         // env-passing care about) and find where the subcommand starts.
         String rootPath = "/run/takoyaki";
         boolean debug = false;
+        String logFile = null;
+        String logFormat = null;
         String subName = null;
         int subStart = -1;
         for (int i = 0; i < args.length; i++) {
@@ -86,15 +90,11 @@ public final class Main {
             }
             switch (a) {
                 case "-h", "--help" -> { printRootHelp(); System.exit(0); }
-                case "-v", "--version" -> { System.out.println(VERSION_STRING); System.exit(0); }
-                case "--debug" -> { debug = true; Logger.setLevel(Logger.Level.DEBUG); }
+                case "-v", "--version" -> { printVersion(); System.exit(0); }
+                case "--debug" -> debug = true;
                 case "--root" -> { if (i + 1 < args.length) rootPath = args[++i]; }
-                case "--log" -> { if (i + 1 < args.length) Logger.setLogFile(args[++i]); }
-                case "--log-format" -> {
-                    if (i + 1 < args.length && "json".equalsIgnoreCase(args[++i])) {
-                        Logger.setFormat(Logger.Format.JSON);
-                    }
-                }
+                case "--log" -> { if (i + 1 < args.length) logFile = args[++i]; }
+                case "--log-format" -> { if (i + 1 < args.length) logFormat = args[++i]; }
                 case "--systemd-cgroup" -> { /* runc compat: accepted, no-op */ }
                 case "--rootless", "--criu" -> { if (i + 1 < args.length) i++; }
                 default -> {
@@ -102,6 +102,20 @@ public final class Main {
                     System.exit(1);
                 }
             }
+        }
+
+        // Apply log configuration after all options are parsed (runc parity):
+        //   --debug            → level=DEBUG, output=stderr
+        //   --log FILE         → level=WARN,  output=FILE
+        //   --debug --log FILE → level=DEBUG, output=FILE
+        //   (neither)          → level=OFF (default, no log output)
+        if (debug) Logger.setLevel(Logger.Level.DEBUG);
+        if (logFile != null) {
+            Logger.setLogFile(logFile);
+            if (!debug) Logger.setLevel(Logger.Level.WARN);
+        }
+        if ("json".equalsIgnoreCase(logFormat)) {
+            Logger.setFormat(Logger.Format.JSON);
         }
 
         if (subName == null) {
@@ -121,12 +135,15 @@ public final class Main {
 
     private static int dispatch(String subName, String[] args, int subStart,
                                 String rootPath, boolean debug) {
-        // Per-subcommand --help short-circuit. Each command's help is a tiny
-        // canned string; we don't try to render the runc help layout exactly.
+        // Per-subcommand --help short-circuit.
         if (subStart < args.length
                 && ("-h".equals(args[subStart]) || "--help".equals(args[subStart]))) {
-            printSubcommandHelp(subName);
-            return 0;
+            if (SUBCOMMAND_DESCRIPTIONS.containsKey(subName)) {
+                printSubcommandHelp(subName);
+                return 0;
+            }
+            System.err.println("No help topic for '" + subName + "'");
+            return 1;
         }
         return switch (subName) {
             case "state" -> runWithId("state", args, subStart, rootPath, StateCommand::run);
@@ -531,59 +548,81 @@ public final class Main {
         }
     }
 
-    // ---- help text ----------------------------------------------------
+    // ---- help text (runc-compatible format) ----------------------------
+
+    /** Subcommand descriptions used for NAME: help blocks and for validating
+     *  known subcommands. Includes runc subcommands that takoyaki does not
+     *  implement (checkpoint, restore, features) so that {@code runc <sub> -h}
+     *  still prints a NAME: block instead of "No help topic". */
+    private static final java.util.Map<String, String> SUBCOMMAND_DESCRIPTIONS = java.util.Map.ofEntries(
+            java.util.Map.entry("create", "create a container"),
+            java.util.Map.entry("run", "create and run a container"),
+            java.util.Map.entry("start", "start a created container"),
+            java.util.Map.entry("state", "output the state of a container"),
+            java.util.Map.entry("kill", "send a signal to a container"),
+            java.util.Map.entry("delete", "delete any resources held by the container"),
+            java.util.Map.entry("list", "lists containers"),
+            java.util.Map.entry("ls", "lists containers"),
+            java.util.Map.entry("ps", "ps displays the processes running inside a container"),
+            java.util.Map.entry("pause", "pause suspends all processes inside the container"),
+            java.util.Map.entry("resume", "resumes all processes that have been previously paused"),
+            java.util.Map.entry("update", "update container resource constraints"),
+            java.util.Map.entry("events", "display container events such as OOM notifications and stats"),
+            java.util.Map.entry("exec", "execute new process inside the container"),
+            java.util.Map.entry("spec", "create a new specification file"),
+            java.util.Map.entry("checkpoint", "checkpoint a running container"),
+            java.util.Map.entry("restore", "restore a container from a previous checkpoint"),
+            java.util.Map.entry("features", "show the enabled features")
+    );
+
+    private static void printVersion() {
+        System.out.println("runc version " + VERSION);
+        System.out.println("commit: (none)");
+        System.out.println("spec: " + OCI_SPEC_VERSION);
+    }
 
     private static void printRootHelp() {
-        // Intentionally terse — runc / youki ship far more text but our
-        // surface is small and this fits a single screen.
+        // runc-compatible NAME:/USAGE: format so bats tests match.
         System.out.println("""
-                Usage: takoyaki [root-opts] SUBCOMMAND [args...]
+                NAME:
+                   runc - Open Container Initiative runtime
 
-                Root options:
-                  --root PATH          State directory (default /run/takoyaki)
-                  --debug              Enable debug logging
-                  --log PATH           Log file path
-                  --log-format FORMAT  text|json
-                  --systemd-cgroup     (accepted, no-op)
-                  --rootless VAL       (accepted)
-                  --criu PATH          (accepted)
-                  -v, --version        Print version
-                  -h, --help           Print this help
+                USAGE:
+                   runc [global options] command [command options] [arguments...]
 
-                Subcommands:
-                  create               Create a new container
-                  run                  Create + start + wait + delete in one process
-                  start                Start a created container
-                  state                Display container state
-                  kill                 Send a signal to a container
-                  delete               Delete a container
-                  list, ls             List containers
-                  ps                   List processes in a container
-                  pause                Pause a container
-                  resume               Resume a paused container
-                  update               Update container resources
-                  events               Stream container stats
-                  exec                 Run a command in a running container
-                """);
+                COMMANDS:
+                   checkpoint  checkpoint a running container
+                   create      create a container
+                   delete      delete any resources held by the container
+                   events      display container events such as OOM notifications and stats
+                   exec        execute new process inside the container
+                   kill        send a signal to a container
+                   list        lists containers
+                   pause       pause suspends all processes inside the container
+                   ps          ps displays the processes running inside a container
+                   restore     restore a container from a previous checkpoint
+                   resume      resumes all processes that have been previously paused
+                   run         create and run a container
+                   spec        create a new specification file
+                   start       start a created container
+                   state       output the state of a container
+                   update      update container resource constraints
+
+                GLOBAL OPTIONS:
+                   --debug             enable debug logging
+                   --log value         set the log file to write runc logs to (default is '/dev/stderr')
+                   --log-format value  set the log format ('text' (default), or 'json') (default: "text")
+                   --root value        root directory for storage of container state (default: "/run/runc")
+                   --systemd-cgroup    enable systemd cgroup support
+                   --rootless value    (ignored)
+                   --criu value        (ignored)
+                   --help, -h          show help
+                   --version, -v       print the version""");
     }
 
     private static void printSubcommandHelp(String sub) {
-        String body = switch (sub) {
-            case "create" -> "Usage: takoyaki create [-b BUNDLE] [--pid-file P] [--console-socket S] [--no-pivot] [--no-new-keyring] [--preserve-fds N] <id>";
-            case "run" -> "Usage: takoyaki run [-b BUNDLE] [-d|--detach] [--pid-file P] [--console-socket S] [--no-pivot] [--no-new-keyring] [--preserve-fds N] <id>";
-            case "start" -> "Usage: takoyaki start <id>";
-            case "state" -> "Usage: takoyaki state <id>";
-            case "kill" -> "Usage: takoyaki kill <id> [SIGNAL]";
-            case "delete" -> "Usage: takoyaki delete [-f|--force] <id>";
-            case "list", "ls" -> "Usage: takoyaki list [-f table|json] [-q|--quiet]";
-            case "ps" -> "Usage: takoyaki ps [-f table|json] <id>";
-            case "pause" -> "Usage: takoyaki pause <id>";
-            case "resume" -> "Usage: takoyaki resume <id>";
-            case "update" -> "Usage: takoyaki update [-r FILE] [--memory N] [--cpu-quota N] [--cpu-period N] [--cpu-shares N] [--pids-limit N] <id>";
-            case "events" -> "Usage: takoyaki events [--stats] [--interval SEC] <id>";
-            case "exec" -> "Usage: takoyaki exec [-p FILE] [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]... [-d] [--pid-file FILE] <id> CMD [ARG...]";
-            default -> "Usage: takoyaki " + sub;
-        };
-        System.out.println(body);
+        String desc = SUBCOMMAND_DESCRIPTIONS.getOrDefault(sub, sub);
+        System.out.println("NAME:");
+        System.out.println("   runc " + sub + " - " + desc);
     }
 }

@@ -298,6 +298,7 @@ void takoyaki_bootstrap(void) {
 
     debug_enabled = getenv(ENV_DEBUG) != NULL;
 
+    DBG("nsexec container setup\n");
     DBG("[stage-1] starting namespace setup\n");
 
     clone_flags = getenv_uint_hex(ENV_CLONE_FLAGS);
@@ -531,6 +532,7 @@ void takoyaki_bootstrap(void) {
             _exit(1);
         }
         close(sync_pipe[0]);
+        DBG("child process in init()\n");
 
         /* Unset bootstrap-related env so the new process runs Java runtime fresh
          * as the init process (detected via args[0] == "__init__"). */
