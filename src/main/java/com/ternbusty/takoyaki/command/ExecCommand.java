@@ -46,7 +46,8 @@ public final class ExecCommand {
     public static int run(String rootPath, String containerId, String processJsonPath,
                           String user, String cwd, List<String> envs, List<String> command,
                           boolean detach, String pidFile, boolean tty, String consoleSocket,
-                          List<String> additionalGids, List<String> caps, int preserveFds) {
+                          List<String> additionalGids, List<String> caps, int preserveFds,
+                          String subCgroupPath) {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
             System.err.println(exclusivity);
@@ -124,9 +125,30 @@ public final class ExecCommand {
             return EXIT_RUNTIME_ERROR;
         }
 
+        // runc compat: --cgroup PATH resolves to a subcgroup under the
+        // container's cgroup. "/" means the container root cgroup (default).
+        // A non-existing subcgroup is an error.
+        String effectiveCgroupPath = cgroupPath;
+        boolean cgroupExplicitRoot = false;
+        if (subCgroupPath != null && !"/".equals(subCgroupPath)) {
+            if (cgroupPath == null) {
+                System.err.println("--cgroup specified but container has no cgroup");
+                return EXIT_RUNTIME_ERROR;
+            }
+            String resolved = cgroupPath + "/" + subCgroupPath;
+            if (!java.nio.file.Files.isDirectory(Path.of(resolved))) {
+                System.err.println("exec cgroup " + resolved + ": no such file or directory");
+                return EXIT_RUNTIME_ERROR;
+            }
+            effectiveCgroupPath = resolved;
+        }
+        if ("/".equals(subCgroupPath)) {
+            cgroupExplicitRoot = true;
+        }
+
         try (Arena arena = Arena.ofConfined()) {
-            return spawn(arena, state.pid, payload, cgroupPath, detach, pidFile,
-                    effectiveAffinity);
+            return spawn(arena, state.pid, payload, effectiveCgroupPath, detach,
+                    pidFile, effectiveAffinity, cgroupExplicitRoot, cgroupPath);
         }
     }
 
@@ -241,7 +263,8 @@ public final class ExecCommand {
      */
     private static int spawn(Arena arena, int initPid, ExecPayload payload,
                              String cgroupPath, boolean detach, String pidFile,
-                             Spec.ExecCPUAffinity affinity) {
+                             Spec.ExecCPUAffinity affinity,
+                             boolean cgroupExplicitRoot, String containerCgroupPath) {
         String exePath = PosixIO.readlink(arena, "/proc/self/exe");
         if (exePath == null) {
             System.err.println("readlink /proc/self/exe failed");
@@ -368,7 +391,18 @@ public final class ExecCommand {
         // Container cgroup membership BEFORE sending the payload: the workload
         // proceeds past its payload read only after we finish writing, so it
         // cannot reach user code outside the cgroup.
-        Cgroup.addPid(cgroupPath, workloadPid);
+        // runc compat: when domain controllers are enabled and no explicit
+        // --cgroup was given, joining the container root cgroup fails (EBUSY).
+        // Fall back to the init process's current cgroup.
+        if (!Cgroup.addPid(cgroupPath, workloadPid) && !cgroupExplicitRoot
+                && containerCgroupPath != null) {
+            String initCgroup = Cgroup.readProcessCgroup(initPid);
+            if (initCgroup != null) {
+                String fallback = containerCgroupPath + initCgroup;
+                Logger.debug("exec cgroup fallback to init's cgroup: " + fallback);
+                Cgroup.addPid(fallback, workloadPid);
+            }
+        }
 
         // runc compat: set final CPU affinity after cgroup assignment.
         // If affinity.final is set, apply that specific mask.

@@ -251,21 +251,38 @@ public final class DeviceCgroup {
         MemorySegment insns = arena.allocate(prog.length);
         insns.copyFrom(MemorySegment.ofArray(prog));
         MemorySegment license = arena.allocateFrom("GPL");
+        // Verifier log buffer: capture kernel messages on failure.
+        int logSize = 16384;
+        MemorySegment logBuf = arena.allocate(logSize);
         // Layout of bpf_attr for PROG_LOAD (relevant fields):
-        //   u32 prog_type
-        //   u32 insn_cnt
-        //   u64 insns
-        //   u64 license
-        //   u32 log_level
-        //   u32 log_size
-        //   u64 log_buf
-        //   u32 kern_version
-        //   u32 prog_flags
+        //   u32 prog_type        offset  0
+        //   u32 insn_cnt         offset  4
+        //   u64 insns            offset  8
+        //   u64 license          offset 16
+        //   u32 log_level        offset 24
+        //   u32 log_size         offset 28
+        //   u64 log_buf          offset 32
         attr.set(ValueLayout.JAVA_INT, 0, BPF_PROG_TYPE_CGROUP_DEVICE);
         attr.set(ValueLayout.JAVA_INT, 4, prog.length / 8);
         attr.set(ValueLayout.JAVA_LONG, 8, insns.address());
         attr.set(ValueLayout.JAVA_LONG, 16, license.address());
         long rc = Libc.syscall(bpfNr(), BPF_PROG_LOAD, attr.address(), 128, 0, 0);
+        if (rc < 0) {
+            // Retry with log_level=1 to get verifier output for diagnosis.
+            attr.fill((byte) 0);
+            attr.set(ValueLayout.JAVA_INT, 0, BPF_PROG_TYPE_CGROUP_DEVICE);
+            attr.set(ValueLayout.JAVA_INT, 4, prog.length / 8);
+            attr.set(ValueLayout.JAVA_LONG, 8, insns.address());
+            attr.set(ValueLayout.JAVA_LONG, 16, license.address());
+            attr.set(ValueLayout.JAVA_INT, 24, 1); // log_level
+            attr.set(ValueLayout.JAVA_INT, 28, logSize);
+            attr.set(ValueLayout.JAVA_LONG, 32, logBuf.address());
+            Libc.syscall(bpfNr(), BPF_PROG_LOAD, attr.address(), 128, 0, 0);
+            String log = logBuf.getString(0);
+            if (!log.isEmpty()) {
+                Logger.warn("bpf verifier: " + log.substring(0, Math.min(log.length(), 512)));
+            }
+        }
         return (int) rc;
     }
 

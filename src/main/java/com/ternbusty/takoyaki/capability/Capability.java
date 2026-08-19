@@ -55,8 +55,10 @@ public final class Capability {
     }
 
     public static void applyBoundingSet(Spec.LinuxCapabilities caps) {
-        if (caps == null || caps.bounding == null) return;
-        Set<Integer> keep = parseSet(caps.bounding);
+        if (caps == null) return;
+        // When caps is non-null but bounding is null (empty capabilities object),
+        // treat as empty set: drop everything from the bounding set.
+        Set<Integer> keep = caps.bounding != null ? parseSet(caps.bounding) : Set.of();
         for (int i = 0; i <= LAST_CAP; i++) {
             if (!keep.contains(i)) {
                 Libc.prctl(Constants.PR_CAPBSET_DROP, i, 0, 0, 0);

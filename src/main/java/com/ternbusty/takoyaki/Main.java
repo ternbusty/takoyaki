@@ -670,7 +670,7 @@ public final class Main {
         }
         return ExecCommand.run(rootPath, id, processJson, user, cwd, envs, command,
                 detach, pidFile, tty, consoleSocket, additionalGids, caps,
-                preserveFds);
+                preserveFds, cgroupPath);
     }
 
     // ---- small helpers ------------------------------------------------

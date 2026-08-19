@@ -223,22 +223,63 @@ public final class Rootfs {
                 ? (spec.linux.cgroupsPath.startsWith("/") ? spec.linux.cgroupsPath
                                                           : "/" + spec.linux.cgroupsPath)
                 : readContainerCgroupPath();
-        if (containerCgPath != null) {
-            String src = "/sys/fs/cgroup" + containerCgPath;
-            if (PosixIO.access(arena, src, Constants.F_OK) == 0) {
-                if (Libc.mount(arena, src, cg, null,
-                        Constants.MS_BIND | Constants.MS_REC, null) == 0) {
-                    Libc.mount(arena, null, cg, null,
-                            Constants.MS_BIND | Constants.MS_REMOUNT | Constants.MS_RDONLY
-                                    | Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC,
-                            null);
-                    Logger.debug("bound /sys/fs/cgroup from " + src);
-                } else {
-                    Logger.warn("bind /sys/fs/cgroup from " + src + ": " + Libc.strerror(Libc.errno()));
+        // Check if the spec's cgroup mount should be read-only. By default
+        // it is ro, but set_cgroup_mount_writable removes "ro".
+        boolean cgroupRo = true;
+        if (spec != null && spec.mounts != null) {
+            for (Spec.Mount m : spec.mounts) {
+                if ("cgroup".equals(m.type) || "/sys/fs/cgroup".equals(m.destination)) {
+                    if (m.options != null && !m.options.contains("ro")) {
+                        cgroupRo = false;
+                    }
+                    break;
                 }
-            } else {
-                Logger.debug("cgroup source " + src + " does not exist (yet)");
             }
+        }
+        // Determine if cgroupns is enabled. With cgroupns, we mount a fresh
+        // cgroup2 filesystem (showing the container's cgroup root at /).
+        // Without cgroupns, we bind-mount the host cgroup path.
+        boolean hasCgroupNs = false;
+        if (spec != null && spec.linux != null && spec.linux.namespaces != null) {
+            for (Spec.Namespace ns : spec.linux.namespaces) {
+                if ("cgroup".equals(ns.type)) { hasCgroupNs = true; break; }
+            }
+        }
+        if (hasCgroupNs) {
+            long cgFlags = Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC;
+            if (cgroupRo) cgFlags |= Constants.MS_RDONLY;
+            if (Libc.mount(arena, "cgroup2", cg, "cgroup2", cgFlags, null) != 0) {
+                Logger.warn("mount cgroup2: " + Libc.strerror(Libc.errno())
+                        + "; falling back to bind mount");
+                mountCgroupBind(arena, cg, containerCgPath, cgroupRo);
+            } else {
+                Logger.debug("mounted cgroup2 at /sys/fs/cgroup"
+                        + (cgroupRo ? " (ro)" : " (rw)"));
+            }
+        } else if (containerCgPath != null) {
+            mountCgroupBind(arena, cg, containerCgPath, cgroupRo);
+        }
+    }
+
+    private static void mountCgroupBind(Arena arena, String cg,
+                                          String containerCgPath, boolean cgroupRo) {
+        if (containerCgPath == null) return;
+        String src = "/sys/fs/cgroup" + containerCgPath;
+        if (PosixIO.access(arena, src, Constants.F_OK) == 0) {
+            if (Libc.mount(arena, src, cg, null,
+                    Constants.MS_BIND | Constants.MS_REC, null) == 0) {
+                long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                        | Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC;
+                if (cgroupRo) remountFlags |= Constants.MS_RDONLY;
+                Libc.mount(arena, null, cg, null, remountFlags, null);
+                Logger.debug("bound /sys/fs/cgroup from " + src
+                        + (cgroupRo ? " (ro)" : " (rw)"));
+            } else {
+                Logger.warn("bind /sys/fs/cgroup from " + src + ": "
+                        + Libc.strerror(Libc.errno()));
+            }
+        } else {
+            Logger.debug("cgroup source " + src + " does not exist (yet)");
         }
     }
 

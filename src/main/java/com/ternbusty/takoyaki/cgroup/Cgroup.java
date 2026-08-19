@@ -100,23 +100,48 @@ public final class Cgroup {
      * directory creation, controller enablement, limits, and the device BPF
      * program are all left untouched (see setup for the full path).
      */
-    public static void addPid(String cgroupPath, long pid) {
-        if (cgroupPath == null) return;
+    /**
+     * Write pid to cgroup.procs. Returns true on success, false on failure.
+     */
+    public static boolean addPid(String cgroupPath, long pid) {
+        if (cgroupPath == null) return true;
         Path full = dir(cgroupPath);
         try {
             Files.writeString(full.resolve("cgroup.procs"), Long.toString(pid));
             Logger.debug("added pid " + pid + " to cgroup " + full);
+            return true;
         } catch (IOException e) {
-            Logger.warn("add pid to cgroup failed: " + e.getMessage());
+            Logger.warn("adding pid " + pid + " to cgroups " + full
+                    + " failed: " + e.getMessage());
+            return false;
         }
     }
 
+    /**
+     * Read /proc/pid/cgroup and return the v2 cgroup path (the part after
+     * "0::"). Returns null if unreadable.
+     */
+    public static String readProcessCgroup(int pid) {
+        try {
+            String content = Files.readString(Path.of("/proc/" + pid + "/cgroup"));
+            for (String line : content.split("\n")) {
+                if (line.startsWith("0::")) {
+                    return line.substring(3);
+                }
+            }
+        } catch (IOException e) {
+            Logger.debug("read /proc/" + pid + "/cgroup failed: " + e.getMessage());
+        }
+        return null;
+    }
+
     private static void enableControllers(Path full, Spec.LinuxResources r) {
-        // Derive the needed controller set from the control files applyLimits
-        // is about to write: the prefix before the first '.' names the
-        // controller ("memory.max" -> memory). This handles the strongly
-        // typed fields and resources.unified keys uniformly.
+        // runc compat: enable ALL available controllers in the parent's
+        // subtree_control, not just the ones we plan to write. The container
+        // might use controllers internally (e.g. creating subcgroups and
+        // enabling controllers for them).
         Set<String> needed = new LinkedHashSet<>();
+        // First, collect controllers from planned writes.
         for (Map.Entry<String, String> e : plannedWrites(r)) {
             String file = e.getKey();
             int dot = file.indexOf('.');
@@ -124,6 +149,23 @@ public final class Cgroup {
                 String ctrl = file.substring(0, dot);
                 if (KNOWN_CONTROLLERS.contains(ctrl)) needed.add(ctrl);
             }
+        }
+        // Also enable any controllers that are available in the parent but
+        // not yet in subtree_control. This matches runc's behaviour of
+        // propagating all available controllers to the container's cgroup.
+        try {
+            Path parentCtrl = full.getParent() != null
+                    ? full.getParent().resolve("cgroup.controllers") : null;
+            if (parentCtrl != null && Files.exists(parentCtrl)) {
+                String available = Files.readString(parentCtrl).trim();
+                for (String ctrl : available.split("\\s+")) {
+                    if (!ctrl.isEmpty() && KNOWN_CONTROLLERS.contains(ctrl)) {
+                        needed.add(ctrl);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Logger.debug("read parent cgroup.controllers: " + e.getMessage());
         }
         if (needed.isEmpty()) return;
         // Walk up from full to CGROUP_ROOT to enable controllers in subtree_control
@@ -248,10 +290,23 @@ public final class Cgroup {
             appendBlockIO(writes, r.blockIO);
         }
         // Unified pass-through: any arbitrary control-file the spec author
-        // named gets written verbatim.
+        // named gets written verbatim. Multi-line values (e.g. "io.max" with
+        // multiple per-device entries separated by newlines) are split into
+        // one write per line, since the kernel cgroup interface only processes
+        // one line per write() call for most files.
         if (r.unified != null) {
             for (Map.Entry<String, String> e : r.unified.entrySet()) {
-                writes.add(Map.entry(e.getKey(), e.getValue()));
+                String val = e.getValue();
+                if (val.contains("\n")) {
+                    for (String line : val.split("\n")) {
+                        String trimmed = line.trim();
+                        if (!trimmed.isEmpty()) {
+                            writes.add(Map.entry(e.getKey(), trimmed));
+                        }
+                    }
+                } else {
+                    writes.add(Map.entry(e.getKey(), val));
+                }
             }
         }
         return writes;
