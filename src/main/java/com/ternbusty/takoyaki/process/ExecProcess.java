@@ -90,14 +90,30 @@ public final class ExecProcess {
                 Logger.warn("chdir " + cwd + " failed: " + Libc.strerror(Libc.errno()));
             }
 
-            Libc.clearenv();
+            // Prepare the environment: dedup (last wins), inject HOME if empty.
+            java.util.LinkedHashMap<String, String> envMap = new java.util.LinkedHashMap<>();
             if (payload.process.env != null) {
                 for (String entry : payload.process.env) {
                     int eq = entry.indexOf('=');
                     if (eq > 0) {
-                        Libc.setenv(arena, entry.substring(0, eq), entry.substring(eq + 1), true);
+                        envMap.put(entry.substring(0, eq), entry.substring(eq + 1));
                     }
                 }
+            }
+            String homeVal = envMap.get("HOME");
+            if (homeVal == null || homeVal.isEmpty()) {
+                int uid = payload.process.user != null ? payload.process.user.uid : 0;
+                String passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid);
+                if (passwdHome != null && !passwdHome.isEmpty()) {
+                    envMap.put("HOME", passwdHome);
+                } else if (homeVal == null) {
+                    envMap.put("HOME", uid == 0 ? "/root" : "/");
+                }
+            }
+
+            Libc.clearenv();
+            for (var envEntry : envMap.entrySet()) {
+                Libc.setenv(arena, envEntry.getKey(), envEntry.getValue(), true);
             }
 
             // Flag every inherited runtime fd CLOEXEC so nothing leaks into the
@@ -116,7 +132,9 @@ public final class ExecProcess {
             }
 
             Libc.execvp(arena, argv[0], argv);
-            Logger.error("execvp failed: " + Libc.strerror(Libc.errno()));
+            String errMsg = Libc.strerror(Libc.errno());
+            System.err.println("exec " + argv[0] + ": " + errMsg);
+            Logger.error("execvp failed: " + errMsg);
         } catch (Exception e) {
             Logger.error("exec setup failed: " + e.getMessage());
         }

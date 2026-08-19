@@ -77,6 +77,17 @@ public final class InitProcess {
 
     public static void run() {
         Logger.setContext("init");
+        // Inherit log configuration from the main process so that debug/warn
+        // output goes to the log file instead of leaking to stderr. Must be
+        // configured BEFORE any Logger call.
+        String initLogFile = System.getenv("_TAKOYAKI_LOG_FILE");
+        if (initLogFile != null) {
+            Logger.setLogFile(initLogFile);
+        }
+        String initLogFormat = System.getenv("_TAKOYAKI_LOG_FORMAT");
+        if ("json".equalsIgnoreCase(initLogFormat)) {
+            Logger.setFormat(Logger.Format.JSON);
+        }
         Logger.debug("init started, pid=" + Libc.getpid() + " ppid=" + Libc.getppid());
         if (Logger.isDebugEnabled()) {
             try {
@@ -278,14 +289,33 @@ public final class InitProcess {
                 return;
             }
 
-            Libc.clearenv();
+            // Prepare the environment: dedup (last wins), inject HOME if empty.
+            java.util.LinkedHashMap<String, String> envMap = new java.util.LinkedHashMap<>();
             if (spec.process.env != null) {
                 for (String entry : spec.process.env) {
                     int eq = entry.indexOf('=');
                     if (eq > 0) {
-                        Libc.setenv(arena, entry.substring(0, eq), entry.substring(eq + 1), true);
+                        envMap.put(entry.substring(0, eq), entry.substring(eq + 1));
                     }
                 }
+            }
+            // runc behaviour: if HOME is empty or absent, override with the
+            // user's home directory from /etc/passwd inside the container.
+            String homeVal = envMap.get("HOME");
+            if (homeVal == null || homeVal.isEmpty()) {
+                int uid = spec.process.user != null ? spec.process.user.uid : 0;
+                String passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid);
+                if (passwdHome != null && !passwdHome.isEmpty()) {
+                    envMap.put("HOME", passwdHome);
+                } else if (homeVal == null) {
+                    // No HOME in spec at all: default to /root for uid 0.
+                    envMap.put("HOME", uid == 0 ? "/root" : "/");
+                }
+            }
+
+            Libc.clearenv();
+            for (var envEntry : envMap.entrySet()) {
+                Libc.setenv(arena, envEntry.getKey(), envEntry.getValue(), true);
             }
 
             String[] argv = spec.process.args.toArray(new String[0]);
@@ -312,7 +342,11 @@ public final class InitProcess {
             }
 
             Libc.execvp(arena, argv[0], argv);
-            Logger.error("execvp failed: " + Libc.strerror(Libc.errno()));
+            // runc-compatible error message: plain text to stderr regardless
+            // of Logger level, so bats tests can assert on it.
+            String errMsg = Libc.strerror(Libc.errno());
+            System.err.println("exec " + argv[0] + ": " + errMsg);
+            Logger.error("execvp failed: " + errMsg);
             PosixIO._exit(127);
         } catch (Exception e) {
             Logger.error("init failed: " + e.getMessage());

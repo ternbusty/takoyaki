@@ -107,6 +107,13 @@ public final class CreateCommand {
         envList.add("_TAKOYAKI_ROOTFS_PATH=" + rootfsPath);
         envList.add("_TAKOYAKI_CONTAINER_ID=" + containerId);
         if (debug) envList.add("_TAKOYAKI_BOOTSTRAP_DEBUG=1");
+        // Pass log configuration to the init process so it can redirect its
+        // Logger output to the same file as the main process. Without this,
+        // init's debug/warn output leaks to stderr (visible to bats tests).
+        String logFilePath = Logger.getLogFilePath();
+        if (logFilePath != null) envList.add("_TAKOYAKI_LOG_FILE=" + logFilePath);
+        String logFmt = Logger.getFormatName();
+        if (logFmt != null) envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
         if (consoleSocket != null) envList.add("_TAKOYAKI_CONSOLE_SOCKET=" + consoleSocket);
         if (noNewKeyring) envList.add("_TAKOYAKI_NO_NEW_KEYRING=1");
 

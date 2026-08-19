@@ -19,6 +19,7 @@ public final class Logger {
     private static volatile String context = "main";
     private static volatile PrintStream out = System.err;
     private static volatile Format format = Format.TEXT;
+    private static volatile String logFilePath = null;
 
     private Logger() {}
 
@@ -26,10 +27,19 @@ public final class Logger {
     public static void setContext(String c) { context = c; }
     public static void setFormat(Format f) { format = f; }
 
+    /** Return the configured log file path, or null when writing to stderr. */
+    public static String getLogFilePath() { return logFilePath; }
+
+    /** Return the format name ("json" or "text"), or null for the default. */
+    public static String getFormatName() {
+        return format == Format.JSON ? "json" : null;
+    }
+
     public static void setLogFile(String path) {
         try {
             out = new PrintStream(Files.newOutputStream(Path.of(path),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND));
+            logFilePath = path;
         } catch (IOException e) {
             System.err.println("[logger] failed to open log file " + path + ": " + e.getMessage());
         }

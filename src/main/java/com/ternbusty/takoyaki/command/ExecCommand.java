@@ -42,7 +42,8 @@ public final class ExecCommand {
 
     public static int run(String rootPath, String containerId, String processJsonPath,
                           String user, String cwd, List<String> envs, List<String> command,
-                          boolean detach, String pidFile) {
+                          boolean detach, String pidFile, boolean tty, String consoleSocket,
+                          List<String> additionalGids, List<String> caps, int preserveFds) {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
             Logger.error(exclusivity);
@@ -80,7 +81,8 @@ public final class ExecCommand {
                     return 1;
                 }
             } else {
-                process = buildEffectiveProcess(spec.process, user, cwd, envs, command);
+                process = buildEffectiveProcess(spec.process, user, cwd, envs, command,
+                        tty, additionalGids, caps);
             }
         } catch (Exception e) {
             Logger.error("failed to build process document: " + e.getMessage());
@@ -136,7 +138,9 @@ public final class ExecCommand {
      * Package-visible for unit tests.
      */
     static Spec.Process buildEffectiveProcess(Spec.Process base, String user, String cwd,
-                                              List<String> envs, List<String> command) {
+                                              List<String> envs, List<String> command,
+                                              boolean tty, List<String> additionalGids,
+                                              List<String> caps) {
         if (base == null) {
             throw new IllegalArgumentException("container config has no process section");
         }
@@ -148,6 +152,9 @@ public final class ExecCommand {
         if (p.args == null || p.args.isEmpty()) {
             throw new IllegalArgumentException("no command specified");
         }
+        if (tty) {
+            p.terminal = true;
+        }
         if (user != null) {
             String[] uv = user.split(":");
             Spec.User u = new Spec.User();
@@ -156,6 +163,24 @@ public final class ExecCommand {
                     : (p.user != null ? p.user.gid : 0);
             u.additionalGids = p.user != null ? p.user.additionalGids : null;
             p.user = u;
+        }
+        if (additionalGids != null && !additionalGids.isEmpty()) {
+            if (p.user == null) p.user = new Spec.User();
+            List<Integer> gids = p.user.additionalGids != null
+                    ? new ArrayList<>(p.user.additionalGids)
+                    : new ArrayList<>();
+            for (String g : additionalGids) {
+                gids.add(Integer.parseInt(g));
+            }
+            p.user.additionalGids = gids;
+        }
+        if (caps != null && !caps.isEmpty()) {
+            // --cap adds capabilities to all sets. Initialise from spec or empty.
+            if (p.capabilities == null) p.capabilities = new Spec.Capabilities();
+            for (String cap : caps) {
+                String c = cap.startsWith("CAP_") ? cap : "CAP_" + cap;
+                addCap(p.capabilities, c);
+            }
         }
         if (cwd != null) {
             p.cwd = cwd;
@@ -172,6 +197,19 @@ public final class ExecCommand {
                     "HOME=/root");
         }
         return p;
+    }
+
+    private static void addCap(Spec.Capabilities c, String cap) {
+        if (c.bounding == null) c.bounding = new ArrayList<>();
+        if (!c.bounding.contains(cap)) c.bounding.add(cap);
+        if (c.effective == null) c.effective = new ArrayList<>();
+        if (!c.effective.contains(cap)) c.effective.add(cap);
+        if (c.inheritable == null) c.inheritable = new ArrayList<>();
+        if (!c.inheritable.contains(cap)) c.inheritable.add(cap);
+        if (c.permitted == null) c.permitted = new ArrayList<>();
+        if (!c.permitted.contains(cap)) c.permitted.add(cap);
+        if (c.ambient == null) c.ambient = new ArrayList<>();
+        if (!c.ambient.contains(cap)) c.ambient.add(cap);
     }
 
     /**

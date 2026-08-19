@@ -180,8 +180,13 @@ public final class Cgroup {
                 writes.add(Map.entry("cpu.idle", Long.toString(r.cpu.idle)));
             }
         }
-        if (r.pids != null && r.pids.limit > 0) {
-            writes.add(Map.entry("pids.max", Long.toString(r.pids.limit)));
+        if (r.pids != null) {
+            if (r.pids.limit == -1L || r.pids.limit == 0L) {
+                // runc: -1 means unlimited ("max"), 0 also means unlimited
+                writes.add(Map.entry("pids.max", "max"));
+            } else if (r.pids.limit > 0) {
+                writes.add(Map.entry("pids.max", Long.toString(r.pids.limit)));
+            }
         }
         // hugepageLimits: each entry lands in its own hugetlb.<size>.max file.
         // Runc uses the same pageSize→filename mapping.

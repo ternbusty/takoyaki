@@ -140,8 +140,13 @@ public final class MainProcess {
             // caller decide whether to exit (CreateCommand top-level) or
             // continue (RunCommand foreground path).
         } catch (Exception e) {
-            Logger.error("main proc failed: " + e.getMessage());
-            e.printStackTrace(System.err);
+            // Print runc-compatible error message to stderr. Java stack traces
+            // confuse bats tests that assert on specific error patterns.
+            String msg = e.getMessage();
+            if (msg != null) {
+                System.err.println(msg);
+            }
+            Logger.error("main proc failed: " + msg);
             PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
             PosixIO._exit(1);

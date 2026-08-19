@@ -298,6 +298,21 @@ void takoyaki_bootstrap(void) {
 
     debug_enabled = getenv(ENV_DEBUG) != NULL;
 
+    /* Redirect stderr to the log file so that DBG() and error messages from
+     * bootstrap.c go to the same place as the Java Logger output. Without
+     * this, bootstrap debug lines leak to the terminal and cause bats tests
+     * like "global --debug to --log" to fail. */
+    {
+        const char *log_file = getenv("_TAKOYAKI_LOG_FILE");
+        if (log_file) {
+            int log_fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (log_fd >= 0) {
+                dup2(log_fd, STDERR_FILENO);
+                close(log_fd);
+            }
+        }
+    }
+
     DBG("nsexec container setup\n");
     DBG("[stage-1] starting namespace setup\n");
 

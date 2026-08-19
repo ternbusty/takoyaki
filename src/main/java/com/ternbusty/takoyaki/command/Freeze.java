@@ -17,11 +17,11 @@ final class Freeze {
         try {
             cgroupPath = KontainerConfig.load(rootPath, containerId).cgroupPath;
         } catch (IOException e) {
-            Logger.error("no cgroup recorded for " + containerId);
+            System.err.println(op + " failed: no cgroup recorded for " + containerId);
             return 1;
         }
         if (cgroupPath == null) {
-            Logger.error("container has no cgroupsPath, cannot " + op);
+            System.err.println(op + " failed: container has no cgroupsPath");
             return 1;
         }
         Path freeze = Cgroup.dir(cgroupPath).resolve("cgroup.freeze");
@@ -30,7 +30,7 @@ final class Freeze {
             Logger.info(op + " ok for " + containerId);
             return 0;
         } catch (IOException e) {
-            Logger.error(op + " failed: " + e.getMessage());
+            System.err.println(op + " failed: " + e.getMessage());
             return 1;
         }
     }

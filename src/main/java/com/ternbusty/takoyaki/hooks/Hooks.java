@@ -52,11 +52,18 @@ public final class Hooks {
                                 boolean failFast) {
         if (hooks == null || hooks.isEmpty()) return;
         String stateJson = Json.encode(state.toJson());
-        for (Spec.Hook h : hooks) {
+        for (int idx = 0; idx < hooks.size(); idx++) {
+            Spec.Hook h = hooks.get(idx);
             if (h.path == null) continue;
             List<String> cmd = new ArrayList<>();
-            cmd.add(h.path);
-            if (h.args != null) cmd.addAll(h.args.subList(1, h.args.size()));
+            if (h.args != null && !h.args.isEmpty()) {
+                // OCI spec: hook.args[0] is the command to execute (like argv[0]);
+                // the rest are passed as positional arguments. Unlike the old code
+                // that replaced args[0] with h.path, runc uses h.args verbatim.
+                cmd.addAll(h.args);
+            } else {
+                cmd.add(h.path);
+            }
             ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
             // Always start from a clean env — inheriting the runtime's env
             // would leak whatever _TAKOYAKI_* variables and container-id state
@@ -75,26 +82,41 @@ public final class Hooks {
                 Process p = pb.start();
                 try (OutputStream stdin = p.getOutputStream()) {
                     stdin.write(stateJson.getBytes());
+                } catch (IOException ignored) {
+                    // Broken pipe: the hook exited before reading all of stdin.
+                    // This is normal for hooks that don't need the state JSON.
                 }
                 long timeout = h.timeout == null ? 30 : h.timeout;
                 boolean done = p.waitFor(timeout, TimeUnit.SECONDS);
                 if (!done) {
                     p.destroyForcibly();
-                    String msg = "hook " + phase + " " + h.path + " timeout after " + timeout + "s";
+                    // runc format: "error running <phase> hook #<n>: ..."
+                    String msg = "error running " + phase + " hook #" + idx
+                            + ": hook did not complete within " + timeout + "s";
                     if (failFast) throw new RuntimeException(msg);
                     Logger.warn(msg);
                     continue;
                 }
                 int rc = p.exitValue();
                 if (rc != 0) {
-                    String msg = "hook " + phase + " " + h.path + " exit=" + rc;
+                    // Capture stderr/stdout from the hook for the error message.
+                    String hookOutput = "";
+                    try {
+                        hookOutput = new String(p.getInputStream().readAllBytes()).trim();
+                    } catch (IOException ignored) {}
+                    String detail = hookOutput.isEmpty()
+                            ? "exit status " + rc
+                            : hookOutput + ": exit status " + rc;
+                    String msg = "error running " + phase + " hook #" + idx
+                            + ": " + detail;
                     if (failFast) throw new RuntimeException(msg);
                     Logger.warn(msg);
                 } else {
                     Logger.debug("hook " + phase + " " + h.path + " ok");
                 }
             } catch (IOException | InterruptedException e) {
-                String msg = "hook " + phase + " " + h.path + " failed: " + e.getMessage();
+                String msg = "error running " + phase + " hook #" + idx
+                        + ": " + e.getMessage();
                 if (failFast) throw new RuntimeException(msg, e);
                 Logger.warn(msg);
             }

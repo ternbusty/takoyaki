@@ -447,19 +447,24 @@ public final class Main {
     }
 
     private static int dispatchExec(String[] args, int subStart, String rootPath) {
-        // takoyaki exec [-p FILE] [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]... <id> [--] CMD [ARG...]
-        // We treat the first non-flag positional as the container ID and
-        // everything after it (or after a literal "--") as the command + args.
-        // With -p (the containerd path) the process document replaces the
-        // flags and command entirely, so no command is expected.
+        // takoyaki exec [-p FILE] [-u UID[:GID]] [-t] [--cwd DIR] [-e KEY=VAL]...
+        //               [--additional-gids GID]... [--preserve-fds N]
+        //               [--cap CAP]... [--cgroup PATH] [--console-socket S]
+        //               <id> [--] CMD [ARG...]
         String processJson = null;
         String user = null;
         String cwd = null;
         List<String> envs = new ArrayList<>();
+        List<String> additionalGids = new ArrayList<>();
+        List<String> caps = new ArrayList<>();
         String id = null;
         List<String> command = new ArrayList<>();
         boolean detach = false;
+        boolean tty = false;
         String pidFile = null;
+        int preserveFds = 0;
+        String consoleSocket = null;
+        String cgroupPath = null;
         boolean afterPositional = false;
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
@@ -471,33 +476,73 @@ public final class Main {
                 afterPositional = true;
                 continue;
             }
-            switch (a) {
+            // Handle --flag=value form
+            String flagKey = a;
+            String flagVal = null;
+            int eqIdx = a.indexOf('=');
+            if (eqIdx > 0 && a.startsWith("--")) {
+                flagKey = a.substring(0, eqIdx);
+                flagVal = a.substring(eqIdx + 1);
+            }
+            switch (flagKey) {
                 case "-p", "--process" -> {
-                    if (i + 1 >= args.length) return missingArg("exec", a);
-                    processJson = args[++i];
+                    if (flagVal != null) { processJson = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else processJson = args[++i];
                 }
                 case "-u", "--user" -> {
-                    if (i + 1 >= args.length) return missingArg("exec", a);
-                    user = args[++i];
+                    if (flagVal != null) { user = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else user = args[++i];
                 }
                 case "-d", "--detach" -> detach = true;
                 case "--pid-file" -> {
-                    if (i + 1 >= args.length) return missingArg("exec", a);
-                    pidFile = args[++i];
+                    if (flagVal != null) { pidFile = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else pidFile = args[++i];
                 }
                 case "--console-socket" -> {
-                    if (i + 1 >= args.length) return missingArg("exec", a);
-                    i++;
-                    Logger.warn("exec: --console-socket is not supported yet, ignoring");
+                    if (flagVal != null) { consoleSocket = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else consoleSocket = args[++i];
                 }
-                case "-t", "--tty" -> Logger.warn("exec: -t/--tty is not supported yet, ignoring");
+                case "-t", "--tty" -> tty = true;
                 case "--cwd" -> {
-                    if (i + 1 >= args.length) return missingArg("exec", a);
-                    cwd = args[++i];
+                    if (flagVal != null) { cwd = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else cwd = args[++i];
                 }
                 case "-e", "--env" -> {
-                    if (i + 1 >= args.length) return missingArg("exec", a);
-                    envs.add(args[++i]);
+                    if (flagVal != null) { envs.add(flagVal); }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else envs.add(args[++i]);
+                }
+                case "--additional-gids" -> {
+                    if (flagVal != null) { additionalGids.add(flagVal); }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else additionalGids.add(args[++i]);
+                }
+                case "--preserve-fds" -> {
+                    String val = flagVal != null ? flagVal : (i + 1 < args.length ? args[++i] : null);
+                    if (val == null) return missingArg("exec", a);
+                    Integer v = parseIntOrFail("exec", "--preserve-fds", val);
+                    if (v == null) return 1;
+                    preserveFds = v;
+                }
+                case "--cap" -> {
+                    if (flagVal != null) { caps.add(flagVal); }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else caps.add(args[++i]);
+                }
+                case "--cgroup" -> {
+                    if (flagVal != null) { cgroupPath = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else cgroupPath = args[++i];
+                }
+                case "--no-new-privs" -> { /* accepted for compat, always-on in takoyaki */ }
+                case "--apparmor", "--process-label" -> {
+                    // Accept and skip these flags with their values
+                    if (flagVal == null && i + 1 < args.length) i++;
                 }
                 default -> {
                     if (a.charAt(0) != '-' && id == null) {
@@ -519,7 +564,8 @@ public final class Main {
             return 1;
         }
         return ExecCommand.run(rootPath, id, processJson, user, cwd, envs, command,
-                detach, pidFile);
+                detach, pidFile, tty, consoleSocket, additionalGids, caps,
+                preserveFds);
     }
 
     // ---- small helpers ------------------------------------------------
