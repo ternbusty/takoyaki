@@ -299,6 +299,7 @@ public final class ExecCommand {
         // helper threads), in the order given here; any failure there is fatal.
         List<Integer> nsFds = new ArrayList<>();
         StringJoiner nsFdList = new StringJoiner(",");
+        int cgroupNsFd = -1;
         for (String type : NS_ORDER) {
             String path = "/proc/" + initPid + "/ns/" + type;
             if (!java.nio.file.Files.exists(Path.of(path))) continue;
@@ -311,7 +312,17 @@ public final class ExecCommand {
                 continue;
             }
             nsFds.add(fd);
-            nsFdList.add(type + ":" + fd);
+            // Cgroup namespace must NOT be entered in bootstrap.c: the exec
+            // process is moved to the container's cgroup by the CLI AFTER the
+            // clone, so entering cgroupns before that makes /proc/self/cgroup
+            // show a host-relative path instead of "0::/". We pass the fd
+            // separately and do setns(cgroup) in ExecProcess after reading
+            // the payload (which is the sync point for cgroup membership).
+            if ("cgroup".equals(type)) {
+                cgroupNsFd = fd;
+            } else {
+                nsFdList.add(type + ":" + fd);
+            }
         }
 
         int[] payloadFds = new int[2];
@@ -350,6 +361,9 @@ public final class ExecCommand {
         }
         if (consoleWriteFd >= 0) {
             envList.add("_TAKOYAKI_EXEC_CONSOLE_FD=" + consoleWriteFd);
+        }
+        if (cgroupNsFd >= 0) {
+            envList.add("_TAKOYAKI_EXEC_CGROUPNS_FD=" + cgroupNsFd);
         }
         if (Logger.isDebugEnabled()) {
             envList.add("_TAKOYAKI_EXEC_DEBUG=1");
@@ -426,9 +440,12 @@ public final class ExecCommand {
                 && containerCgroupPath != null) {
             String initCgroup = Cgroup.readProcessCgroup(initPid);
             if (initCgroup != null) {
-                String fallback = containerCgroupPath + initCgroup;
-                Logger.debug("exec cgroup fallback to init's cgroup: " + fallback);
-                Cgroup.addPid(fallback, workloadPid);
+                // readProcessCgroup returns the absolute v2 path from the host
+                // cgroup namespace (e.g. "/container-cg/foobar" or "/runc-tst-123").
+                // Use it directly because init may have moved outside the
+                // container's original cgroup entirely.
+                Logger.debug("exec cgroup fallback to init's cgroup: " + initCgroup);
+                Cgroup.addPid(initCgroup, workloadPid);
             }
         }
 

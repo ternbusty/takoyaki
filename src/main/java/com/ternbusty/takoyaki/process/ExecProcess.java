@@ -85,6 +85,24 @@ public final class ExecProcess {
         }
         PosixIO.close(payloadFd);
 
+        // Enter the container's cgroup namespace NOW, after reading the payload.
+        // The payload read blocks until the CLI finishes Cgroup.addPid (which
+        // writes our pid to the container's cgroup.procs), so by this point we
+        // are a member of the container's cgroup. Entering cgroupns here makes
+        // /proc/self/cgroup correctly show "0::/" instead of a host-relative path.
+        // The fd was opened by ExecCommand and deliberately kept out of
+        // bootstrap.c's setns loop for this reason.
+        String cgroupNsFdStr = System.getenv("_TAKOYAKI_EXEC_CGROUPNS_FD");
+        if (cgroupNsFdStr != null) {
+            int cgroupNsFd = Integer.parseInt(cgroupNsFdStr);
+            if (Libc.setns(cgroupNsFd, Constants.CLONE_NEWCGROUP) != 0) {
+                Logger.warn("setns(cgroupns) failed: " + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("entered container cgroup namespace");
+            }
+            PosixIO.close(cgroupNsFd);
+        }
+
         try (Arena arena = Arena.ofConfined()) {
             // oom_score_adj first, while still privileged; inherited across execve.
             ProcessRestrictions.applyOomScoreAdj(payload.process.oomScoreAdj);
@@ -92,6 +110,15 @@ public final class ExecProcess {
             // I/O priority and scheduler before the restriction sequence.
             ProcessRestrictions.applyIOPriority(payload.process.ioPriority);
             ProcessRestrictions.applyScheduler(payload.process.scheduler);
+
+            // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).
+            // Setting RLIMIT_NOFILE above fs.nr_open requires CAP_SYS_RESOURCE,
+            // which is gone after cap drop. RLIMIT_AS is deferred to just before
+            // execve to avoid OOMing the JVM's heap. Same order as InitProcess.
+            if (payload.process.rlimits != null) {
+                com.ternbusty.takoyaki.syscall.Rlimit.applyExcept(
+                        Libc.getpid(), payload.process.rlimits, "RLIMIT_AS");
+            }
 
             // getpid() is the pid inside the container's pid ns — the same
             // perspective the init path reports to a SCMP_ACT_NOTIFY listener,
@@ -168,12 +195,13 @@ public final class ExecProcess {
 
             String[] argv = payload.process.args.toArray(new String[0]);
 
-            // Rlimits dead-last: a low RLIMIT_AS applied any earlier could push
+            // RLIMIT_AS dead-last: a low RLIMIT_AS applied any earlier could push
             // the already-mapped SubstrateVM heap over the limit and abort us
-            // before execve. The user process picks the limits up across exec.
+            // before execve. Other rlimits were already applied above (before
+            // cap drop). Same deferred pattern as InitProcess.
             if (payload.process.rlimits != null) {
-                com.ternbusty.takoyaki.syscall.Rlimit.apply(Libc.getpid(),
-                        payload.process.rlimits);
+                com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(Libc.getpid(),
+                        payload.process.rlimits, "RLIMIT_AS");
             }
 
             Logger.debug("setns_init: about to exec");

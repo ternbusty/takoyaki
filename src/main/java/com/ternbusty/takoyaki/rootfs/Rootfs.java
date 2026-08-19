@@ -57,14 +57,6 @@ public final class Rootfs {
             // Setting MS_PRIVATE would sever the peer group, making
             // rootfsPropagation "slave" impossible after pivot_root because
             // there would be no peer to slave to.
-            // Remount rootfs with MS_NOSUID so setuid binaries inside the container
-            // can't gain extra privileges through the host's mount layer.
-            if (Libc.mount(arena, null, rootfsPath, null,
-                    Constants.MS_BIND | Constants.MS_REMOUNT | Constants.MS_NOSUID, null) != 0) {
-                Logger.debug("rootfs MS_NOSUID remount failed: " + Libc.strerror(Libc.errno()));
-            } else {
-                Logger.debug("rootfs marked MS_NOSUID");
-            }
 
             mountProc(arena, rootfsPath);
             // runc compat: pass the spec's /dev mount options (if any) so that
