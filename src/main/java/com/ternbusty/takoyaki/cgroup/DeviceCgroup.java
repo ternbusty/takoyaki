@@ -141,11 +141,25 @@ public final class DeviceCgroup {
         emit(out, BPF_LDX_MEM_W, 5, 1, 4, 0);           // R5 = major
         emit(out, BPF_LDX_MEM_W, 6, 1, 8, 0);           // R6 = minor
 
-        // For each rule: emit branch chain.
-        // We use a placeholder "skip distance" and patch later — but since we
-        // know each rule emits a fixed-size block we can compute targets in advance.
-        // Per-rule block size (max): 8 insns + final 2.
+        // runc compat: separate "wildcard" rules (type='a', no major/minor) from
+        // specific rules. Specific rules are emitted first. The LAST wildcard
+        // rule determines the default tail action. This way, the OCI pattern
+        // [{deny all}, {allow b 8:0}] works: the specific allow matches before
+        // the default deny.
+        boolean defaultAllow = false; // default tail
+        java.util.List<Spec.LinuxDeviceCgroup> specific = new java.util.ArrayList<>();
         for (Spec.LinuxDeviceCgroup r : rules) {
+            boolean isWildcard = (r.type == null || r.type.isEmpty() || "a".equals(r.type))
+                    && r.major == null && r.minor == null;
+            if (isWildcard) {
+                defaultAllow = r.allow;
+            } else {
+                specific.add(r);
+            }
+        }
+
+        // For each specific rule: emit branch chain.
+        for (Spec.LinuxDeviceCgroup r : specific) {
             int devType = parseDevType(r.type);
             int accBits = parseAccessBits(r.access);
 
@@ -181,8 +195,8 @@ public final class DeviceCgroup {
             out.writeBytes(subBytes);
         }
 
-        // Default tail: deny.
-        emit(out, BPF_ALU_MOV_K, 0, 0, 0, 0);
+        // Default tail: use the last wildcard rule's allow/deny decision.
+        emit(out, BPF_ALU_MOV_K, 0, 0, 0, defaultAllow ? 1 : 0);
         emit(out, BPF_EXIT_INSN, 0, 0, 0, 0);
 
         return out.toByteArray();

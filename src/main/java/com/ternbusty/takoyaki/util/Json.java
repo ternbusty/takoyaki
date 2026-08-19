@@ -35,6 +35,11 @@ public final class Json {
         return JsonWriter.toPretty(jsonTree);
     }
 
+    /** Compact (single-line, no whitespace) JSON encoding. */
+    public static String encodeCompact(Object jsonTree) {
+        return JsonWriter.toCompact(jsonTree);
+    }
+
     public static <T> T decode(String s, Function<Object, T> fromJson) {
         return fromJson.apply(JsonParser.parse(s));
     }

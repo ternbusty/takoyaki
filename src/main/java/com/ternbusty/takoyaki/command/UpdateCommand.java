@@ -73,6 +73,25 @@ public final class UpdateCommand {
             if (r.cpu == null) r.cpu = new Spec.LinuxCpu();
             if (cpuQuota != null) r.cpu.quota = cpuQuota;
             if (cpuPeriod != null) r.cpu.period = cpuPeriod;
+            // runc compat: when only period or only quota is given via CLI,
+            // read the current cpu.max and preserve the other component.
+            // Without this, the missing component defaults to "max"/100000
+            // and the update clobbers the previous value.
+            if ((cpuQuota != null || cpuPeriod != null) && (r.cpu.quota == null || r.cpu.period == null)) {
+                try {
+                    String cpuMax = java.nio.file.Files.readString(
+                            Cgroup.dir(cgroupPath).resolve("cpu.max")).trim();
+                    String[] parts = cpuMax.split("\\s+");
+                    if (parts.length == 2) {
+                        if (r.cpu.quota == null) {
+                            r.cpu.quota = "max".equals(parts[0]) ? -1L : Long.parseLong(parts[0]);
+                        }
+                        if (r.cpu.period == null) {
+                            r.cpu.period = Long.parseLong(parts[1]);
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
             if (cpuShares != null) r.cpu.shares = cpuShares;
             if (cpuBurst != null) r.cpu.burst = cpuBurst;
             if (cpuIdle != null) {
@@ -100,16 +119,10 @@ public final class UpdateCommand {
 
         // runc compat: checkBeforeUpdate prevents setting memory limits
         // below current usage, avoiding instant OOM kills.
+        // Check swap first: when both memory and swap are below usage, runc
+        // reports "rejecting memory+swap limit" (the more specific error).
         if (r.memory != null && Boolean.TRUE.equals(r.memory.checkBeforeUpdate)) {
             java.nio.file.Path cgDir = Cgroup.dir(cgroupPath);
-            if (r.memory.limit != null && r.memory.limit > 0) {
-                long usage = readCgroupLong(cgDir.resolve("memory.current"));
-                if (usage > 0 && r.memory.limit < usage) {
-                    System.err.println("rejecting memory limit " + r.memory.limit
-                            + " (current usage is " + usage + ")");
-                    return 1;
-                }
-            }
             if (r.memory.swap != null && r.memory.swap > 0 && r.memory.limit != null) {
                 long memUsage = readCgroupLong(cgDir.resolve("memory.current"));
                 long swapUsage = readCgroupLong(cgDir.resolve("memory.swap.current"));
@@ -117,6 +130,14 @@ public final class UpdateCommand {
                 if (totalUsage > 0 && r.memory.swap < totalUsage) {
                     System.err.println("rejecting memory+swap limit " + r.memory.swap
                             + " (current usage is " + totalUsage + ")");
+                    return 1;
+                }
+            }
+            if (r.memory.limit != null && r.memory.limit > 0) {
+                long usage = readCgroupLong(cgDir.resolve("memory.current"));
+                if (usage > 0 && r.memory.limit < usage) {
+                    System.err.println("rejecting memory limit " + r.memory.limit
+                            + " (current usage is " + usage + ")");
                     return 1;
                 }
             }

@@ -39,7 +39,7 @@ public final class EventsCommand {
 
         do {
             Map<String, Object> snap = snapshot(cg, containerId);
-            System.out.println(Json.encode(snap));
+            System.out.println(Json.encodeCompact(snap));
             if (once) break;
             try { Thread.sleep(intervalMs); } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -68,7 +68,7 @@ public final class EventsCommand {
                                 Map<String, Object> oomEvent = new LinkedHashMap<>();
                                 oomEvent.put("type", "oom");
                                 oomEvent.put("id", containerId);
-                                System.out.println(Json.encode(oomEvent));
+                                System.out.println(Json.encodeCompact(oomEvent));
                                 lastOomKill = current;
                             }
                         }

@@ -145,9 +145,12 @@ public final class Cgroup {
         }
     }
 
-    /** Re-apply resource limits to an existing cgroup (e.g. via `update`). */
+    /** Re-apply resource limits to an existing cgroup (e.g. via `update`).
+     *  Also enables any new controllers required by the update. */
     public static void applyLimitsOnly(String cgroupPath, Spec.LinuxResources r) {
-        applyLimits(dir(cgroupPath), r);
+        Path full = dir(cgroupPath);
+        enableControllers(full, r);
+        applyLimits(full, r);
     }
 
     private static void applyLimits(Path full, Spec.LinuxResources r) {
@@ -318,6 +321,11 @@ public final class Cgroup {
         // Kill all processes in this cgroup tree (including subcgroups).
         killCgroupTree(full);
 
+        // Wait for all processes to actually exit from the cgroup. The kernel
+        // needs time to reap killed processes, and they must disappear from
+        // cgroup.procs before rmdir can succeed.
+        waitForEmpty(full);
+
         // Remove subcgroup directories bottom-up, then the main directory.
         // Subcgroups must be removed before the parent (kernel requirement).
         try {
@@ -378,6 +386,43 @@ public final class Cgroup {
                 }
             }
         }
+    }
+
+    /**
+     * Wait for cgroup.procs (and children's) to become empty after a kill.
+     * Gives the kernel up to 5 seconds for processes to be reaped.
+     */
+    private static void waitForEmpty(Path dir) {
+        long deadlineNs = System.nanoTime() + 5_000_000_000L;
+        while (System.nanoTime() < deadlineNs) {
+            if (isTreeEmpty(dir)) return;
+            try { Thread.sleep(10); }
+            catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        Logger.debug("cgroup tree not fully empty after 5s: " + dir);
+    }
+
+    /** Check if cgroup.procs is empty in this dir and all subdirectories. */
+    private static boolean isTreeEmpty(Path dir) {
+        try {
+            String procs = Files.readString(dir.resolve("cgroup.procs")).trim();
+            if (!procs.isEmpty()) return false;
+        } catch (IOException e) {
+            return true; // can't read → treat as empty
+        }
+        try (java.util.stream.Stream<Path> children = Files.list(dir)) {
+            for (Path child : children.toList()) {
+                if (Files.isDirectory(child) && !Files.isSymbolicLink(child)) {
+                    if (!isTreeEmpty(child)) return false;
+                }
+            }
+        } catch (IOException e) {
+            // can't list children → ok
+        }
+        return true;
     }
 
     /** Retry rmdir with back-off for up to 5 seconds. */

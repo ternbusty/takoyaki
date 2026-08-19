@@ -42,6 +42,12 @@ public final class MainProcess {
         }
 
         int stage2Pid = -1;
+        // Track whether the cgroup existed before we tried to create it.
+        // On failure we must NOT clean up a pre-existing cgroup: doing so
+        // would kill another container's processes (e.g. ct1 in the runc
+        // "non-empty cgroup" test) and remove a frozen cgroup the test set up.
+        boolean cgroupPreExisted = Files.exists(
+                Cgroup.dir(effectiveCgroupsPath).resolve("cgroup.procs"));
         try {
             Cgroup.setup(stage1Pid, effectiveCgroupsPath, spec.linux);
             // rlimits are NOT applied to the bootstrap pid from here — doing so
@@ -179,10 +185,15 @@ public final class MainProcess {
             if (stage2Pid > 0) {
                 try { Libc.kill(stage2Pid, 9); } catch (Exception ignored) {}
             }
-            // Clean up the cgroup directory.
-            try {
-                Cgroup.cleanup(effectiveCgroupsPath);
-            } catch (Exception ignored) {}
+            // Clean up the cgroup directory only if it did not pre-exist.
+            // A pre-existing cgroup belongs to another container; cleaning it
+            // would kill that container's processes and break tests like
+            // "should error for a non-empty cgroup" and "refuse frozen cgroup".
+            if (!cgroupPreExisted) {
+                try {
+                    Cgroup.cleanup(effectiveCgroupsPath);
+                } catch (Exception ignored) {}
+            }
             PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
             PosixIO._exit(1);

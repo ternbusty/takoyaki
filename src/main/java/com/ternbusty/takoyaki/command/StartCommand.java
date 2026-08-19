@@ -52,10 +52,16 @@ public final class StartCommand {
             Logger.info("container " + containerId + " started");
 
             // poststart hook runs in the runtime namespace after the user process is started.
+            // runc compat: poststart hook failure causes the container to be killed
+            // and the run/start command to return non-zero.
             Logger.debug("poststart: spec=" + (spec != null) + " hooks=" + (spec != null && spec.hooks != null)
                     + " count=" + (spec != null && spec.hooks != null && spec.hooks.poststart != null ? spec.hooks.poststart.size() : 0));
             if (spec != null && spec.hooks != null) {
-                Hooks.run(spec.hooks.poststart, updated, "poststart");
+                String hookErr = Hooks.run(spec.hooks.poststart, updated, "poststart");
+                if (hookErr != null) {
+                    System.err.println(hookErr);
+                    return 1;
+                }
             }
             return 0;
         } catch (Exception e) {

@@ -33,9 +33,11 @@ public final class Hooks {
     /**
      * Run post-* hooks. Failures are logged but never propagate; that's the
      * OCI semantics for poststart / poststop.
+     *
+     * @return the first error message if any hook failed, null if all succeeded.
      */
-    public static void run(List<Spec.Hook> hooks, State state, String phase) {
-        runEach(hooks, state, phase, false, null);
+    public static String run(List<Spec.Hook> hooks, State state, String phase) {
+        return runEach(hooks, state, phase, false, null);
     }
 
     /**
@@ -44,8 +46,8 @@ public final class Hooks {
      * and throws — the caller is expected to surface this as a create/start
      * failure.
      */
-    public static void runFailFast(List<Spec.Hook> hooks, State state, String phase) {
-        runEach(hooks, state, phase, true, null);
+    public static String runFailFast(List<Spec.Hook> hooks, State state, String phase) {
+        return runEach(hooks, state, phase, true, null);
     }
 
     /**
@@ -54,14 +56,15 @@ public final class Hooks {
      * instead of getting an empty environment. This matches runc's behavior
      * for startContainer hooks, which inherit the container process's env.
      */
-    public static void runFailFast(List<Spec.Hook> hooks, State state, String phase,
-                                   List<String> processEnv) {
-        runEach(hooks, state, phase, true, processEnv);
+    public static String runFailFast(List<Spec.Hook> hooks, State state, String phase,
+                                     List<String> processEnv) {
+        return runEach(hooks, state, phase, true, processEnv);
     }
 
-    private static void runEach(List<Spec.Hook> hooks, State state, String phase,
-                                boolean failFast, List<String> processEnv) {
-        if (hooks == null || hooks.isEmpty()) return;
+    private static String runEach(List<Spec.Hook> hooks, State state, String phase,
+                                  boolean failFast, List<String> processEnv) {
+        if (hooks == null || hooks.isEmpty()) return null;
+        String firstError = null;
         String stateJson = Json.encode(state.toJson());
         for (int idx = 0; idx < hooks.size(); idx++) {
             Spec.Hook h = hooks.get(idx);
@@ -115,6 +118,7 @@ public final class Hooks {
                     String msg = "error running " + phase + " hook #" + hookNum
                             + ": hook did not complete within " + timeout + "s";
                     if (failFast) throw new RuntimeException(msg);
+                    if (firstError == null) firstError = msg;
                     Logger.warn(msg);
                     continue;
                 }
@@ -131,6 +135,7 @@ public final class Hooks {
                     String msg = "error running " + phase + " hook #" + hookNum
                             + ": " + detail;
                     if (failFast) throw new RuntimeException(msg);
+                    if (firstError == null) firstError = msg;
                     Logger.warn(msg);
                 } else {
                     Logger.debug("hook " + phase + " " + h.path + " ok");
@@ -139,8 +144,10 @@ public final class Hooks {
                 String msg = "error running " + phase + " hook #" + hookNum
                         + ": " + e.getMessage();
                 if (failFast) throw new RuntimeException(msg, e);
+                if (firstError == null) firstError = msg;
                 Logger.warn(msg);
             }
         }
+        return firstError;
     }
 }

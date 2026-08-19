@@ -55,7 +55,7 @@ public final class ListCommand {
             //   ociVersion, id, pid, status, bundle, rootfs, created
             // "rootfs" is derived from the bundle path and "annotations" is
             // omitted entirely.
-            System.out.println(Json.encode(states.stream().map(s -> {
+            System.out.println(Json.encodeCompact(states.stream().map(s -> {
                 java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
                 m.put("ociVersion", s.ociVersion);
                 m.put("id", s.id);
