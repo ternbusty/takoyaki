@@ -27,7 +27,8 @@ class ExecCommandTest {
     @Test
     void commandReplacesArgsAndRestrictionsSurvive() {
         Spec.Process p = ExecCommand.buildEffectiveProcess(
-                baseProcess(), null, null, List.of(), List.of("sh", "-c", "id"));
+                baseProcess(), null, null, List.of(), List.of("sh", "-c", "id"),
+                false, List.of(), List.of());
         assertEquals(List.of("sh", "-c", "id"), p.args);
         // The security-relevant fields must ride along unchanged.
         assertEquals(Boolean.TRUE, p.noNewPrivileges);
@@ -40,7 +41,8 @@ class ExecCommandTest {
     @Test
     void cliOverridesApplyOnTop() {
         Spec.Process p = ExecCommand.buildEffectiveProcess(
-                baseProcess(), "0:10", "/tmp", List.of("EXTRA=1"), List.of("id"));
+                baseProcess(), "0:10", "/tmp", List.of("EXTRA=1"), List.of("id"),
+                false, List.of(), List.of());
         assertEquals(0, p.user.uid);
         assertEquals(10, p.user.gid);
         assertEquals(List.of(5), p.user.additionalGids,
@@ -52,7 +54,8 @@ class ExecCommandTest {
     @Test
     void uidOnlyUserKeepsBaseGid() {
         Spec.Process p = ExecCommand.buildEffectiveProcess(
-                baseProcess(), "0", null, List.of(), List.of("id"));
+                baseProcess(), "0", null, List.of(), List.of("id"),
+                false, List.of(), List.of());
         assertEquals(0, p.user.uid);
         assertEquals(1000, p.user.gid);
     }
@@ -61,7 +64,8 @@ class ExecCommandTest {
     void baseIsNotMutated() {
         Spec.Process base = baseProcess();
         ExecCommand.buildEffectiveProcess(base, "0:0", "/tmp",
-                List.of("X=1"), List.of("other"));
+                List.of("X=1"), List.of("other"),
+                false, List.of(), List.of());
         assertEquals(List.of("init-cmd"), base.args);
         assertEquals(1000, base.user.uid);
         assertEquals(List.of("PATH=/usr/bin", "FOO=bar"), base.env);
@@ -73,18 +77,21 @@ class ExecCommandTest {
                 { "args": ["x"] }
                 """, Spec.Process::fromJson);
         Spec.Process p = ExecCommand.buildEffectiveProcess(
-                base, null, null, List.of(), List.of("id"));
+                base, null, null, List.of(), List.of("id"),
+                false, List.of(), List.of());
         assertTrue(p.env.stream().anyMatch(e -> e.startsWith("PATH=")));
     }
 
     @Test
     void rejectsMissingProcessSectionAndEmptyCommand() {
         assertThrows(IllegalArgumentException.class, () ->
-                ExecCommand.buildEffectiveProcess(null, null, null, List.of(), List.of("id")));
+                ExecCommand.buildEffectiveProcess(null, null, null, List.of(), List.of("id"),
+                        false, List.of(), List.of()));
 
         Spec.Process argless = Json.decode("{}", Spec.Process::fromJson);
         assertThrows(IllegalArgumentException.class, () ->
-                ExecCommand.buildEffectiveProcess(argless, null, null, List.of(), List.of()));
+                ExecCommand.buildEffectiveProcess(argless, null, null, List.of(), List.of(),
+                        false, List.of(), List.of()));
     }
 
     @Test

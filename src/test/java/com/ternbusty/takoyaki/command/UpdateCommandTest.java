@@ -24,7 +24,8 @@ class UpdateCommandTest {
         // wouldn't know where to write. We surface non-zero.
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "absent",
-                    null, null, null, null, null, null);
+                    null, null, null, null, null, null,
+                    null, null, null, null, null);
             assertEquals(1, rc);
             cm.verify(() -> Cgroup.applyLimitsOnly(anyString(),
                     any(Spec.LinuxResources.class)), never());
@@ -36,7 +37,8 @@ class UpdateCommandTest {
         new KontainerConfig(null).save(tmp.toString(), "no-cgroup");
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "no-cgroup",
-                    null, null, null, null, null, null);
+                    null, null, null, null, null, null,
+                    null, null, null, null, null);
             assertEquals(1, rc);
             cm.verify(() -> Cgroup.applyLimitsOnly(anyString(),
                     any(Spec.LinuxResources.class)), never());
@@ -50,7 +52,8 @@ class UpdateCommandTest {
 
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "ctr",
-                    null, 256L * 1024 * 1024, null, null, null, null);
+                    null, 256L * 1024 * 1024, null, null,
+                    null, null, null, null, null, null, null);
             assertEquals(0, rc);
             ArgumentCaptor<Spec.LinuxResources> arg =
                     ArgumentCaptor.forClass(Spec.LinuxResources.class);
@@ -72,7 +75,8 @@ class UpdateCommandTest {
 
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "ctr",
-                    null, null, 50000L, 100000L, 1024L, null);
+                    null, null, null, null,
+                    50000L, 100000L, 1024L, null, null, null, null);
             assertEquals(0, rc);
             ArgumentCaptor<Spec.LinuxResources> arg =
                     ArgumentCaptor.forClass(Spec.LinuxResources.class);
@@ -94,7 +98,8 @@ class UpdateCommandTest {
 
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "ctr",
-                    null, null, null, null, null, 512L);
+                    null, null, null, null, null, null,
+                    null, 512L, null, null, null);
             assertEquals(0, rc);
             ArgumentCaptor<Spec.LinuxResources> arg =
                     ArgumentCaptor.forClass(Spec.LinuxResources.class);
@@ -114,7 +119,8 @@ class UpdateCommandTest {
 
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "ctr",
-                    res.toString(), 999L, null, null, null, null);
+                    res.toString(), 999L, null, null,
+                    null, null, null, null, null, null, null);
             assertEquals(0, rc);
             ArgumentCaptor<Spec.LinuxResources> arg =
                     ArgumentCaptor.forClass(Spec.LinuxResources.class);
@@ -134,6 +140,7 @@ class UpdateCommandTest {
         try (MockedStatic<Cgroup> cm = mockStatic(Cgroup.class)) {
             int rc = UpdateCommand.run(tmp.toString(), "ctr",
                     tmp.resolve("does-not-exist.json").toString(),
+                    null, null, null, null, null,
                     null, null, null, null, null);
             assertEquals(1, rc);
             cm.verify(() -> Cgroup.applyLimitsOnly(anyString(),

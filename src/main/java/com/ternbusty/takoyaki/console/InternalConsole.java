@@ -125,7 +125,7 @@ public final class InternalConsole {
      */
     public void startIOCopy() {
         if (masterFd < 0) return;
-        startIOCopyForFd(masterFd);
+        ioThread = startIOCopyForFd(masterFd);
     }
 
     /**
@@ -189,9 +189,15 @@ public final class InternalConsole {
         }
     }
 
-    /** Clean up: close master fd, remove socket file. */
+    /** Clean up: wait for I/O threads to drain, close master fd, remove socket file. */
     public void stop() {
         stopped = true;
+        // Let the reader thread drain remaining PTY data before closing the fd.
+        // Without this, a race between waitForChild returning and the reader
+        // reaching EOF can lose the last chunk of container output.
+        if (ioThread != null) {
+            try { ioThread.join(5_000); } catch (InterruptedException ignored) {}
+        }
         if (masterFd >= 0) {
             PosixIO.close(masterFd);
             masterFd = -1;
