@@ -137,7 +137,7 @@ public final class ExecProcess {
             // Flag every inherited runtime fd CLOEXEC so nothing leaks into the
             // user process (the payload fd is closed; the seccomp listener fd
             // has been forwarded by Seccomp.apply if it was needed).
-            CloseRange.closeAllAbove(0);
+            CloseRange.closeAllAbove(payload.preserveFds);
 
             String[] argv = payload.process.args.toArray(new String[0]);
 

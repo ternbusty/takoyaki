@@ -142,6 +142,10 @@ public final class Libc {
         return LibcH.mknod(arena.allocateFrom(path), mode, dev);
     }
 
+    public static int chown(Arena arena, String path, int owner, int group) {
+        return LibcH.chown(arena.allocateFrom(path), owner, group);
+    }
+
     public static int ioctl(int fd, long request, MemorySegment arg) {
         return IOCTL.apply(fd, request, arg);
     }

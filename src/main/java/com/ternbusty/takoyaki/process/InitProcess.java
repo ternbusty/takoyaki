@@ -266,6 +266,15 @@ public final class InitProcess {
                 ProcessRestrictions.applyScheduler(spec.process.scheduler);
             }
 
+            // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).
+            // Setting RLIMIT_NOFILE above fs.nr_open requires CAP_SYS_RESOURCE,
+            // which is gone after cap drop. RLIMIT_AS is deferred to just before
+            // execve to avoid OOMing the JVM's heap.
+            if (spec.process != null && spec.process.rlimits != null) {
+                com.ternbusty.takoyaki.syscall.Rlimit.applyExcept(
+                        Libc.getpid(), spec.process.rlimits, "RLIMIT_AS");
+            }
+
             ProcessRestrictions.apply(spec.process,
                     spec.linux != null ? spec.linux.seccomp : null,
                     buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
@@ -343,13 +352,15 @@ public final class InitProcess {
             String[] argv = spec.process.args.toArray(new String[0]);
             Logger.info("executing: " + String.join(" ", argv));
 
-            // Apply process.rlimits LAST — after the JVM has done all its heap
+            // Apply RLIMIT_AS LAST — after the JVM has done all its heap
             // and address-space provisioning. If we did this earlier, a low
             // RLIMIT_AS (e.g. 1 GiB) would push the JVM's already-mapped heap
             // over the limit and the very next allocation would OOM. The
             // about-to-execve user process picks up the new limits.
+            // Other rlimits were already applied above (before cap drop).
             if (spec.process.rlimits != null) {
-                com.ternbusty.takoyaki.syscall.Rlimit.apply(Libc.getpid(), spec.process.rlimits);
+                com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(
+                        Libc.getpid(), spec.process.rlimits, "RLIMIT_AS");
             }
 
             // startContainer hooks: last chance for the runtime to poke around

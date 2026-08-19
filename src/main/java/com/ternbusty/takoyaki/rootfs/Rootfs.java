@@ -66,7 +66,19 @@ public final class Rootfs {
             }
 
             mountProc(arena, rootfsPath);
-            mountDev(arena, rootfsPath);
+            // runc compat: pass the spec's /dev mount options (if any) so that
+            // "ro" in the spec actually makes /dev read-only.
+            long devExtraFlags = 0;
+            if (spec.mounts != null) {
+                for (Spec.Mount sm : spec.mounts) {
+                    if ("/dev".equals(sm.destination)) {
+                        MountOptions.Parsed dp = MountOptions.parse(sm.options);
+                        devExtraFlags = dp.flags;
+                        break;
+                    }
+                }
+            }
+            mountDev(arena, rootfsPath, devExtraFlags);
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
@@ -93,14 +105,15 @@ public final class Rootfs {
         }
     }
 
-    private static void mountDev(Arena arena, String rootfsPath) {
+    private static void mountDev(Arena arena, String rootfsPath, long extraFlags) {
         String dev = rootfsPath + "/dev";
         if (PosixIO.access(arena, dev, Constants.F_OK) != 0) {
             try { Files.createDirectories(Path.of(dev)); }
             catch (IOException e) { Logger.warn("mkdir dev: " + e.getMessage()); return; }
         }
+        long devFlags = Constants.MS_NOSUID | Constants.MS_NOEXEC | extraFlags;
         if (Libc.mount(arena, "tmpfs", dev, "tmpfs",
-                Constants.MS_NOSUID | Constants.MS_NOEXEC, "mode=755") != 0) {
+                devFlags, "mode=755") != 0) {
             Logger.warn("mount /dev tmpfs: " + Libc.strerror(Libc.errno()));
             return;
         }
@@ -264,7 +277,11 @@ public final class Rootfs {
             long propagation = parsed.propagation;
             String data = parsed.data;
             boolean isBind = parsed.isBind;
-            try { Files.createDirectories(Path.of(target)); } catch (IOException ignored) {}
+            // Create the target mount point. For bind mounts where the source
+            // is a regular file, create a file (not a directory). runc follows
+            // symlinks in the destination path within the rootfs and creates
+            // intermediate directories as needed.
+            createMountTarget(rootfsPath, m, target, isBind);
 
             // Id-mapped mounts: if uidMappings/gidMappings are present we route the
             // bind through open_tree + mount_setattr(MOUNT_ATTR_IDMAP) + move_mount.
@@ -286,6 +303,13 @@ public final class Rootfs {
                 }
                 if (done) continue;
                 Logger.warn("idmap mount failed for " + m.destination + ", falling back to plain bind");
+            }
+
+            // runc compat: for tmpfs mounts without an explicit "mode=" option,
+            // inherit the permission bits from the existing target directory.
+            // This makes "mount tmpfs on /tmp" keep /tmp's chmod'd mode.
+            if ("tmpfs".equals(type) && !isBind) {
+                data = inheritTmpfsMode(target, data);
             }
 
             int rc = sc.mount(m.source, target, isBind ? null : type, flags, data);
@@ -334,15 +358,19 @@ public final class Rootfs {
                 if (Libc.pivotRoot(arena, newRoot, newRoot) != 0) {
                     throw new RuntimeException("pivot_root: " + Libc.strerror(Libc.errno()));
                 }
-                if (Libc.mount(arena, null, "/", null,
-                        Constants.MS_SLAVE | Constants.MS_REC, null) != 0) {
-                    Logger.warn("remount / as slave failed: " + Libc.strerror(Libc.errno()));
-                }
-                if (Libc.umount2(arena, "/", Constants.MNT_DETACH) != 0) {
-                    Logger.warn("umount2 / failed: " + Libc.strerror(Libc.errno()));
-                }
+                // runc compat: after pivot_root(new, new), the old root is
+                // stacked on top of the new root. We need to make the old root
+                // (and all mounts under it) slaves before detaching. Using "."
+                // targets the old root mount rather than the new root underneath.
                 if (PosixIO.fchdir(newrootFd) != 0) {
                     throw new RuntimeException("fchdir: " + Libc.strerror(Libc.errno()));
+                }
+                if (Libc.mount(arena, null, ".", null,
+                        Constants.MS_SLAVE | Constants.MS_REC, null) != 0) {
+                    Logger.warn("remount . as slave failed: " + Libc.strerror(Libc.errno()));
+                }
+                if (Libc.umount2(arena, ".", Constants.MNT_DETACH) != 0) {
+                    Logger.warn("umount2 . failed: " + Libc.strerror(Libc.errno()));
                 }
             } finally {
                 PosixIO.close(newrootFd);
@@ -445,6 +473,105 @@ public final class Rootfs {
             } else {
                 Logger.debug("readonly " + p);
             }
+        }
+    }
+
+    /**
+     * Create the target mount point for an OCI mount. For bind mounts where the
+     * source is a regular file (not a directory), create a file; otherwise
+     * create a directory. Also resolves symlinks in the destination path within
+     * the rootfs scope, creating intermediate directories as needed.
+     */
+    private static void createMountTarget(String rootfsPath, Spec.Mount m,
+                                          String target, boolean isBind) {
+        try {
+            // Resolve the full target path within rootfs, following symlinks.
+            String resolved = resolveInRootfs(rootfsPath, m.destination);
+            boolean isFile = false;
+            if (isBind && m.source != null) {
+                // Check if the source is a file (not a directory).
+                Path srcPath = Path.of(m.source);
+                if (!srcPath.isAbsolute()) {
+                    // Relative source: resolve against CWD (spec bundle dir).
+                    srcPath = Path.of(System.getProperty("user.dir", ".")).resolve(srcPath);
+                }
+                if (Files.isRegularFile(srcPath)) {
+                    isFile = true;
+                }
+            }
+            if (isFile) {
+                // Create parent directories then touch the target file.
+                Path resolvedPath = Path.of(resolved);
+                Files.createDirectories(resolvedPath.getParent());
+                if (!Files.exists(resolvedPath)) {
+                    Files.createFile(resolvedPath);
+                }
+            } else {
+                Files.createDirectories(Path.of(resolved));
+            }
+        } catch (IOException e) {
+            // Fallback: use the literal target path.
+            try { Files.createDirectories(Path.of(target)); }
+            catch (IOException ignored) {}
+        }
+    }
+
+    /**
+     * Resolve a container-relative path within rootfsPath, following symlinks
+     * component by component but keeping the result under rootfsPath.
+     * Returns the fully resolved host-side path.
+     */
+    private static String resolveInRootfs(String rootfsPath, String destination) {
+        Path rootfs = Path.of(rootfsPath);
+        // Split destination into components and resolve one at a time.
+        String[] components = destination.split("/");
+        Path current = rootfs;
+        for (String comp : components) {
+            if (comp.isEmpty()) continue;
+            Path next = current.resolve(comp);
+            if (Files.isSymbolicLink(next)) {
+                try {
+                    Path linkTarget = Files.readSymbolicLink(next);
+                    if (linkTarget.isAbsolute()) {
+                        // Absolute symlink: re-root under rootfs.
+                        current = rootfs.resolve(linkTarget.toString().substring(1)).normalize();
+                    } else {
+                        current = current.resolve(linkTarget).normalize();
+                    }
+                    // Security: ensure we're still under rootfs.
+                    if (!current.startsWith(rootfs)) {
+                        current = rootfs;
+                    }
+                } catch (IOException e) {
+                    current = next;
+                }
+            } else {
+                current = next;
+            }
+        }
+        return current.toString();
+    }
+
+    /**
+     * runc compat: for tmpfs mounts, if no explicit "mode=" is in the data
+     * string, read the existing target directory's permission bits and inject
+     * "mode=<octal>" so the tmpfs inherits them. Without this, tmpfs defaults
+     * to mode 1777, losing any chmod the user applied to the directory before
+     * mounting.
+     */
+    private static String inheritTmpfsMode(String target, String data) {
+        if (data != null && data.contains("mode=")) return data;
+        try {
+            int unixMode = (int) Files.getAttribute(Path.of(target), "unix:mode",
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            int mode = unixMode & 07777;
+            String modeStr = "mode=0" + Integer.toOctalString(mode);
+            Logger.debug("tmpfs inheriting " + modeStr + " from " + target);
+            if (data == null || data.isEmpty()) return modeStr;
+            return data + "," + modeStr;
+        } catch (Exception e) {
+            Logger.debug("could not read target mode for tmpfs: " + e.getMessage());
+            return data;
         }
     }
 }

@@ -10,6 +10,24 @@ import java.util.List;
 public final class Rlimit {
     private Rlimit() {}
 
+    /** Apply all rlimits except the one named by {@code excludeType}. */
+    public static void applyExcept(int pid, List<Spec.POSIXRlimit> rlimits, String excludeType) {
+        if (rlimits == null || rlimits.isEmpty()) return;
+        List<Spec.POSIXRlimit> filtered = rlimits.stream()
+                .filter(r -> !excludeType.equals(r.type))
+                .toList();
+        apply(pid, filtered);
+    }
+
+    /** Apply only the rlimit named by {@code onlyType}. */
+    public static void applyOnly(int pid, List<Spec.POSIXRlimit> rlimits, String onlyType) {
+        if (rlimits == null || rlimits.isEmpty()) return;
+        List<Spec.POSIXRlimit> filtered = rlimits.stream()
+                .filter(r -> onlyType.equals(r.type))
+                .toList();
+        apply(pid, filtered);
+    }
+
     public static void apply(int pid, List<Spec.POSIXRlimit> rlimits) {
         if (rlimits == null || rlimits.isEmpty()) return;
         Syscalls sc = SyscallHost.current();

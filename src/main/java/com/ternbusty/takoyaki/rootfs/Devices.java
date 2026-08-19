@@ -51,6 +51,8 @@ public final class Devices {
                     } catch (Exception e) {
                         Logger.debug("chmod " + d.path + " failed: " + e.getMessage());
                     }
+                    // Set ownership per spec (runc always chowns to the spec's uid/gid).
+                    chownDevice(arena, target, d);
                     Logger.debug("mknod " + d.path + " (" + d.type + " " + d.major + ":" + d.minor + ")");
                     continue;
                 }
@@ -65,6 +67,8 @@ public final class Devices {
                 if (sc.mount(hostPath, target, null, Constants.MS_BIND, null) != 0) {
                     Logger.debug("bind " + d.path + " from host failed: " + sc.strerror(sc.errno()));
                 } else {
+                    // Set ownership per spec even for bind-mounted devices.
+                    chownDevice(arena, target, d);
                     Logger.debug("bind mounted " + d.path + " from host");
                 }
             }
@@ -102,6 +106,19 @@ public final class Devices {
         if ((permBits & 0002) != 0) perms.add(java.nio.file.attribute.PosixFilePermission.OTHERS_WRITE);
         if ((permBits & 0001) != 0) perms.add(java.nio.file.attribute.PosixFilePermission.OTHERS_EXECUTE);
         return perms;
+    }
+
+    /**
+     * Set uid/gid on a device node per the OCI spec entry.
+     * runc always chowns to the spec's uid:gid (default 0:0).
+     */
+    private static void chownDevice(Arena arena, String path, Spec.LinuxDevice d) {
+        int uid = d.uid == null ? 0 : d.uid.intValue();
+        int gid = d.gid == null ? 0 : d.gid.intValue();
+        if (Libc.chown(arena, path, uid, gid) != 0) {
+            Logger.debug("chown " + path + " " + uid + ":" + gid
+                    + " failed: " + Libc.strerror(Libc.errno()));
+        }
     }
 
     /** Encode (major, minor) into a Linux dev_t (glibc convention). Package-visible for tests. */

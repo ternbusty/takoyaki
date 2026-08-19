@@ -201,7 +201,7 @@ val jextractLibc by tasks.registering(Exec::class) {
         "unshare", "setns", "mount", "umount2", "chdir", "sethostname", "setdomainname",
         "kill", "prctl", "umask", "getpid", "getppid", "__errno_location", "strerror",
         "execvp", "clearenv", "setenv", "setgroups", "prlimit64", "syscall", "geteuid",
-        "getegid", "setresuid", "setresgid", "mknod", "ioctl", "waitpid",
+        "getegid", "setresuid", "setresgid", "mknod", "ioctl", "waitpid", "chown",
     )
     commandLine(buildList {
         add(jextractBin.get())

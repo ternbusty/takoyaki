@@ -110,6 +110,7 @@ public final class ExecCommand {
         payload.ociVersion = state.ociVersion;
         payload.process = process;
         payload.seccomp = spec.linux != null ? spec.linux.seccomp : null;
+        payload.preserveFds = preserveFds;
         // A missing runtime config just means a container created before cgroup
         // support (skip); any other load failure must NOT silently exec the
         // process outside the container's resource limits.
