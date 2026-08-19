@@ -64,6 +64,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libseccomp-dev
 
+      - name: Install jextract
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          echo "sdkman_auto_answer=true" >> "$HOME/.sdkman/etc/config"
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install jextract
+          echo "$HOME/.sdkman/candidates/jextract/current/bin" >> "$GITHUB_PATH"
+          "$HOME/.sdkman/candidates/jextract/current/bin/jextract" --version
+
       - name: Install GraalVM 25
         uses: graalvm/setup-graalvm@v1
         with:
