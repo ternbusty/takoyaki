@@ -1,0 +1,4 @@
+[submodule "tests/runc/src/github.com/opencontainers/runc"]
+	path = tests/runc/src/github.com/opencontainers/runc
+	url = https://github.com/opencontainers/runc.git
+	ignore = dirty

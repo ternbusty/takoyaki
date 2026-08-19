@@ -10,6 +10,7 @@ import com.ternbusty.takoyaki.command.PauseCommand;
 import com.ternbusty.takoyaki.command.PsCommand;
 import com.ternbusty.takoyaki.command.ResumeCommand;
 import com.ternbusty.takoyaki.command.RunCommand;
+import com.ternbusty.takoyaki.command.SpecCommand;
 import com.ternbusty.takoyaki.command.StartCommand;
 import com.ternbusty.takoyaki.command.StateCommand;
 import com.ternbusty.takoyaki.command.UpdateCommand;
@@ -141,6 +142,7 @@ public final class Main {
             case "update" -> dispatchUpdate(args, subStart, rootPath);
             case "events" -> dispatchEvents(args, subStart, rootPath);
             case "exec" -> dispatchExec(args, subStart, rootPath);
+            case "spec" -> SpecCommand.run(args, subStart);
             default -> {
                 System.err.println("takoyaki: unknown command: " + subName);
                 yield 1;
