@@ -208,14 +208,28 @@ public final class Main {
     }
 
     private static int dispatchKill(String[] args, int subStart, String rootPath) {
-        // takoyaki kill <id> [signal]
-        if (subStart >= args.length) {
+        // takoyaki kill [-a|--all] <id> [signal]
+        boolean all = false;
+        String id = null;
+        String sig = "SIGTERM";
+        for (int i = subStart; i < args.length; i++) {
+            String a = args[i];
+            if ("-a".equals(a) || "--all".equals(a)) {
+                all = true;
+            } else if (id == null && a.charAt(0) != '-') {
+                id = a;
+            } else if (id != null && a.charAt(0) != '-') {
+                sig = a;
+            } else {
+                System.err.println("takoyaki kill: unexpected arg: " + a);
+                return 1;
+            }
+        }
+        if (id == null) {
             System.err.println("takoyaki kill: missing container ID");
             return 1;
         }
-        String id = args[subStart];
-        String sig = subStart + 1 < args.length ? args[subStart + 1] : "SIGTERM";
-        return KillCommand.run(rootPath, id, sig);
+        return KillCommand.run(rootPath, id, sig, all);
     }
 
     private static int dispatchDelete(String[] args, int subStart, String rootPath) {
@@ -241,18 +255,24 @@ public final class Main {
     }
 
     private static int dispatchPs(String[] args, int subStart, String rootPath) {
-        // takoyaki ps [-f|--format] <id>
+        // takoyaki ps [-f|--format] <id> [PS_ARGS...]
+        // Everything after the container ID is passed through to the host ps
+        // command (runc behaviour).
         String format = "table";
         String id = null;
+        List<String> psArgs = new ArrayList<>();
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
-            if ("-f".equals(a) || "--format".equals(a)) {
+            if (id != null) {
+                // Everything after the container ID is a ps argument
+                psArgs.add(a);
+            } else if ("-f".equals(a) || "--format".equals(a)) {
                 if (i + 1 >= args.length) {
                     System.err.println("takoyaki ps: --format requires a value");
                     return 1;
                 }
                 format = args[++i];
-            } else if (a.charAt(0) != '-' && id == null) {
+            } else if (a.charAt(0) != '-') {
                 id = a;
             } else {
                 System.err.println("takoyaki ps: unexpected arg: " + a);
@@ -263,7 +283,7 @@ public final class Main {
             System.err.println("takoyaki ps: missing container ID");
             return 1;
         }
-        return PsCommand.run(rootPath, id, format);
+        return PsCommand.run(rootPath, id, format, psArgs);
     }
 
     private static int dispatchCreate(String[] args, int subStart, String rootPath, boolean debug) {
@@ -355,26 +375,50 @@ public final class Main {
     }
 
     private static int dispatchUpdate(String[] args, int subStart, String rootPath) {
-        // takoyaki update [-r FILE] [--memory N] [--cpu-quota N] [--cpu-period N]
-        //                 [--cpu-shares N] [--pids-limit N] <id>
+        // takoyaki update [-r FILE|-] [--memory N] [--memory-reservation N]
+        //   [--memory-swap N] [--cpu-quota N] [--cpu-period N]
+        //   [--cpu-share N|--cpu-shares N] [--pids-limit N] [--cpuset-cpus S]
+        //   [--cpu-burst N] [--cpu-idle N] <id>
         String resourcesPath = null;
         Long memory = null;
+        Long memoryReservation = null;
+        Long memorySwap = null;
         Long cpuQuota = null;
         Long cpuPeriod = null;
         Long cpuShares = null;
         Long pidsLimit = null;
+        String cpusetCpus = null;
+        Long cpuBurst = null;
+        Long cpuIdle = null;
         String id = null;
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
             switch (a) {
                 case "-r", "--resources" -> {
                     if (i + 1 >= args.length) return missingArg("update", a);
-                    resourcesPath = args[++i];
+                    String rval = args[++i];
+                    if ("-".equals(rval)) {
+                        // Read resources JSON from stdin
+                        resourcesPath = readStdinToTempFile();
+                        if (resourcesPath == null) return 1;
+                    } else {
+                        resourcesPath = rval;
+                    }
                 }
                 case "--memory" -> {
                     if (i + 1 >= args.length) return missingArg("update", a);
-                    memory = parseLongOrFail("update", a, args[++i]);
+                    memory = parseMemoryValue("update", a, args[++i]);
                     if (memory == null) return 1;
+                }
+                case "--memory-reservation" -> {
+                    if (i + 1 >= args.length) return missingArg("update", a);
+                    memoryReservation = parseMemoryValue("update", a, args[++i]);
+                    if (memoryReservation == null) return 1;
+                }
+                case "--memory-swap" -> {
+                    if (i + 1 >= args.length) return missingArg("update", a);
+                    memorySwap = parseMemoryValue("update", a, args[++i]);
+                    if (memorySwap == null) return 1;
                 }
                 case "--cpu-quota" -> {
                     if (i + 1 >= args.length) return missingArg("update", a);
@@ -386,7 +430,7 @@ public final class Main {
                     cpuPeriod = parseLongOrFail("update", a, args[++i]);
                     if (cpuPeriod == null) return 1;
                 }
-                case "--cpu-shares" -> {
+                case "--cpu-share", "--cpu-shares" -> {
                     if (i + 1 >= args.length) return missingArg("update", a);
                     cpuShares = parseLongOrFail("update", a, args[++i]);
                     if (cpuShares == null) return 1;
@@ -395,6 +439,20 @@ public final class Main {
                     if (i + 1 >= args.length) return missingArg("update", a);
                     pidsLimit = parseLongOrFail("update", a, args[++i]);
                     if (pidsLimit == null) return 1;
+                }
+                case "--cpuset-cpus" -> {
+                    if (i + 1 >= args.length) return missingArg("update", a);
+                    cpusetCpus = args[++i];
+                }
+                case "--cpu-burst" -> {
+                    if (i + 1 >= args.length) return missingArg("update", a);
+                    cpuBurst = parseLongOrFail("update", a, args[++i]);
+                    if (cpuBurst == null) return 1;
+                }
+                case "--cpu-idle" -> {
+                    if (i + 1 >= args.length) return missingArg("update", a);
+                    cpuIdle = parseLongOrFail("update", a, args[++i]);
+                    if (cpuIdle == null) return 1;
                 }
                 default -> {
                     if (a.charAt(0) != '-' && id == null) {
@@ -411,13 +469,54 @@ public final class Main {
             return 1;
         }
         return UpdateCommand.run(rootPath, id, resourcesPath, memory,
-                cpuQuota, cpuPeriod, cpuShares, pidsLimit);
+                memoryReservation, memorySwap, cpuQuota, cpuPeriod, cpuShares,
+                pidsLimit, cpusetCpus, cpuBurst, cpuIdle);
+    }
+
+    /** Read stdin to a temp file and return its path. */
+    private static String readStdinToTempFile() {
+        try {
+            byte[] data = System.in.readAllBytes();
+            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("takoyaki-update-", ".json");
+            java.nio.file.Files.write(tmp, data);
+            return tmp.toString();
+        } catch (java.io.IOException e) {
+            System.err.println("failed to read stdin: " + e.getMessage());
+            return null;
+        }
+    }
+
+    /** Parse a memory value that may have units (K, M, G) or be a plain number. */
+    private static Long parseMemoryValue(String sub, String opt, String value) {
+        if (value == null || value.isEmpty()) return null;
+        // Check for -1 (unlimited)
+        if ("-1".equals(value)) return -1L;
+        // Human-readable suffixes (case-insensitive)
+        String upper = value.toUpperCase();
+        long multiplier = 1;
+        String numPart = value;
+        if (upper.endsWith("G")) {
+            multiplier = 1024L * 1024 * 1024;
+            numPart = value.substring(0, value.length() - 1);
+        } else if (upper.endsWith("M")) {
+            multiplier = 1024L * 1024;
+            numPart = value.substring(0, value.length() - 1);
+        } else if (upper.endsWith("K")) {
+            multiplier = 1024L;
+            numPart = value.substring(0, value.length() - 1);
+        }
+        try {
+            return Long.parseLong(numPart) * multiplier;
+        } catch (NumberFormatException e) {
+            System.err.println("takoyaki " + sub + ": " + opt + " requires an integer, got: " + value);
+            return null;
+        }
     }
 
     private static int dispatchEvents(String[] args, int subStart, String rootPath) {
-        // takoyaki events [--stats] [--interval SEC] <id>
+        // takoyaki events [--stats] [--interval DURATION] <id>
         boolean once = false;
-        int intervalSec = 5;
+        String interval = "5s";
         String id = null;
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
@@ -425,9 +524,7 @@ public final class Main {
                 case "--stats" -> once = true;
                 case "--interval" -> {
                     if (i + 1 >= args.length) return missingArg("events", a);
-                    Integer v = parseIntOrFail("events", a, args[++i]);
-                    if (v == null) return 1;
-                    intervalSec = v;
+                    interval = args[++i];
                 }
                 default -> {
                     if (a.charAt(0) != '-' && id == null) {
@@ -443,7 +540,7 @@ public final class Main {
             System.err.println("takoyaki events: missing container ID");
             return 1;
         }
-        return EventsCommand.run(rootPath, id, once, intervalSec);
+        return EventsCommand.run(rootPath, id, once, interval);
     }
 
     private static int dispatchExec(String[] args, int subStart, String rootPath) {

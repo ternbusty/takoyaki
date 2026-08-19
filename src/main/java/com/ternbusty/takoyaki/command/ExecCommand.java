@@ -40,6 +40,9 @@ public final class ExecCommand {
     private static final String[] NS_ORDER =
             {"user", "cgroup", "ipc", "uts", "net", "time", "pid", "mnt"};
 
+    /** runc-compatible exit code for runtime-level exec errors. */
+    private static final int EXIT_RUNTIME_ERROR = 255;
+
     public static int run(String rootPath, String containerId, String processJsonPath,
                           String user, String cwd, List<String> envs, List<String> command,
                           boolean detach, String pidFile, boolean tty, String consoleSocket,
@@ -47,7 +50,7 @@ public final class ExecCommand {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
             Logger.error(exclusivity);
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         State state;
@@ -55,11 +58,11 @@ public final class ExecCommand {
             state = State.load(rootPath, containerId).refreshStatus();
         } catch (Exception e) {
             Logger.error("failed to load state: " + e.getMessage());
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
         if (state.statusEnum() != ContainerStatus.RUNNING || state.pid == null) {
             Logger.error("container " + containerId + " is not running");
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         Spec spec;
@@ -67,7 +70,7 @@ public final class ExecCommand {
             spec = Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson);
         } catch (Exception e) {
             Logger.error("failed to load config.json: " + e.getMessage());
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         // Effective process document: `-p FILE` verbatim (runc semantics), or
@@ -78,7 +81,7 @@ public final class ExecCommand {
                 process = Json.readFile(Path.of(processJsonPath), Spec.Process::fromJson);
                 if (process == null || process.args == null || process.args.isEmpty()) {
                     Logger.error("process.json has no args");
-                    return 1;
+                    return EXIT_RUNTIME_ERROR;
                 }
             } else {
                 process = buildEffectiveProcess(spec.process, user, cwd, envs, command,
@@ -86,7 +89,7 @@ public final class ExecCommand {
             }
         } catch (Exception e) {
             Logger.error("failed to build process document: " + e.getMessage());
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         ExecPayload payload = new ExecPayload();
@@ -105,7 +108,7 @@ public final class ExecCommand {
             Logger.debug("no cgroup config for " + containerId);
         } catch (Exception e) {
             Logger.error("failed to load cgroup config: " + e.getMessage());
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         try (Arena arena = Arena.ofConfined()) {
@@ -264,7 +267,7 @@ public final class ExecCommand {
         int[] payloadFds = new int[2];
         if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, payloadFds) < 0) {
             Logger.error("socketpair failed: " + Libc.strerror(Libc.errno()));
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
         int readFd = payloadFds[0];
         int writeFd = payloadFds[1];
@@ -280,6 +283,16 @@ public final class ExecCommand {
         if (Logger.isDebugEnabled()) {
             envList.add("_TAKOYAKI_EXEC_DEBUG=1");
         }
+        // Propagate log file/format so bootstrap.c and ExecProcess can write
+        // debug output to the same place the CLI's --log flag specified.
+        String logFilePath = Logger.getLogFilePath();
+        if (logFilePath != null) {
+            envList.add("_TAKOYAKI_LOG_FILE=" + logFilePath);
+        }
+        String logFmt = Logger.getFormatName();
+        if (logFmt != null) {
+            envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
+        }
 
         String[] argv = {exePath, "__exec__"};
         // Shared arena, never closed: the forked child touches these segments
@@ -293,7 +306,7 @@ public final class ExecCommand {
         int childPid = PosixIO.fork();
         if (childPid < 0) {
             Logger.error("fork failed: " + Libc.strerror(Libc.errno()));
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
         if (childPid == 0) {
             // Close the write side so the payload read sees EOF once the
@@ -318,7 +331,7 @@ public final class ExecCommand {
             Logger.error("no pid report from exec bootstrap: " + e.getMessage());
             PosixIO.close(writeFd);
             Wait.waitForChild(childPid);
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         // Reap the intermediate, which exits right after the pid report. The
@@ -347,7 +360,7 @@ public final class ExecCommand {
                 java.nio.file.Files.writeString(Path.of(pidFile), Integer.toString(workloadPid));
             } catch (java.io.IOException e) {
                 Logger.error("write pid file failed: " + e.getMessage());
-                return 1;
+                return EXIT_RUNTIME_ERROR;
             }
         }
 
@@ -358,6 +371,6 @@ public final class ExecCommand {
             return 0;
         }
         int code = Wait.waitForChild(workloadPid);
-        return written ? code : 1;
+        return written ? code : EXIT_RUNTIME_ERROR;
     }
 }

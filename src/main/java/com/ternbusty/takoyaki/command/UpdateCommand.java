@@ -12,9 +12,10 @@ public final class UpdateCommand {
     private UpdateCommand() {}
 
     public static int run(String rootPath, String containerId,
-                          String resourcesPath, Long memory,
-                          Long cpuQuota, Long cpuPeriod, Long cpuShares,
-                          Long pidsLimit) {
+                          String resourcesPath, Long memory, Long memoryReservation,
+                          Long memorySwap, Long cpuQuota, Long cpuPeriod,
+                          Long cpuShares, Long pidsLimit, String cpusetCpus,
+                          Long cpuBurst, Long cpuIdle) {
         String cgroupPath;
         try {
             cgroupPath = KontainerConfig.load(rootPath, containerId).cgroupPath;
@@ -42,20 +43,45 @@ public final class UpdateCommand {
             if (r.memory == null) r.memory = new Spec.LinuxMemory();
             r.memory.limit = memory;
         }
-        if (cpuQuota != null || cpuPeriod != null || cpuShares != null) {
+        if (memoryReservation != null) {
+            if (r.memory == null) r.memory = new Spec.LinuxMemory();
+            r.memory.reservation = memoryReservation;
+        }
+        if (memorySwap != null) {
+            if (r.memory == null) r.memory = new Spec.LinuxMemory();
+            r.memory.swap = memorySwap;
+            // For cgroup v2, swap is relative to memory. Need memory limit to
+            // compute the delta. If memory was not given on this invocation,
+            // read the current value from the cgroup.
+            if (r.memory.limit == null) {
+                try {
+                    String cur = java.nio.file.Files.readString(
+                            Cgroup.dir(cgroupPath).resolve("memory.max")).trim();
+                    if (!"max".equals(cur)) {
+                        r.memory.limit = Long.parseLong(cur);
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+        if (cpuQuota != null || cpuPeriod != null || cpuShares != null
+                || cpuBurst != null || cpuIdle != null) {
             if (r.cpu == null) r.cpu = new Spec.LinuxCpu();
             if (cpuQuota != null) r.cpu.quota = cpuQuota;
             if (cpuPeriod != null) r.cpu.period = cpuPeriod;
             if (cpuShares != null) r.cpu.shares = cpuShares;
+            if (cpuBurst != null) r.cpu.burst = cpuBurst;
+            if (cpuIdle != null) r.cpu.idle = cpuIdle;
+        }
+        if (cpusetCpus != null) {
+            if (r.cpu == null) r.cpu = new Spec.LinuxCpu();
+            r.cpu.cpus = cpusetCpus;
         }
         if (pidsLimit != null) {
             if (r.pids == null) r.pids = new Spec.LinuxPids();
             r.pids.limit = pidsLimit;
         }
 
-        // Reuse the existing cgroup directory; just rewrite limits.
         Cgroup.applyLimitsOnly(cgroupPath, r);
-        Logger.info("updated resources for " + containerId);
         return 0;
     }
 }

@@ -23,6 +23,8 @@ import com.ternbusty.takoyaki.util.Json;
 import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class InitProcess {
     private InitProcess() {}
@@ -333,12 +335,20 @@ public final class InitProcess {
             // startContainer hooks: last chance for the runtime to poke around
             // in the fully-set-up container namespace before handing control to
             // the user process. Per OCI, failable — non-zero exit aborts start.
+            // runc's startContainer hooks inherit the process environment when
+            // the hook itself does not specify an env field.
             if (spec.hooks != null && spec.hooks.startContainer != null
                     && containerId != null) {
+                // Build the env list that the process will get (after dedup +
+                // HOME injection) so the hook sees the same environment.
+                List<String> hookEnv = new ArrayList<>();
+                for (var envEntry : envMap.entrySet()) {
+                    hookEnv.add(envEntry.getKey() + "=" + envEntry.getValue());
+                }
                 Hooks.runFailFast(spec.hooks.startContainer,
                         buildState(spec, containerId, bundlePath,
                                 ContainerStatus.CREATED),
-                        "startContainer");
+                        "startContainer", hookEnv);
             }
 
             Libc.execvp(arena, argv[0], argv);

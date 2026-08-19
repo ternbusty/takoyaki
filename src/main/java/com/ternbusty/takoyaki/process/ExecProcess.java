@@ -43,6 +43,16 @@ public final class ExecProcess {
 
     public static void run() {
         Logger.setContext("exec");
+        // Inherit log file/format from the CLI so debug output goes to --log
+        // rather than leaking to stderr (same pattern as InitProcess).
+        String execLogFile = System.getenv("_TAKOYAKI_LOG_FILE");
+        if (execLogFile != null) {
+            Logger.setLogFile(execLogFile);
+        }
+        String execLogFormat = System.getenv("_TAKOYAKI_LOG_FORMAT");
+        if ("json".equalsIgnoreCase(execLogFormat)) {
+            Logger.setFormat(Logger.Format.JSON);
+        }
 
         int payloadFd;
         int seccompListenerFd;
@@ -131,6 +141,7 @@ public final class ExecProcess {
                         payload.process.rlimits);
             }
 
+            Logger.debug("setns_init: about to exec");
             Libc.execvp(arena, argv[0], argv);
             String errMsg = Libc.strerror(Libc.errno());
             System.err.println("exec " + argv[0] + ": " + errMsg);
@@ -138,7 +149,7 @@ public final class ExecProcess {
         } catch (Exception e) {
             Logger.error("exec setup failed: " + e.getMessage());
         }
-        PosixIO._exit(127);
+        PosixIO._exit(255);
     }
 
     /** Read fd to EOF (retrying EINTR) and return the content as a string. */

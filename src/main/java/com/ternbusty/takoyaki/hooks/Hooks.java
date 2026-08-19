@@ -35,7 +35,7 @@ public final class Hooks {
      * OCI semantics for poststart / poststop.
      */
     public static void run(List<Spec.Hook> hooks, State state, String phase) {
-        runEach(hooks, state, phase, false);
+        runEach(hooks, state, phase, false, null);
     }
 
     /**
@@ -45,16 +45,29 @@ public final class Hooks {
      * failure.
      */
     public static void runFailFast(List<Spec.Hook> hooks, State state, String phase) {
-        runEach(hooks, state, phase, true);
+        runEach(hooks, state, phase, true, null);
+    }
+
+    /**
+     * Run failable hooks with an inherited process environment. When a hook
+     * does not specify its own {@code env} field, it inherits {@code processEnv}
+     * instead of getting an empty environment. This matches runc's behavior
+     * for startContainer hooks, which inherit the container process's env.
+     */
+    public static void runFailFast(List<Spec.Hook> hooks, State state, String phase,
+                                   List<String> processEnv) {
+        runEach(hooks, state, phase, true, processEnv);
     }
 
     private static void runEach(List<Spec.Hook> hooks, State state, String phase,
-                                boolean failFast) {
+                                boolean failFast, List<String> processEnv) {
         if (hooks == null || hooks.isEmpty()) return;
         String stateJson = Json.encode(state.toJson());
         for (int idx = 0; idx < hooks.size(); idx++) {
             Spec.Hook h = hooks.get(idx);
             if (h.path == null) continue;
+            // runc uses 0-based hook numbering in error messages.
+            int hookNum = idx;
             List<String> cmd = new ArrayList<>();
             if (h.args != null && !h.args.isEmpty()) {
                 // OCI spec: hook.args[0] is the command to execute (like argv[0]);
@@ -65,33 +78,41 @@ public final class Hooks {
                 cmd.add(h.path);
             }
             ProcessBuilder pb = new ProcessBuilder(cmd).redirectErrorStream(true);
-            // Always start from a clean env — inheriting the runtime's env
-            // would leak whatever _TAKOYAKI_* variables and container-id state
-            // the caller had into the hook, which is surprising and defeats
-            // the point of the spec's env field. If the spec left env unset
-            // the hook gets an empty env; if it's set we use exactly that.
-            // Matches youki (env_clear + envs).
+            // Start from a clean env — inheriting the runtime's env would leak
+            // _TAKOYAKI_* variables into the hook.
             pb.environment().clear();
             if (h.env != null) {
+                // Hook specifies its own env: use exactly that.
                 for (String e : h.env) {
+                    int eq = e.indexOf('=');
+                    if (eq > 0) pb.environment().put(e.substring(0, eq), e.substring(eq + 1));
+                }
+            } else if (processEnv != null) {
+                // No hook env but a process env was provided (startContainer):
+                // inherit the container process's environment, matching runc.
+                for (String e : processEnv) {
                     int eq = e.indexOf('=');
                     if (eq > 0) pb.environment().put(e.substring(0, eq), e.substring(eq + 1));
                 }
             }
             try {
                 Process p = pb.start();
-                try (OutputStream stdin = p.getOutputStream()) {
+                // Pipe the state JSON to stdin. Hooks that exit without reading
+                // (e.g. /bin/true) cause EPIPE on write or on the implicit
+                // flush during close; catch both to avoid false failures.
+                try {
+                    OutputStream stdin = p.getOutputStream();
                     stdin.write(stateJson.getBytes());
+                    stdin.close();
                 } catch (IOException ignored) {
                     // Broken pipe: the hook exited before reading all of stdin.
-                    // This is normal for hooks that don't need the state JSON.
                 }
                 long timeout = h.timeout == null ? 30 : h.timeout;
                 boolean done = p.waitFor(timeout, TimeUnit.SECONDS);
                 if (!done) {
                     p.destroyForcibly();
                     // runc format: "error running <phase> hook #<n>: ..."
-                    String msg = "error running " + phase + " hook #" + idx
+                    String msg = "error running " + phase + " hook #" + hookNum
                             + ": hook did not complete within " + timeout + "s";
                     if (failFast) throw new RuntimeException(msg);
                     Logger.warn(msg);
@@ -107,7 +128,7 @@ public final class Hooks {
                     String detail = hookOutput.isEmpty()
                             ? "exit status " + rc
                             : hookOutput + ": exit status " + rc;
-                    String msg = "error running " + phase + " hook #" + idx
+                    String msg = "error running " + phase + " hook #" + hookNum
                             + ": " + detail;
                     if (failFast) throw new RuntimeException(msg);
                     Logger.warn(msg);
@@ -115,7 +136,7 @@ public final class Hooks {
                     Logger.debug("hook " + phase + " " + h.path + " ok");
                 }
             } catch (IOException | InterruptedException e) {
-                String msg = "error running " + phase + " hook #" + idx
+                String msg = "error running " + phase + " hook #" + hookNum
                         + ": " + e.getMessage();
                 if (failFast) throw new RuntimeException(msg, e);
                 Logger.warn(msg);

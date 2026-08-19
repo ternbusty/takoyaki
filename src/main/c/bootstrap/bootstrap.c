@@ -201,6 +201,24 @@ static void exec_bootstrap(void) {
     if (!sync_env) return;
     int sync_fd = atoi(sync_env);
 
+    /* Enable debug output for exec path (mirrors create path's ENV_DEBUG). */
+    debug_enabled = getenv("_TAKOYAKI_EXEC_DEBUG") != NULL;
+
+    /* Redirect stderr to the log file so that DBG() messages from the exec
+     * bootstrap go to the same log file the CLI specified via --log. */
+    {
+        const char *log_file = getenv("_TAKOYAKI_LOG_FILE");
+        if (log_file) {
+            int log_fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (log_fd >= 0) {
+                dup2(log_fd, STDERR_FILENO);
+                close(log_fd);
+            }
+        }
+    }
+
+    DBG("nsexec container setup\n");
+
     char *ns_env = getenv("_TAKOYAKI_EXEC_NS_FDS");
 
     /* Stage 2: we are the re-exec'd workload. Only the mnt join is left; it
@@ -258,6 +276,7 @@ static void exec_bootstrap(void) {
      * does not exist inside the container pid ns we were born into. execve
      * rebuilds libc from scratch for our real pid. The create path's stage-2
      * re-execs after its raw clone for the same reason. */
+    DBG("child process in init()\n");
     if (setenv("_TAKOYAKI_EXEC_STAGE2", "1", 1) != 0) {
         fprintf(stderr, "[exec-bootstrap] setenv failed: %s\n", strerror(errno));
         _exit(1);

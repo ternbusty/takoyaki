@@ -48,7 +48,16 @@ public final class ListCommand {
             return 0;
         }
         if ("json".equals(format)) {
-            System.out.println(Json.encode(states.stream().map(State::toJson).toList()));
+            // runc list --format json includes a "rootfs" field derived from
+            // the bundle path + "/rootfs".
+            System.out.println(Json.encode(states.stream().map(s -> {
+                @SuppressWarnings("unchecked")
+                java.util.Map<String, Object> m =
+                        new java.util.LinkedHashMap<>((java.util.Map<String, Object>) s.toJson());
+                String rootfs = s.bundle != null ? s.bundle + "/rootfs" : "";
+                m.put("rootfs", rootfs);
+                return m;
+            }).toList()));
             return 0;
         }
         // runc column order: ID PID STATUS BUNDLE CREATED OWNER
