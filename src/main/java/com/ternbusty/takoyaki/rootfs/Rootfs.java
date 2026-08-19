@@ -77,6 +77,10 @@ public final class Rootfs {
 
     private static void mountProc(Arena arena, String rootfsPath) {
         String p = rootfsPath + "/proc";
+        // runc compat: /proc must be a real directory, not a symlink.
+        if (Files.isSymbolicLink(Path.of(p))) {
+            throw new RuntimeException("/proc must be mounted on ordinary directory");
+        }
         if (PosixIO.access(arena, p, Constants.F_OK) != 0) {
             try { Files.createDirectories(Path.of(p)); }
             catch (IOException e) { Logger.warn("mkdir proc: " + e.getMessage()); return; }
@@ -175,6 +179,10 @@ public final class Rootfs {
 
     private static void mountSys(Arena arena, String rootfsPath, Spec spec) {
         String sys = rootfsPath + "/sys";
+        // runc compat: /sys must be a real directory, not a symlink.
+        if (Files.isSymbolicLink(Path.of(sys))) {
+            throw new RuntimeException("/sys must be mounted on ordinary directory");
+        }
         if (PosixIO.access(arena, sys, Constants.F_OK) != 0) {
             try { Files.createDirectories(Path.of(sys)); }
             catch (IOException e) { Logger.warn("mkdir sys: " + e.getMessage()); return; }
@@ -382,7 +390,9 @@ public final class Rootfs {
     public static void maskPaths(List<String> paths) {
         if (paths == null) return;
         Syscalls sc = SyscallHost.current();
-        for (String p : paths) {
+        // runc compat: deduplicate paths so each is masked exactly once.
+        java.util.LinkedHashSet<String> deduped = new java.util.LinkedHashSet<>(paths);
+        for (String p : deduped) {
             int rc = sc.mount("/dev/null", p, null, Constants.MS_BIND, null);
             if (rc == 0) {
                 Logger.debug("masked " + p + " with /dev/null");

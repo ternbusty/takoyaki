@@ -57,6 +57,17 @@ public final class Cgroup {
             // cgroup.procs not readable yet (newly created directory)
         }
 
+        // Reject if the cgroup is already frozen (runc compat).
+        try {
+            String freeze = Files.readString(full.resolve("cgroup.freeze")).trim();
+            if ("1".equals(freeze)) {
+                throw new RuntimeException(
+                        "container's cgroup unexpectedly frozen");
+            }
+        } catch (IOException ignored) {
+            // cgroup.freeze not available (newly created or no freezer)
+        }
+
         // Ensure controllers are enabled in the parent's subtree_control so this cgroup
         // can use them. Walk from root downward.
         enableControllers(full, linux != null ? linux.resources : null);

@@ -392,7 +392,14 @@ public final class InitProcess {
             }
             PosixIO._exit(1);
         } catch (Exception e) {
-            Logger.error("init failed: " + e.getMessage());
+            // Print user-facing error to stderr (runc compat). Logger alone
+            // is silent at the default level, and bats tests assert on the
+            // message in $output.
+            String msg = e.getMessage();
+            if (msg != null) {
+                System.err.println(msg);
+            }
+            Logger.error("init failed: " + msg);
             PosixIO._exit(1);
         }
     }
