@@ -20,11 +20,11 @@ public final class UpdateCommand {
         try {
             cgroupPath = KontainerConfig.load(rootPath, containerId).cgroupPath;
         } catch (Exception e) {
-            Logger.error("no kontainer config: " + e.getMessage());
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         if (cgroupPath == null) {
-            Logger.error("container has no cgroupsPath");
+            System.err.println("container has no cgroupsPath");
             return 1;
         }
 
@@ -35,7 +35,7 @@ public final class UpdateCommand {
                         Spec.LinuxResources::fromJson);
                 r = parsed;
             } catch (Exception e) {
-                Logger.error("failed to read resources file: " + e.getMessage());
+                System.err.println("failed to read resources file: " + e.getMessage());
                 return 1;
             }
         }

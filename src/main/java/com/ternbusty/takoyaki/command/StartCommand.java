@@ -18,11 +18,17 @@ public final class StartCommand {
         try {
             state = State.load(rootPath, containerId).refreshStatus();
         } catch (Exception e) {
-            Logger.error("failed to load state: " + e.getMessage());
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         if (!state.statusEnum().canStart()) {
-            Logger.error("cannot start container in '" + state.status + "' state");
+            String msg = switch (state.statusEnum()) {
+                case STOPPED -> "cannot start a container that has stopped";
+                case RUNNING -> "cannot start an already running container";
+                case PAUSED -> "cannot start a paused container";
+                default -> "cannot start container in '" + state.status + "' state";
+            };
+            System.err.println(msg);
             return 1;
         }
         Spec spec = null;
@@ -53,7 +59,7 @@ public final class StartCommand {
             }
             return 0;
         } catch (Exception e) {
-            Logger.error("failed to start: " + e.getMessage());
+            System.err.println("failed to start: " + e.getMessage());
             return 1;
         }
     }

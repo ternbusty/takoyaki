@@ -42,7 +42,7 @@ public final class RunCommand {
             State st = State.load(rootPath, containerId);
             initPid = st.pid != null ? st.pid : 0;
         } catch (Exception e) {
-            Logger.error("failed to load state after create: " + e.getMessage());
+            System.err.println("failed to load state after create: " + e.getMessage());
             DeleteCommand.run(rootPath, containerId, true);
             return 1;
         }

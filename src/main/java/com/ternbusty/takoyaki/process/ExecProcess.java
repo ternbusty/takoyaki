@@ -147,7 +147,9 @@ public final class ExecProcess {
 
             Logger.debug("setns_init: about to exec");
             Libc.execvp(arena, argv[0], argv);
-            String errMsg = Libc.strerror(Libc.errno());
+            String rawErr = Libc.strerror(Libc.errno());
+            String errMsg = rawErr.isEmpty() ? rawErr
+                    : Character.toLowerCase(rawErr.charAt(0)) + rawErr.substring(1);
             System.err.println("exec " + argv[0] + ": " + errMsg);
             Logger.error("execvp failed: " + errMsg);
         } catch (Exception e) {

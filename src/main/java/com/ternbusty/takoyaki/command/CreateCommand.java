@@ -25,7 +25,7 @@ public final class CreateCommand {
                           String bundleIn, String pidFile, String consoleSocket,
                           boolean noPivot, boolean noNewKeyring, int preserveFds) {
         if (State.exists(rootPath, containerId)) {
-            Logger.error("container " + containerId + " already exists");
+            System.err.println("container " + containerId + " already exists");
             return 1;
         }
 
@@ -35,15 +35,18 @@ public final class CreateCommand {
         try {
             bundle = Path.of(bundleIn).toAbsolutePath().normalize().toString();
         } catch (Exception e) {
-            Logger.error("invalid bundle path: " + e.getMessage());
+            System.err.println("invalid bundle path: " + e.getMessage());
             return 1;
         }
 
         Spec spec;
         try {
             spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson);
+        } catch (java.nio.file.NoSuchFileException e) {
+            System.err.println(bundle + " does not exist");
+            return 1;
         } catch (Exception e) {
-            Logger.error("failed to load config.json: " + e.getMessage());
+            System.err.println("failed to load config.json: " + e.getMessage());
             return 1;
         }
 
@@ -52,7 +55,7 @@ public final class CreateCommand {
         // else (e.g. "invalid" — runtime-tools misc_props test) is rejected.
         if (spec.ociVersion == null
                 || !spec.ociVersion.matches("\\d+\\.\\d+(\\.\\d+)?(-[\\w.+-]+)?")) {
-            Logger.error("invalid ociVersion: " + spec.ociVersion);
+            System.err.println("invalid ociVersion: " + spec.ociVersion);
             return 1;
         }
 
@@ -74,11 +77,11 @@ public final class CreateCommand {
         int[] mainFds = new int[2];
         try (Arena arena = Arena.ofConfined()) {
             if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, syncFds) < 0) {
-                Logger.error("socketpair sync failed: " + Libc.strerror(Libc.errno()));
+                System.err.println("socketpair sync failed: " + Libc.strerror(Libc.errno()));
                 return 1;
             }
             if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, mainFds) < 0) {
-                Logger.error("socketpair main failed: " + Libc.strerror(Libc.errno()));
+                System.err.println("socketpair main failed: " + Libc.strerror(Libc.errno()));
                 return 1;
             }
         }
@@ -93,7 +96,7 @@ public final class CreateCommand {
             exePath = PosixIO.readlink(arena, "/proc/self/exe");
         }
         if (exePath == null) {
-            Logger.error("readlink /proc/self/exe failed");
+            System.err.println("readlink /proc/self/exe failed");
             return 1;
         }
 
@@ -128,7 +131,7 @@ public final class CreateCommand {
                     if (ns.path == null || ns.path.isEmpty()) continue;
                     int fd = PosixIO.open(openArena, ns.path, Constants.O_RDONLY, 0);
                     if (fd < 0) {
-                        Logger.error("open ns path " + ns.path + " failed: " + Libc.strerror(Libc.errno()));
+                        System.err.println("open ns path " + ns.path + " failed: " + Libc.strerror(Libc.errno()));
                         return 1;
                     }
                     nsFds.add(ns.type + ":" + fd);
@@ -204,7 +207,7 @@ public final class CreateCommand {
 
         int forkPid = PosixIO.fork();
         if (forkPid < 0) {
-            Logger.error("fork failed: " + Libc.strerror(Libc.errno()));
+            System.err.println("fork failed: " + Libc.strerror(Libc.errno()));
             return 1;
         }
         if (forkPid == 0) {

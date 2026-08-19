@@ -23,22 +23,23 @@ public final class DeleteCommand {
     public static int run(String rootPath, String containerId, boolean force) {
         if (!State.exists(rootPath, containerId)) {
             if (force) {
-                Logger.info("container " + containerId + " does not exist (force)");
+                // runc compat: --force on non-existent container succeeds
                 return 0;
             }
-            Logger.error("container " + containerId + " does not exist");
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         State state;
         try {
             state = State.load(rootPath, containerId).refreshStatus();
         } catch (Exception e) {
-            Logger.error("failed to load state: " + e.getMessage());
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         if (!state.statusEnum().canDelete()) {
             if (!force) {
-                Logger.error("cannot delete container in '" + state.status + "' state (use --force)");
+                System.err.println("cannot delete container " + containerId
+                        + " that is not stopped: " + state.status);
                 return 1;
             }
             // Unfreeze first if the container is paused, then kill all

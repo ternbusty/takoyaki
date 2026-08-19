@@ -49,7 +49,7 @@ public final class ExecCommand {
                           List<String> additionalGids, List<String> caps, int preserveFds) {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
-            Logger.error(exclusivity);
+            System.err.println(exclusivity);
             return EXIT_RUNTIME_ERROR;
         }
 
@@ -57,11 +57,11 @@ public final class ExecCommand {
         try {
             state = State.load(rootPath, containerId).refreshStatus();
         } catch (Exception e) {
-            Logger.error("failed to load state: " + e.getMessage());
+            System.err.println("container " + containerId + " does not exist");
             return EXIT_RUNTIME_ERROR;
         }
         if (state.statusEnum() != ContainerStatus.RUNNING || state.pid == null) {
-            Logger.error("container " + containerId + " is not running");
+            System.err.println("container " + containerId + " is not running");
             return EXIT_RUNTIME_ERROR;
         }
 
@@ -69,7 +69,7 @@ public final class ExecCommand {
         try {
             spec = Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson);
         } catch (Exception e) {
-            Logger.error("failed to load config.json: " + e.getMessage());
+            System.err.println("failed to load config.json: " + e.getMessage());
             return EXIT_RUNTIME_ERROR;
         }
 
@@ -80,7 +80,7 @@ public final class ExecCommand {
             if (processJsonPath != null) {
                 process = Json.readFile(Path.of(processJsonPath), Spec.Process::fromJson);
                 if (process == null || process.args == null || process.args.isEmpty()) {
-                    Logger.error("process.json has no args");
+                    System.err.println("process.json has no args");
                     return EXIT_RUNTIME_ERROR;
                 }
             } else {
@@ -88,7 +88,7 @@ public final class ExecCommand {
                         tty, additionalGids, caps);
             }
         } catch (Exception e) {
-            Logger.error("failed to build process document: " + e.getMessage());
+            System.err.println("failed to build process document: " + e.getMessage());
             return EXIT_RUNTIME_ERROR;
         }
 
@@ -107,7 +107,7 @@ public final class ExecCommand {
         } catch (java.nio.file.NoSuchFileException e) {
             Logger.debug("no cgroup config for " + containerId);
         } catch (Exception e) {
-            Logger.error("failed to load cgroup config: " + e.getMessage());
+            System.err.println("failed to load cgroup config: " + e.getMessage());
             return EXIT_RUNTIME_ERROR;
         }
 
@@ -224,8 +224,8 @@ public final class ExecCommand {
                              String cgroupPath, boolean detach, String pidFile) {
         String exePath = PosixIO.readlink(arena, "/proc/self/exe");
         if (exePath == null) {
-            Logger.error("readlink /proc/self/exe failed");
-            return 1;
+            System.err.println("readlink /proc/self/exe failed");
+            return EXIT_RUNTIME_ERROR;
         }
 
         // Seccomp notify listener: the socket path only resolves on the host,
@@ -266,7 +266,7 @@ public final class ExecCommand {
 
         int[] payloadFds = new int[2];
         if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, payloadFds) < 0) {
-            Logger.error("socketpair failed: " + Libc.strerror(Libc.errno()));
+            System.err.println("socketpair failed: " + Libc.strerror(Libc.errno()));
             return EXIT_RUNTIME_ERROR;
         }
         int readFd = payloadFds[0];
@@ -305,7 +305,7 @@ public final class ExecCommand {
 
         int childPid = PosixIO.fork();
         if (childPid < 0) {
-            Logger.error("fork failed: " + Libc.strerror(Libc.errno()));
+            System.err.println("fork failed: " + Libc.strerror(Libc.errno()));
             return EXIT_RUNTIME_ERROR;
         }
         if (childPid == 0) {
@@ -328,7 +328,7 @@ public final class ExecCommand {
         try {
             workloadPid = SyncChannel.readInt32(writeFd);
         } catch (RuntimeException e) {
-            Logger.error("no pid report from exec bootstrap: " + e.getMessage());
+            System.err.println("no pid report from exec bootstrap: " + e.getMessage());
             PosixIO.close(writeFd);
             Wait.waitForChild(childPid);
             return EXIT_RUNTIME_ERROR;
@@ -349,7 +349,7 @@ public final class ExecCommand {
         // gives the workload's read its EOF.
         boolean written = PosixIO.writeAll(arena, writeFd, payloadBytes);
         if (!written) {
-            Logger.error("payload write failed: " + Libc.strerror(Libc.errno()));
+            System.err.println("payload write failed: " + Libc.strerror(Libc.errno()));
             // Fall through: the workload sees a truncated payload, fails its
             // JSON parse and exits; reap it instead of leaving a zombie.
         }
@@ -359,7 +359,7 @@ public final class ExecCommand {
             try {
                 java.nio.file.Files.writeString(Path.of(pidFile), Integer.toString(workloadPid));
             } catch (java.io.IOException e) {
-                Logger.error("write pid file failed: " + e.getMessage());
+                System.err.println("write pid file failed: " + e.getMessage());
                 return EXIT_RUNTIME_ERROR;
             }
         }

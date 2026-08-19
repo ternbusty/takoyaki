@@ -373,10 +373,23 @@ public final class InitProcess {
             Libc.execvp(arena, argv[0], argv);
             // runc-compatible error message: plain text to stderr regardless
             // of Logger level, so bats tests can assert on it.
-            String errMsg = Libc.strerror(Libc.errno());
-            System.err.println("exec " + argv[0] + ": " + errMsg);
-            Logger.error("execvp failed: " + errMsg);
-            PosixIO._exit(127);
+            // Go's syscall.Errno.Error() returns lowercase; C's strerror
+            // returns uppercase. Lowercase the first char to match runc.
+            String rawErr = Libc.strerror(Libc.errno());
+            String errMsg = rawErr.isEmpty() ? rawErr
+                    : Character.toLowerCase(rawErr.charAt(0)) + rawErr.substring(1);
+            // Distinguish "binary not found" from "exec failed" (e.g. bad
+            // shebang). When the binary itself does not exist, runc wraps it
+            // as a container-process error; when exec itself fails (file
+            // exists but can't be run), it prints the bare exec error.
+            boolean binaryExists = new java.io.File(argv[0]).exists();
+            if (!binaryExists) {
+                System.err.println("exec container process caused: exec "
+                        + argv[0] + ": " + errMsg);
+            } else {
+                System.err.println("exec " + argv[0] + ": " + errMsg);
+            }
+            PosixIO._exit(1);
         } catch (Exception e) {
             Logger.error("init failed: " + e.getMessage());
             PosixIO._exit(1);
