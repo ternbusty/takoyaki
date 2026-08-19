@@ -179,7 +179,7 @@ public final class ExecCommand {
         }
         if (caps != null && !caps.isEmpty()) {
             // --cap adds capabilities to all sets. Initialise from spec or empty.
-            if (p.capabilities == null) p.capabilities = new Spec.Capabilities();
+            if (p.capabilities == null) p.capabilities = new Spec.LinuxCapabilities();
             for (String cap : caps) {
                 String c = cap.startsWith("CAP_") ? cap : "CAP_" + cap;
                 addCap(p.capabilities, c);
@@ -202,7 +202,7 @@ public final class ExecCommand {
         return p;
     }
 
-    private static void addCap(Spec.Capabilities c, String cap) {
+    private static void addCap(Spec.LinuxCapabilities c, String cap) {
         if (c.bounding == null) c.bounding = new ArrayList<>();
         if (!c.bounding.contains(cap)) c.bounding.add(cap);
         if (c.effective == null) c.effective = new ArrayList<>();
