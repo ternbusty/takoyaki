@@ -67,6 +67,11 @@ public final class KillCommand {
                 System.err.println("kill failed: " + sc.strerror(sc.errno()));
                 return 1;
             }
+            killed = true;
+        }
+        if (!killed && state.pid == null) {
+            System.err.println("container " + containerId + " has no process to kill");
+            return 1;
         }
         Logger.info("sent signal " + signal + " to container " + containerId);
         return 0;

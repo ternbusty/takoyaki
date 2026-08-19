@@ -45,7 +45,7 @@ class KillCommandCallTest {
              var scope = SyscallHost.install(rec)) {
             sm.when(() -> State.load(ROOT, "ctr-a")).thenReturn(st);
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "SIGTERM");
+            int rc = KillCommand.run(ROOT, "ctr-a", "SIGTERM", false);
 
             assertEquals(0, rc);
             assertEquals(List.of(new KillCall(4242, Constants.SIGTERM)),
@@ -64,7 +64,7 @@ class KillCommandCallTest {
              var scope = SyscallHost.install(rec)) {
             sm.when(() -> State.load(anyString(), anyString())).thenReturn(st);
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "KILL");
+            int rc = KillCommand.run(ROOT, "ctr-a", "KILL", false);
 
             assertEquals(1, rc, "OCI spec: kill on stopped MUST error");
             assertTrue(rec.killCalls().isEmpty(),
@@ -87,7 +87,7 @@ class KillCommandCallTest {
              var scope = SyscallHost.install(rec)) {
             sm.when(() -> State.load(anyString(), anyString())).thenReturn(st);
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "KILL");
+            int rc = KillCommand.run(ROOT, "ctr-a", "KILL", false);
 
             assertEquals(0, rc, "ESRCH from kill(2) must NOT propagate as a runtime error");
             assertEquals(1, rec.killCalls().size());
@@ -107,7 +107,7 @@ class KillCommandCallTest {
              var scope = SyscallHost.install(rec)) {
             sm.when(() -> State.load(anyString(), anyString())).thenReturn(st);
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "KILL");
+            int rc = KillCommand.run(ROOT, "ctr-a", "KILL", false);
 
             assertEquals(1, rc, "non-ESRCH kill errors must surface as exit 1");
         }
@@ -123,7 +123,7 @@ class KillCommandCallTest {
              var scope = SyscallHost.install(rec)) {
             sm.when(() -> State.load(anyString(), anyString())).thenReturn(st);
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "TOTALLY_NOT_A_SIGNAL");
+            int rc = KillCommand.run(ROOT, "ctr-a", "TOTALLY_NOT_A_SIGNAL", false);
 
             assertEquals(1, rc);
             assertTrue(rec.killCalls().isEmpty());
@@ -141,7 +141,7 @@ class KillCommandCallTest {
              var scope = SyscallHost.install(rec)) {
             sm.when(() -> State.load(anyString(), anyString())).thenReturn(st);
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "KILL");
+            int rc = KillCommand.run(ROOT, "ctr-a", "KILL", false);
 
             assertEquals(1, rc);
             assertTrue(rec.killCalls().isEmpty());
@@ -156,7 +156,7 @@ class KillCommandCallTest {
             sm.when(() -> State.load(anyString(), anyString()))
                     .thenThrow(new java.io.IOException("no state.json"));
 
-            int rc = KillCommand.run(ROOT, "ctr-a", "KILL");
+            int rc = KillCommand.run(ROOT, "ctr-a", "KILL", false);
 
             assertEquals(1, rc);
             assertTrue(rec.killCalls().isEmpty());

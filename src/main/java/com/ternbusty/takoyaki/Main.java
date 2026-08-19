@@ -660,6 +660,14 @@ public final class Main {
             System.err.println("takoyaki exec: no command specified");
             return 1;
         }
+        // runc compat: --cgroup must not escape to parent (.. components).
+        // "/" is allowed (means top-level cgroup, the default).
+        if (cgroupPath != null && !"/".equals(cgroupPath)) {
+            if (cgroupPath.contains("..")) {
+                System.err.println("bad sub cgroup path \"" + cgroupPath + "\"");
+                return 1;
+            }
+        }
         return ExecCommand.run(rootPath, id, processJson, user, cwd, envs, command,
                 detach, pidFile, tty, consoleSocket, additionalGids, caps,
                 preserveFds);
