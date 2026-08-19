@@ -33,7 +33,8 @@ public final class Cgroup {
     private static final Set<String> STRICT_FILES = Set.of(
             "cpu.max", "cpu.weight", "cpu.idle",
             "cpuset.cpus", "cpuset.mems",
-            "memory.max", "memory.low", "memory.swap.max",
+            "memory.max", "memory.min", "memory.high", "memory.low",
+            "memory.swap.max",
             "pids.max");
 
     private Cgroup() {}

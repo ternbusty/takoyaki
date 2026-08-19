@@ -423,6 +423,10 @@ public final class Rootfs {
             if (rootfsPropagation != null) {
                 long prop = MountOptions.propagationFlag(rootfsPropagation);
                 if (prop != 0) {
+                    // runc compat: rootfsPropagation is always applied
+                    // recursively, regardless of whether the config value
+                    // uses the "r" prefix or not.
+                    prop |= Constants.MS_REC;
                     if (Libc.mount(arena, null, "/", null, prop, null) != 0) {
                         Logger.warn("set / to " + rootfsPropagation + " failed: "
                                 + Libc.strerror(Libc.errno()));

@@ -141,7 +141,7 @@ public final class ExecCommand {
                 return EXIT_RUNTIME_ERROR;
             }
             String resolved = cgroupPath + "/" + subCgroupPath;
-            if (!java.nio.file.Files.isDirectory(Path.of(resolved))) {
+            if (!java.nio.file.Files.isDirectory(Cgroup.dir(resolved))) {
                 System.err.println("exec cgroup " + resolved + ": no such file or directory");
                 return EXIT_RUNTIME_ERROR;
             }
@@ -153,7 +153,8 @@ public final class ExecCommand {
 
         try (Arena arena = Arena.ofConfined()) {
             return spawn(arena, state.pid, payload, effectiveCgroupPath, detach,
-                    pidFile, effectiveAffinity, cgroupExplicitRoot, cgroupPath);
+                    pidFile, effectiveAffinity, cgroupExplicitRoot, cgroupPath,
+                    consoleSocket);
         }
     }
 
@@ -271,7 +272,8 @@ public final class ExecCommand {
     private static int spawn(Arena arena, int initPid, ExecPayload payload,
                              String cgroupPath, boolean detach, String pidFile,
                              Spec.ExecCPUAffinity affinity,
-                             boolean cgroupExplicitRoot, String containerCgroupPath) {
+                             boolean cgroupExplicitRoot, String containerCgroupPath,
+                             String consoleSocket) {
         String exePath = PosixIO.readlink(arena, "/proc/self/exe");
         if (exePath == null) {
             System.err.println("readlink /proc/self/exe failed");
@@ -436,8 +438,24 @@ public final class ExecCommand {
         // runc compat: when domain controllers are enabled and no explicit
         // --cgroup was given, joining the container root cgroup fails (EBUSY).
         // Fall back to the init process's current cgroup.
-        if (!Cgroup.addPid(cgroupPath, workloadPid) && !cgroupExplicitRoot
-                && containerCgroupPath != null) {
+        boolean cgroupOk = Cgroup.addPid(cgroupPath, workloadPid);
+        if (!cgroupOk && cgroupExplicitRoot) {
+            // runc compat: --cgroup / explicitly requests the container root
+            // cgroup. If the root cgroup has domain controllers enabled,
+            // writing to cgroup.procs returns EBUSY. Report this as an error
+            // rather than silently falling through.
+            System.err.println("unable to add process to cgroups: "
+                    + "writing " + workloadPid + " to " + Cgroup.dir(cgroupPath)
+                    + "/cgroup.procs: device or resource busy");
+            // Kill the workload and return an error.
+            Libc.kill(workloadPid, 9);
+            Wait.waitForChild(workloadPid);
+            PosixIO.close(writeFd);
+            if (consoleWriteFd >= 0) PosixIO.close(consoleWriteFd);
+            if (consoleReadFd >= 0) PosixIO.close(consoleReadFd);
+            return EXIT_RUNTIME_ERROR;
+        }
+        if (!cgroupOk && containerCgroupPath != null) {
             String initCgroup = Cgroup.readProcessCgroup(initPid);
             if (initCgroup != null) {
                 // readProcessCgroup returns the absolute v2 path from the host
@@ -481,7 +499,13 @@ public final class ExecCommand {
             masterFd = com.ternbusty.takoyaki.console.InternalConsole
                     .receiveMasterFromSocket(consoleReadFd);
             PosixIO.close(consoleReadFd);
-            if (masterFd >= 0 && !detach) {
+            if (masterFd >= 0 && consoleSocket != null) {
+                // runc compat: forward the master fd to the external console
+                // socket (e.g. recvtty) so the caller manages the PTY. This
+                // is required for detached exec with --console-socket.
+                com.ternbusty.takoyaki.console.ConsoleSocket
+                        .sendMasterTo(consoleSocket, masterFd);
+            } else if (masterFd >= 0 && !detach) {
                 ioThread = com.ternbusty.takoyaki.console.InternalConsole
                         .startIOCopyForFd(masterFd);
             }
@@ -504,10 +528,14 @@ public final class ExecCommand {
             return 0;
         }
         int code = Wait.waitForChild(workloadPid);
-        if (masterFd >= 0) PosixIO.close(masterFd);
+        // Join the ioThread BEFORE closing masterFd so it can drain remaining
+        // PTY output. Once the container exits the slave side closes, causing
+        // read on the master to return EOF; closing the master prematurely
+        // races with the reader and can lose the last chunk of output.
         if (ioThread != null) {
-            try { ioThread.join(2000); } catch (InterruptedException ignored) {}
+            try { ioThread.join(5_000); } catch (InterruptedException ignored) {}
         }
+        if (masterFd >= 0) PosixIO.close(masterFd);
         return written ? code : EXIT_RUNTIME_ERROR;
     }
 
