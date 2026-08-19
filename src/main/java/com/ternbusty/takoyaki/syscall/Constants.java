@@ -11,6 +11,7 @@ import com.ternbusty.takoyaki.syscall.hdr.Consts;
 public final class Constants {
     private Constants() {}
 
+
     public static final int CLONE_NEWNS = Consts.CLONE_NEWNS();
     public static final int CLONE_NEWUTS = Consts.CLONE_NEWUTS();
     public static final int CLONE_NEWIPC = Consts.CLONE_NEWIPC();
@@ -136,9 +137,10 @@ public final class Constants {
 
     public static final int KEYCTL_JOIN_SESSION_KEYRING = Consts.KEYCTL_JOIN_SESSION_KEYRING();
 
-    // ioprio / scheduler syscall numbers
+    // ioprio / scheduler / affinity syscall numbers
     public static final long NR_ioprio_set = Consts.SYS_ioprio_set();
     public static final long NR_sched_setattr = Consts.SYS_sched_setattr();
+    public static final long NR_sched_setaffinity = Consts.SYS_sched_setaffinity();
 
     // ioprio constants (from linux/ioprio.h)
     public static final int IOPRIO_WHO_PROCESS = 1;

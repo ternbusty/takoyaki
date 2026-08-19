@@ -103,6 +103,10 @@ public final class MainProcess {
                 // move the final init pid into the cgroup here.
                 Cgroup.addPid(spec.linux.cgroupsPath, stage2Pid);
             }
+            // runc compat: reset CPU affinity to all CPUs after cgroup
+            // assignment, so the container inherits the cpuset mask rather
+            // than the parent's (potentially restricted) affinity.
+            resetCpuAffinity(stage2Pid);
 
             int initReady = SyncChannel.readInt32(mainSenderFd);
             if (initReady != SyncChannel.MSG_INIT_READY) {
@@ -155,6 +159,30 @@ public final class MainProcess {
             PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
             PosixIO._exit(1);
+        }
+    }
+
+    /**
+     * Reset the CPU affinity of pid to include all possible CPUs. The kernel
+     * clamps the mask to the cpuset of the target's cgroup, so the effective
+     * affinity becomes the cgroup cpuset. This matches runc's
+     * tryResetCPUAffinity. Errors are non-fatal (logged at debug).
+     */
+    private static void resetCpuAffinity(int pid) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            // cpu_set_t on Linux is 1024 bits = 128 bytes. Fill it with all-ones.
+            int size = 128;
+            java.lang.foreign.MemorySegment mask = arena.allocate(size);
+            mask.fill((byte) 0xFF);
+            long rc = Libc.syscall(
+                    com.ternbusty.takoyaki.syscall.Constants.NR_sched_setaffinity,
+                    pid, size, mask.address(), 0L, 0L);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity(" + pid + ") failed: "
+                        + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("reset CPU affinity for pid " + pid);
+            }
         }
     }
 

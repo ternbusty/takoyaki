@@ -353,6 +353,10 @@ public final class ExecCommand {
         // cannot reach user code outside the cgroup.
         Cgroup.addPid(cgroupPath, workloadPid);
 
+        // runc compat: reset CPU affinity after cgroup assignment so the
+        // exec process inherits the cpuset rather than the parent's affinity.
+        resetCpuAffinity(workloadPid);
+
         // Stream the payload; the workload drains concurrently, so there is no
         // socket-buffer deadlock however large the profile is. Closing our end
         // gives the workload's read its EOF.
@@ -381,5 +385,20 @@ public final class ExecCommand {
         }
         int code = Wait.waitForChild(workloadPid);
         return written ? code : EXIT_RUNTIME_ERROR;
+    }
+
+    /** Reset CPU affinity of pid to all CPUs. See MainProcess.resetCpuAffinity. */
+    private static void resetCpuAffinity(int pid) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            int size = 128; // cpu_set_t: 1024 bits
+            java.lang.foreign.MemorySegment mask = arena.allocate(size);
+            mask.fill((byte) 0xFF);
+            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                    pid, size, mask.address(), 0L, 0L);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity(" + pid + "): "
+                        + Libc.strerror(Libc.errno()));
+            }
+        }
     }
 }
