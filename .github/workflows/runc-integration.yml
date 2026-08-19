@@ -51,7 +51,7 @@ jobs:
           file-install: false
 
       - name: Build native takoyaki
-        run: ./gradlew nativeCompile --no-daemon
+        run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
 
       - name: Run runc integration tests
         run: |
