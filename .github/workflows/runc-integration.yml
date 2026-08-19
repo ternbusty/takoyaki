@@ -4,6 +4,10 @@ name: runc integration tests
 # Scheduled daily and on manual dispatch so it does not block PRs.
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
