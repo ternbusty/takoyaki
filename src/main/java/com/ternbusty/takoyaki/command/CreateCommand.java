@@ -59,6 +59,17 @@ public final class CreateCommand {
             return 1;
         }
 
+        // runc compat: SCHED_DEADLINE cannot be used with CPU pinning.
+        if (spec.process != null && spec.process.scheduler != null
+                && "SCHED_DEADLINE".equals(spec.process.scheduler.policy)
+                && spec.linux != null && spec.linux.resources != null
+                && spec.linux.resources.cpu != null
+                && spec.linux.resources.cpu.cpus != null
+                && !spec.linux.resources.cpu.cpus.isEmpty()) {
+            System.err.println("process scheduler can't be used together with AllowedCPUs");
+            return 1;
+        }
+
         // Note on process.args validation: runtime-tools' validation/start
         // test 7 sets spec.process = nil and expects create to SUCCEED and
         // start to return an error (the spec is ambiguous on which phase

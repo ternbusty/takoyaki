@@ -233,6 +233,26 @@ static void exec_bootstrap(void) {
         }
     }
 
+    /* Apply initial CPU affinity before any namespace operations.
+     * This sets the affinity on our thread; the child inherits it via clone. */
+    {
+        const char *cpu_initial = getenv("_TAKOYAKI_EXEC_CPU_INITIAL");
+        if (cpu_initial) {
+            unsigned int mask_val = parse_hex(cpu_initial);
+            if (mask_val) {
+                cpu_set_t cpus;
+                CPU_ZERO(&cpus);
+                for (unsigned int i = 0; i < sizeof(mask_val) * 8; i++) {
+                    if (mask_val & (1u << i))
+                        CPU_SET(i, &cpus);
+                }
+                if (sched_setaffinity(0, sizeof(cpus), &cpus) < 0) {
+                    DBG("sched_setaffinity(initial 0x%x): %s\n", mask_val, strerror(errno));
+                }
+            }
+        }
+    }
+
     DBG("nsexec container setup\n");
     log_cpu_affinity();
 

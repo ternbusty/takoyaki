@@ -64,7 +64,9 @@ public final class ExecCommand {
             System.err.println("cannot exec in a paused container");
             return EXIT_RUNTIME_ERROR;
         }
-        if (state.statusEnum() != ContainerStatus.RUNNING || state.pid == null) {
+        if ((state.statusEnum() != ContainerStatus.RUNNING
+                && state.statusEnum() != ContainerStatus.CREATED)
+                || state.pid == null) {
             System.err.println("container " + containerId + " is not running");
             return EXIT_RUNTIME_ERROR;
         }
@@ -96,6 +98,12 @@ public final class ExecCommand {
             return EXIT_RUNTIME_ERROR;
         }
 
+        // Resolve effective execCPUAffinity: process.json overrides config.json.
+        Spec.ExecCPUAffinity effectiveAffinity = process.execCPUAffinity;
+        if (effectiveAffinity == null && spec.process != null) {
+            effectiveAffinity = spec.process.execCPUAffinity;
+        }
+
         ExecPayload payload = new ExecPayload();
         payload.containerId = containerId;
         payload.bundle = state.bundle;
@@ -116,7 +124,8 @@ public final class ExecCommand {
         }
 
         try (Arena arena = Arena.ofConfined()) {
-            return spawn(arena, state.pid, payload, cgroupPath, detach, pidFile);
+            return spawn(arena, state.pid, payload, cgroupPath, detach, pidFile,
+                    effectiveAffinity);
         }
     }
 
@@ -230,7 +239,8 @@ public final class ExecCommand {
      * payload socket because none of them carry CLOEXEC.
      */
     private static int spawn(Arena arena, int initPid, ExecPayload payload,
-                             String cgroupPath, boolean detach, String pidFile) {
+                             String cgroupPath, boolean detach, String pidFile,
+                             Spec.ExecCPUAffinity affinity) {
         String exePath = PosixIO.readlink(arena, "/proc/self/exe");
         if (exePath == null) {
             System.err.println("readlink /proc/self/exe failed");
@@ -302,6 +312,12 @@ public final class ExecCommand {
         if (logFmt != null) {
             envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
         }
+        // Pass initial CPU affinity to bootstrap.c so it can set the affinity
+        // on the parent thread before fork, letting the child inherit it.
+        if (affinity != null && affinity.initial != null && !affinity.initial.isEmpty()) {
+            long mask = Spec.ExecCPUAffinity.parseCpuList(affinity.initial);
+            envList.add("_TAKOYAKI_EXEC_CPU_INITIAL=0x" + Long.toHexString(mask));
+        }
 
         String[] argv = {exePath, "__exec__"};
         // Shared arena, never closed: the forked child touches these segments
@@ -353,9 +369,16 @@ public final class ExecCommand {
         // cannot reach user code outside the cgroup.
         Cgroup.addPid(cgroupPath, workloadPid);
 
-        // runc compat: reset CPU affinity after cgroup assignment so the
-        // exec process inherits the cpuset rather than the parent's affinity.
-        resetCpuAffinity(workloadPid);
+        // runc compat: set final CPU affinity after cgroup assignment.
+        // If affinity.final is set, apply that specific mask.
+        // If no affinity is configured at all, reset to all CPUs (kernel
+        // clamps to cpuset). If only initial was set, do nothing (initial
+        // persists through the exec).
+        if (affinity != null && affinity.fin != null && !affinity.fin.isEmpty()) {
+            setCpuAffinity(workloadPid, affinity.fin);
+        } else if (affinity == null || affinity.initial == null || affinity.initial.isEmpty()) {
+            resetCpuAffinity(workloadPid);
+        }
 
         // Stream the payload; the workload drains concurrently, so there is no
         // socket-buffer deadlock however large the profile is. Closing our end
@@ -385,6 +408,24 @@ public final class ExecCommand {
         }
         int code = Wait.waitForChild(workloadPid);
         return written ? code : EXIT_RUNTIME_ERROR;
+    }
+
+    /** Set CPU affinity from a Linux CPU list string (e.g. "0-3,5"). */
+    private static void setCpuAffinity(int pid, String cpuList) {
+        long mask = Spec.ExecCPUAffinity.parseCpuList(cpuList);
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            int size = 128;
+            java.lang.foreign.MemorySegment seg = arena.allocate(size);
+            seg.fill((byte) 0);
+            // Write the mask in little-endian long order.
+            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0, mask);
+            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                    pid, size, seg.address(), 0L, 0L);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): "
+                        + Libc.strerror(Libc.errno()));
+            }
+        }
     }
 
     /** Reset CPU affinity of pid to all CPUs. See MainProcess.resetCpuAffinity. */

@@ -104,6 +104,7 @@ public final class Spec {
         public Integer oomScoreAdj;
         public IOPriority ioPriority;
         public Scheduler scheduler;
+        public ExecCPUAffinity execCPUAffinity;
 
         public static Process fromJson(Object node) {
             if (node == null) return null;
@@ -127,6 +128,7 @@ public final class Spec {
             p.oomScoreAdj = JsonMap.intBoxed(o, "oomScoreAdj");
             p.ioPriority = IOPriority.fromJson(o.get("ioPriority"));
             p.scheduler = Scheduler.fromJson(o.get("scheduler"));
+            p.execCPUAffinity = ExecCPUAffinity.fromJson(o.get("execCPUAffinity"));
             return p;
         }
 
@@ -147,6 +149,7 @@ public final class Spec {
             JsonMap.put(o, "oomScoreAdj", oomScoreAdj);
             if (ioPriority != null) JsonMap.put(o, "ioPriority", ioPriority.toJson());
             if (scheduler != null) JsonMap.put(o, "scheduler", scheduler.toJson());
+            if (execCPUAffinity != null) JsonMap.put(o, "execCPUAffinity", execCPUAffinity.toJson());
             return o;
         }
     }
@@ -250,6 +253,48 @@ public final class Spec {
                 };
             }
             return bits;
+        }
+    }
+
+    public static final class ExecCPUAffinity {
+        public String initial;
+        public String fin;  // "final" is a Java keyword
+
+        public static ExecCPUAffinity fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            ExecCPUAffinity a = new ExecCPUAffinity();
+            a.initial = JsonMap.str(o, "initial");
+            a.fin = JsonMap.str(o, "final");
+            return a;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "initial", initial);
+            JsonMap.put(o, "final", fin);
+            return o;
+        }
+
+        /** Parse a Linux CPU list string (e.g. "0-3,5,7") into a bitmask. */
+        public static long parseCpuList(String list) {
+            if (list == null || list.isEmpty()) return 0;
+            long mask = 0;
+            for (String part : list.split(",")) {
+                part = part.trim();
+                int dash = part.indexOf('-');
+                if (dash >= 0) {
+                    int lo = Integer.parseInt(part.substring(0, dash).trim());
+                    int hi = Integer.parseInt(part.substring(dash + 1).trim());
+                    for (int i = lo; i <= hi && i < 64; i++) {
+                        mask |= 1L << i;
+                    }
+                } else {
+                    int cpu = Integer.parseInt(part);
+                    if (cpu < 64) mask |= 1L << cpu;
+                }
+            }
+            return mask;
         }
     }
 

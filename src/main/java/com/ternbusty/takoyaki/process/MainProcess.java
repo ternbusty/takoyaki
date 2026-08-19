@@ -32,10 +32,18 @@ public final class MainProcess {
             } catch (Exception e) {}
         }
 
+        // runc compat: assign a default cgroup path when none is specified.
+        // Many bats tests (pause, events, update, cpu_affinity) rely on the
+        // container having a cgroup without explicitly setting cgroupsPath.
+        String effectiveCgroupsPath = spec.linux != null ? spec.linux.cgroupsPath : null;
+        if (effectiveCgroupsPath == null) {
+            effectiveCgroupsPath = "takoyaki/" + containerId;
+            Logger.debug("no cgroupsPath in spec, defaulting to " + effectiveCgroupsPath);
+        }
+
+        int stage2Pid = -1;
         try {
-            if (spec.linux != null && spec.linux.cgroupsPath != null) {
-                Cgroup.setup(stage1Pid, spec.linux.cgroupsPath, spec.linux);
-            }
+            Cgroup.setup(stage1Pid, effectiveCgroupsPath, spec.linux);
             // rlimits are NOT applied to the bootstrap pid from here — doing so
             // forces them on the freshly-spawned Java init, and a low RLIMIT_AS
             // (e.g. the OCI runtime-tools process_rlimits test sets 1 GiB soft)
@@ -90,19 +98,17 @@ public final class MainProcess {
                 Logger.debug("user map written");
             }
 
-            int stage2Pid = SyncChannel.readInt32(syncFd);
+            stage2Pid = SyncChannel.readInt32(syncFd);
             Logger.debug("received stage-2 pid=" + stage2Pid);
             PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
 
-            if (spec.linux != null && spec.linux.cgroupsPath != null) {
-                // The first Cgroup.setup (for stage1Pid) already created the
-                // directory, enabled controllers, applied limits, and attached
-                // the device BPF program for this same cgroupPath. Re-running
-                // setup would stack a second identical device filter, so only
-                // move the final init pid into the cgroup here.
-                Cgroup.addPid(spec.linux.cgroupsPath, stage2Pid);
-            }
+            // The first Cgroup.setup (for stage1Pid) already created the
+            // directory, enabled controllers, applied limits, and attached
+            // the device BPF program for this same cgroupPath. Re-running
+            // setup would stack a second identical device filter, so only
+            // move the final init pid into the cgroup here.
+            Cgroup.addPid(effectiveCgroupsPath, stage2Pid);
             // runc compat: reset CPU affinity to all CPUs after cgroup
             // assignment, so the container inherits the cpuset mask rather
             // than the parent's (potentially restricted) affinity.
@@ -119,7 +125,7 @@ public final class MainProcess {
                     ContainerStatus.CREATED, stage2Pid, bundlePath, spec.annotations);
             state.save(rootPath);
 
-            new KontainerConfig(spec.linux != null ? spec.linux.cgroupsPath : null)
+            new KontainerConfig(effectiveCgroupsPath)
                     .save(rootPath, containerId);
 
             // prestart (deprecated, but still emitted by some tools) and createRuntime hooks
@@ -156,6 +162,27 @@ public final class MainProcess {
                 System.err.println(msg);
             }
             Logger.error("main proc failed: " + msg);
+            // Clean up container state on failure so the container name is
+            // not left in a zombie "exists" state. runc does the same when
+            // hooks fail or any create-time error occurs.
+            try {
+                Path stateDir = State.containerDir(rootPath, containerId);
+                if (Files.exists(stateDir)) {
+                    try (java.util.stream.Stream<Path> walk = Files.walk(stateDir)) {
+                        walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.deleteIfExists(p); } catch (IOException ignored2) {}
+                        });
+                    }
+                }
+            } catch (Exception ignored) {}
+            // Kill the init process so it doesn't linger.
+            if (stage2Pid > 0) {
+                try { Libc.kill(stage2Pid, 9); } catch (Exception ignored) {}
+            }
+            // Clean up the cgroup directory.
+            try {
+                Cgroup.cleanup(effectiveCgroupsPath);
+            } catch (Exception ignored) {}
             PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
             PosixIO._exit(1);
