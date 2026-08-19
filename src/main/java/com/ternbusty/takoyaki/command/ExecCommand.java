@@ -60,6 +60,10 @@ public final class ExecCommand {
             System.err.println("container " + containerId + " does not exist");
             return EXIT_RUNTIME_ERROR;
         }
+        if (state.statusEnum() == ContainerStatus.PAUSED) {
+            System.err.println("cannot exec in a paused container");
+            return EXIT_RUNTIME_ERROR;
+        }
         if (state.statusEnum() != ContainerStatus.RUNNING || state.pid == null) {
             System.err.println("container " + containerId + " is not running");
             return EXIT_RUNTIME_ERROR;
@@ -193,26 +197,31 @@ public final class ExecCommand {
             merged.addAll(envs);
             p.env = merged;
         }
-        if (p.env == null || p.env.isEmpty()) {
-            // No env anywhere in the spec: give the process a sane default PATH.
-            p.env = List.of(
-                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                    "HOME=/root");
+        if (p.env == null) {
+            // No env anywhere in the spec. ExecProcess will add HOME from
+            // /etc/passwd; no need to hardcode HOME here.
+            p.env = List.of();
         }
         return p;
     }
 
+    /**
+     * runc's exec --cap adds the capability to bounding, effective, and
+     * permitted. It does NOT add to inheritable. It adds to ambient only
+     * if the capability is already present in inheritable (from the spec).
+     */
     private static void addCap(Spec.LinuxCapabilities c, String cap) {
         if (c.bounding == null) c.bounding = new ArrayList<>();
         if (!c.bounding.contains(cap)) c.bounding.add(cap);
         if (c.effective == null) c.effective = new ArrayList<>();
         if (!c.effective.contains(cap)) c.effective.add(cap);
-        if (c.inheritable == null) c.inheritable = new ArrayList<>();
-        if (!c.inheritable.contains(cap)) c.inheritable.add(cap);
         if (c.permitted == null) c.permitted = new ArrayList<>();
         if (!c.permitted.contains(cap)) c.permitted.add(cap);
-        if (c.ambient == null) c.ambient = new ArrayList<>();
-        if (!c.ambient.contains(cap)) c.ambient.add(cap);
+        // Ambient: only if already in inheritable.
+        if (c.inheritable != null && c.inheritable.contains(cap)) {
+            if (c.ambient == null) c.ambient = new ArrayList<>();
+            if (!c.ambient.contains(cap)) c.ambient.add(cap);
+        }
     }
 
     /**

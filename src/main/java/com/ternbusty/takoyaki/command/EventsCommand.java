@@ -70,7 +70,7 @@ public final class EventsCommand {
         memory.put("usage", readKvFile(cg.resolve("memory.current"), true));
         memory.put("limit", readLong(cg.resolve("memory.max")));
         memory.put("cache", readLong(cg.resolve("memory.stat"), "file"));
-        Map<String, Object> raw = readKvFile(cg.resolve("memory.stat"));
+        Map<String, Long> raw = readKvFile(cg.resolve("memory.stat"));
         if (raw != null) memory.put("raw", raw);
         data.put("memory", memory);
         Map<String, Object> cpu = new LinkedHashMap<>();

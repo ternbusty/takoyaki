@@ -114,14 +114,18 @@ public final class ExecProcess {
                     }
                 }
             }
+            // runc behaviour (env.go prepareEnv): if HOME is empty or absent
+            // after dedup, look up the user's home in /etc/passwd and set it.
+            // Non-empty HOME is kept as-is.
             String homeVal = envMap.get("HOME");
             if (homeVal == null || homeVal.isEmpty()) {
                 int uid = payload.process.user != null ? payload.process.user.uid : 0;
                 String passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid);
                 if (passwdHome != null && !passwdHome.isEmpty()) {
                     envMap.put("HOME", passwdHome);
-                } else if (homeVal == null) {
-                    envMap.put("HOME", uid == 0 ? "/root" : "/");
+                } else {
+                    // /etc/passwd has no entry: default to "/" (runc's getUserHome default).
+                    envMap.put("HOME", "/");
                 }
             }
 

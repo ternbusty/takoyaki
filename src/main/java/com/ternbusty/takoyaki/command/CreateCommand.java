@@ -65,14 +65,11 @@ public final class CreateCommand {
         // validates, but the conformance suite settles it). We therefore
         // defer this check to StartCommand below.
 
-        // OCI spec: when process.terminal is true, the runtime MUST provide
-        // a pseudo-terminal. Without --console-socket we have no way to ship
-        // the master fd to the caller, so fail early (runc compat).
-        if (spec.process != null && Boolean.TRUE.equals(spec.process.terminal)
-                && consoleSocket == null) {
-            System.err.println("terminal enabled but console-socket not provided");
-            return 1;
-        }
+        // Note: when process.terminal is true and no --console-socket is given,
+        // runc handles it internally for foreground runs (runc run without -d).
+        // Since CreateCommand is called from both `create` and `run`, we do not
+        // enforce console-socket presence here. Without it, InitProcess simply
+        // skips pty setup and the process inherits its parent's stdio.
 
         String rootfsPath = spec.root.path.startsWith("/")
                 ? spec.root.path

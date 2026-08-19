@@ -84,14 +84,13 @@ public final class Capability {
             for (String name : caps.ambient) {
                 int id = idOf(name);
                 if (id < 0) continue;
-                long bit = 1L << id;
-                if ((per & bit) == 0 || (inh & bit) == 0) {
-                    Logger.warn("cap " + name + " requested in ambient but"
-                            + " not in permitted+inheritable; kernel would"
-                            + " reject the raise, skipping");
-                    continue;
+                if (Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_RAISE, id, 0, 0) != 0) {
+                    // runc compat: print the same warning logrus emits.
+                    String rawErr = Libc.strerror(Libc.errno());
+                    String errMsg = rawErr.isEmpty() ? rawErr
+                            : Character.toLowerCase(rawErr.charAt(0)) + rawErr.substring(1);
+                    System.err.println("can't raise ambient capability " + name + ": " + errMsg);
                 }
-                Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_RAISE, id, 0, 0);
             }
         }
     }
