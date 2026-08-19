@@ -1,174 +1,122 @@
 package com.ternbusty.takoyaki.syscall;
 
-import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.MemorySegment;
-import java.lang.foreign.SymbolLookup;
-import java.lang.foreign.ValueLayout;
-import java.lang.invoke.MethodHandle;
+import com.ternbusty.takoyaki.syscall.posix.PosixH;
+import com.ternbusty.takoyaki.syscall.posix.__CONST_SOCKADDR_ARG;
+import com.ternbusty.takoyaki.syscall.posix.__SOCKADDR_ARG;
+import com.ternbusty.takoyaki.syscall.posix.sockaddr_un;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
+/**
+ * POSIX socket and file IO over the jextract-generated {@link PosixH} bindings.
+ * Struct layouts (sockaddr_un) come from the generated accessors rather than
+ * hand-written offsets.
+ */
 public final class PosixIO {
     private PosixIO() {}
 
-    private static final Linker LINKER = Linker.nativeLinker();
-    private static final SymbolLookup LIBC = LINKER.defaultLookup();
+    // open(2) and fcntl(2) are variadic; jextract exposes them through an
+    // invoker factory, so bind the fixed shapes takoyaki uses.
+    private static final PosixH.open OPEN = PosixH.open.makeInvoker(PosixH.C_INT);
+    private static final PosixH.fcntl FCNTL = PosixH.fcntl.makeInvoker(PosixH.C_INT);
 
-    private static MethodHandle h(String name, FunctionDescriptor desc) {
-        return LIBC.find(name)
-                .map(addr -> LINKER.downcallHandle(addr, desc))
-                .orElseThrow(() -> new UnsatisfiedLinkError("libc: " + name));
+    /**
+     * glibc declares bind/connect/accept with transparent unions over sockaddr*,
+     * so the generated bindings take the union by value. It is a single pointer
+     * wide: allocate one and point its sockaddr_un member at the address.
+     */
+    private static MemorySegment constSockaddrArg(Arena arena, MemorySegment sockaddr) {
+        MemorySegment arg = __CONST_SOCKADDR_ARG.allocate(arena);
+        __CONST_SOCKADDR_ARG.__sockaddr_un__(arg, sockaddr);
+        return arg;
     }
 
-    private static final MethodHandle SOCKETPAIR = h("socketpair",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
-                    ValueLayout.ADDRESS));
-    private static final MethodHandle SOCKET = h("socket",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle BIND = h("bind",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle LISTEN = h("listen",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle ACCEPT = h("accept",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle CONNECT = h("connect",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle READ = h("read",
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
-    private static final MethodHandle WRITE = h("write",
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
-    private static final MethodHandle SEND = h("send",
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
-    private static final MethodHandle RECV = h("recv",
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                    ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
-                    ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT));
-    private static final MethodHandle CLOSE = h("close",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle UNLINK = h("unlink",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.ADDRESS));
-    private static final MethodHandle ACCESS = h("access",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT));
-    private static final MethodHandle OPEN = h("open",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle FCHDIR = h("fchdir",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-    private static final MethodHandle FORK = h("fork",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT));
-    private static final MethodHandle EXIT_ = h("_exit",
-            FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT));
-    private static final MethodHandle EXECVE = h("execve",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-    private static final MethodHandle READLINK = h("readlink",
-            FunctionDescriptor.of(ValueLayout.JAVA_LONG,
-                    ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.JAVA_LONG));
-    private static final MethodHandle FCNTL = h("fcntl",
-            FunctionDescriptor.of(ValueLayout.JAVA_INT,
-                    ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
-
     public static int socketpair(Arena arena, int domain, int type, int protocol, int[] fds) {
-        try {
-            MemorySegment seg = arena.allocate(ValueLayout.JAVA_INT, 2);
-            int rc = (int) SOCKETPAIR.invoke(domain, type, protocol, seg);
-            if (rc == 0) {
-                fds[0] = seg.getAtIndex(ValueLayout.JAVA_INT, 0);
-                fds[1] = seg.getAtIndex(ValueLayout.JAVA_INT, 1);
-            }
-            return rc;
-        } catch (Throwable t) { throw sneaky(t); }
+        MemorySegment seg = arena.allocate(ValueLayout.JAVA_INT, 2);
+        int rc = PosixH.socketpair(domain, type, protocol, seg);
+        if (rc == 0) {
+            fds[0] = seg.getAtIndex(ValueLayout.JAVA_INT, 0);
+            fds[1] = seg.getAtIndex(ValueLayout.JAVA_INT, 1);
+        }
+        return rc;
     }
 
     public static int socket(int domain, int type, int protocol) {
-        try { return (int) SOCKET.invoke(domain, type, protocol); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.socket(domain, type, protocol);
     }
 
     public static int bindUnix(Arena arena, int fd, String path) {
-        try {
-            byte[] pb = path.getBytes();
-            MemorySegment addr = sockaddrUn(arena, pb);
-            return (int) BIND.invoke(fd, addr, 2 + pb.length + 1);
-        } catch (Throwable t) { throw sneaky(t); }
+        byte[] pb = path.getBytes();
+        MemorySegment arg = constSockaddrArg(arena, sockaddrUn(arena, pb));
+        return PosixH.bind(fd, arg, sockaddrUnLen(pb));
     }
 
     public static int connectUnix(Arena arena, int fd, String path) {
-        try {
-            byte[] pb = path.getBytes();
-            MemorySegment addr = sockaddrUn(arena, pb);
-            return (int) CONNECT.invoke(fd, addr, 2 + pb.length + 1);
-        } catch (Throwable t) { throw sneaky(t); }
+        byte[] pb = path.getBytes();
+        MemorySegment arg = constSockaddrArg(arena, sockaddrUn(arena, pb));
+        return PosixH.connect(fd, arg, sockaddrUnLen(pb));
     }
 
-    /** sockaddr_un: sun_family=AF_UNIX at offset 0, NUL-terminated path at offset 2. */
+    /** sun_family + the NUL-terminated path, which is what the kernel expects. */
+    private static int sockaddrUnLen(byte[] pathBytes) {
+        return (int) sockaddr_un.sun_path$offset() + pathBytes.length + 1;
+    }
+
     private static MemorySegment sockaddrUn(Arena arena, byte[] pathBytes) {
-        MemorySegment addr = arena.allocate(110 + 2);
-        addr.set(ValueLayout.JAVA_SHORT, 0, (short) 1);
-        if (pathBytes.length >= 108) throw new IllegalArgumentException("socket path too long");
-        MemorySegment sunPath = addr.asSlice(2);
-        sunPath.asByteBuffer().put(pathBytes).put((byte) 0);
+        MemorySegment addr = sockaddr_un.allocate(arena);
+        sockaddr_un.sun_family(addr, (short) PosixH.AF_UNIX());
+        MemorySegment sunPath = sockaddr_un.sun_path(addr);
+        if (pathBytes.length >= sunPath.byteSize()) {
+            throw new IllegalArgumentException("socket path too long");
+        }
+        MemorySegment.copy(pathBytes, 0, sunPath, ValueLayout.JAVA_BYTE, 0, pathBytes.length);
+        sunPath.set(ValueLayout.JAVA_BYTE, pathBytes.length, (byte) 0);
         return addr;
     }
 
     public static int listen(int fd, int backlog) {
-        try { return (int) LISTEN.invoke(fd, backlog); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.listen(fd, backlog);
     }
 
     public static int accept(int fd) {
-        try { return (int) ACCEPT.invoke(fd, MemorySegment.NULL, MemorySegment.NULL); }
-        catch (Throwable t) { throw sneaky(t); }
+        try (Arena arena = Arena.ofConfined()) {
+            // NULL addr/addrlen: we do not care who connected.
+            MemorySegment arg = __SOCKADDR_ARG.allocate(arena);
+            __SOCKADDR_ARG.__sockaddr_un__(arg, MemorySegment.NULL);
+            return PosixH.accept(fd, arg, MemorySegment.NULL);
+        }
     }
 
     public static long read(Arena arena, int fd, byte[] buf) {
-        try {
-            MemorySegment seg = arena.allocate(buf.length);
-            long n = (long) READ.invoke(fd, seg, (long) buf.length);
-            if (n > 0) MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, buf, 0, (int) n);
-            return n;
-        } catch (Throwable t) { throw sneaky(t); }
+        MemorySegment seg = arena.allocate(buf.length);
+        long n = PosixH.read(fd, seg, buf.length);
+        if (n > 0) MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, buf, 0, (int) n);
+        return n;
     }
 
     public static long write(Arena arena, int fd, byte[] buf) {
-        try {
-            MemorySegment seg = arena.allocate(buf.length);
-            MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
-            return (long) WRITE.invoke(fd, seg, (long) buf.length);
-        } catch (Throwable t) { throw sneaky(t); }
+        MemorySegment seg = arena.allocate(buf.length);
+        MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
+        return PosixH.write(fd, seg, buf.length);
     }
 
     public static long send(Arena arena, int fd, byte[] buf, int flags) {
-        try {
-            MemorySegment seg = arena.allocate(buf.length);
-            MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
-            return (long) SEND.invoke(fd, seg, (long) buf.length, flags);
-        } catch (Throwable t) { throw sneaky(t); }
+        MemorySegment seg = arena.allocate(buf.length);
+        MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
+        return PosixH.send(fd, seg, buf.length, flags);
     }
 
     public static long recv(Arena arena, int fd, byte[] buf, int flags) {
-        try {
-            MemorySegment seg = arena.allocate(buf.length);
-            long n = (long) RECV.invoke(fd, seg, (long) buf.length, flags);
-            if (n > 0) MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, buf, 0, (int) n);
-            return n;
-        } catch (Throwable t) { throw sneaky(t); }
+        MemorySegment seg = arena.allocate(buf.length);
+        long n = PosixH.recv(fd, seg, buf.length, flags);
+        if (n > 0) MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, buf, 0, (int) n);
+        return n;
     }
 
     public static int close(int fd) {
-        try { return (int) CLOSE.invoke(fd); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.close(fd);
     }
 
     /**
@@ -178,57 +126,47 @@ public final class PosixIO {
      * Returns true on success, false on a write error (errno preserved).
      */
     public static boolean writeAll(Arena arena, int fd, byte[] buf) {
-        try {
-            MemorySegment seg = arena.allocate(buf.length);
-            MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
-            long off = 0;
-            while (off < buf.length) {
-                long n = (long) WRITE.invoke(fd, seg.asSlice(off), (long) buf.length - off);
-                if (n < 0) {
-                    if (Libc.errno() == Constants.EINTR) continue;
-                    return false;
-                }
-                if (n == 0) return false;
-                off += n;
+        MemorySegment seg = arena.allocate(buf.length);
+        MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
+        long off = 0;
+        while (off < buf.length) {
+            long n = PosixH.write(fd, seg.asSlice(off), buf.length - off);
+            if (n < 0) {
+                if (Libc.errno() == Constants.EINTR) continue;
+                return false;
             }
-            return true;
-        } catch (Throwable t) { throw sneaky(t); }
+            if (n == 0) return false;
+            off += n;
+        }
+        return true;
     }
 
     public static int unlink(Arena arena, String path) {
-        try { return (int) UNLINK.invoke(arena.allocateFrom(path)); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.unlink(arena.allocateFrom(path));
     }
 
     public static int access(Arena arena, String path, int mode) {
-        try { return (int) ACCESS.invoke(arena.allocateFrom(path), mode); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.access(arena.allocateFrom(path), mode);
     }
 
     public static int open(Arena arena, String path, int flags, int mode) {
-        try { return (int) OPEN.invoke(arena.allocateFrom(path), flags, mode); }
-        catch (Throwable t) { throw sneaky(t); }
+        return OPEN.apply(arena.allocateFrom(path), flags, mode);
     }
 
     public static int fchdir(int fd) {
-        try { return (int) FCHDIR.invoke(fd); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.fchdir(fd);
     }
 
     public static int fork() {
-        try { return (int) FORK.invoke(); }
-        catch (Throwable t) { throw sneaky(t); }
+        return PosixH.fork();
     }
 
     public static void _exit(int status) {
-        try { EXIT_.invoke(status); }
-        catch (Throwable t) { throw sneaky(t); }
+        PosixH._exit(status);
     }
 
     public static int invokeExecve(ExecvePayload p) {
-        try {
-            return (int) EXECVE.invoke(p.path, p.argv, p.envp);
-        } catch (Throwable t) { throw sneaky(t); }
+        return PosixH.execve(p.path, p.argv, p.envp);
     }
 
     public static final class ExecvePayload {
@@ -257,25 +195,16 @@ public final class PosixIO {
     }
 
     public static int fcntl(int fd, int op, int arg) {
-        try { return (int) FCNTL.invoke(fd, op, arg); }
-        catch (Throwable t) { throw sneaky(t); }
+        return FCNTL.apply(fd, op, arg);
     }
 
     public static String readlink(Arena arena, String path) {
-        try {
-            MemorySegment p = arena.allocateFrom(path);
-            MemorySegment buf = arena.allocate(4096);
-            long n = (long) READLINK.invoke(p, buf, 4095L);
-            if (n < 0) return null;
-            byte[] b = new byte[(int) n];
-            MemorySegment.copy(buf, ValueLayout.JAVA_BYTE, 0, b, 0, (int) n);
-            return new String(b);
-        } catch (Throwable t) { throw sneaky(t); }
-    }
-
-    private static RuntimeException sneaky(Throwable t) {
-        if (t instanceof RuntimeException re) return re;
-        if (t instanceof Error e) throw e;
-        return new RuntimeException(t);
+        MemorySegment p = arena.allocateFrom(path);
+        MemorySegment buf = arena.allocate(4096);
+        long n = PosixH.readlink(p, buf, 4095L);
+        if (n < 0) return null;
+        byte[] b = new byte[(int) n];
+        MemorySegment.copy(buf, ValueLayout.JAVA_BYTE, 0, b, 0, (int) n);
+        return new String(b);
     }
 }
