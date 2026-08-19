@@ -341,6 +341,13 @@ public final class Rootfs {
                 data = inheritTmpfsMode(target, data);
             }
 
+            // tmpcopyup: snapshot directory contents before tmpfs hides them.
+            java.util.List<Object[]> tmpcopyupSnapshot = null;
+            if (parsed.tmpcopyup && "tmpfs".equals(type) && !isBind
+                    && Files.isDirectory(Path.of(target))) {
+                tmpcopyupSnapshot = snapshotDirectory(Path.of(target));
+            }
+
             int rc = sc.mount(m.source, target, isBind ? null : type, flags, data);
             if (rc != 0) {
                 Logger.debug("optional mount " + m.destination + " failed: "
@@ -348,6 +355,12 @@ public final class Rootfs {
                 continue;
             }
             Logger.debug("mounted " + m.destination + " (type=" + type + ")");
+
+            // tmpcopyup: restore pre-existing contents into the fresh tmpfs.
+            if (tmpcopyupSnapshot != null && !tmpcopyupSnapshot.isEmpty()) {
+                restoreDirectory(Path.of(target), tmpcopyupSnapshot);
+                Logger.debug("tmpcopyup restored contents into " + m.destination);
+            }
             // bind mounts ignore MS_RDONLY (and other access flags) on the initial
             // mount; the kernel just bind-attaches the source as-is. A second
             // MS_BIND|MS_REMOUNT with the desired flags is required to actually
@@ -427,6 +440,16 @@ public final class Rootfs {
                     // recursively, regardless of whether the config value
                     // uses the "r" prefix or not.
                     prop |= Constants.MS_REC;
+                    // The kernel's MS_SHARED does NOT clear an existing slave
+                    // relationship, resulting in shared+slave instead of pure
+                    // shared. Clear any slave state with MS_PRIVATE first so
+                    // the final propagation is exactly what the spec requests.
+                    // Only needed for MS_SHARED; the kernel's MS_PRIVATE and
+                    // MS_SLAVE already handle existing relationships correctly.
+                    if ((prop & Constants.MS_SHARED) != 0) {
+                        Libc.mount(arena, null, "/", null,
+                                Constants.MS_PRIVATE | Constants.MS_REC, null);
+                    }
                     if (Libc.mount(arena, null, "/", null, prop, null) != 0) {
                         Logger.warn("set / to " + rootfsPropagation + " failed: "
                                 + Libc.strerror(Libc.errno()));
@@ -631,6 +654,65 @@ public final class Rootfs {
         } catch (Exception e) {
             Logger.debug("could not read target mode for tmpfs: " + e.getMessage());
             return data;
+        }
+    }
+
+    /**
+     * Snapshot a directory tree into a list of entries, each represented as
+     * {@code {type, relativePath, payload}}. Types are "dir", "file", or
+     * "symlink". Payload is {@code byte[]} for files, a symlink-target string
+     * for symlinks, and null for directories.
+     */
+    private static java.util.List<Object[]> snapshotDirectory(Path dir) {
+        java.util.List<Object[]> entries = new java.util.ArrayList<>();
+        if (!Files.isDirectory(dir)) return entries;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            walk.forEach(p -> {
+                if (p.equals(dir)) return;
+                String rel = dir.relativize(p).toString();
+                try {
+                    if (Files.isSymbolicLink(p)) {
+                        entries.add(new Object[]{
+                                "symlink", rel, Files.readSymbolicLink(p).toString()});
+                    } else if (Files.isDirectory(p)) {
+                        entries.add(new Object[]{"dir", rel, null});
+                    } else if (Files.isRegularFile(p)) {
+                        entries.add(new Object[]{
+                                "file", rel, Files.readAllBytes(p)});
+                    }
+                } catch (IOException ignored) {}
+            });
+        } catch (IOException ignored) {}
+        return entries;
+    }
+
+    /**
+     * Restore a snapshot produced by {@link #snapshotDirectory} into the
+     * given target directory (typically a freshly-mounted tmpfs).
+     */
+    private static void restoreDirectory(Path dir, java.util.List<Object[]> entries) {
+        for (Object[] e : entries) {
+            String type = (String) e[0];
+            Path target = dir.resolve((String) e[1]);
+            try {
+                switch (type) {
+                    case "dir":
+                        Files.createDirectories(target);
+                        break;
+                    case "file":
+                        Files.createDirectories(target.getParent());
+                        Files.write(target, (byte[]) e[2]);
+                        break;
+                    case "symlink":
+                        Files.createDirectories(target.getParent());
+                        if (!Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                            Files.createSymbolicLink(target, Path.of((String) e[2]));
+                        }
+                        break;
+                }
+            } catch (IOException ex) {
+                Logger.debug("tmpcopyup restore " + e[1] + ": " + ex.getMessage());
+            }
         }
     }
 

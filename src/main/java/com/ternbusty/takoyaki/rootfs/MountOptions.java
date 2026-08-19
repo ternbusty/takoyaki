@@ -34,9 +34,12 @@ public final class MountOptions {
          * these flags are NOT included (which clears them on the mount).
          */
         public final long clearedFlags;
+        /** OCI "tmpcopyup" option: copy rootfs contents into tmpfs after mount. */
+        public final boolean tmpcopyup;
 
         Parsed(long flags, long propagation, String data, boolean isBind,
-               long recAttrSet, long recAttrClr, long clearedFlags) {
+               long recAttrSet, long recAttrClr, long clearedFlags,
+               boolean tmpcopyup) {
             this.flags = flags;
             this.propagation = propagation;
             this.data = data;
@@ -44,6 +47,7 @@ public final class MountOptions {
             this.recAttrSet = recAttrSet;
             this.recAttrClr = recAttrClr;
             this.clearedFlags = clearedFlags;
+            this.tmpcopyup = tmpcopyup;
         }
 
         /** True when mount_setattr(AT_RECURSIVE) should be called after mount. */
@@ -80,8 +84,9 @@ public final class MountOptions {
         long clearedFlags = 0;
         StringBuilder data = new StringBuilder();
         boolean isBind = false;
+        boolean tmpcopyup = false;
         if (options == null) {
-            return new Parsed(0, 0, null, false, 0, 0, 0);
+            return new Parsed(0, 0, null, false, 0, 0, 0, false);
         }
         for (String o : options) {
             switch (o) {
@@ -139,6 +144,11 @@ public final class MountOptions {
                 case "rrelatime":      /* MOUNT_ATTR_RELATIME is 0; clearing __ATIME gives relatime */ break;
                 case "rnorelatime":    /* same effect as rrelatime (clearing __ATIME) */                break;
 
+                // OCI extension: copy pre-existing rootfs directory contents
+                // into the tmpfs after mounting. Recognised as a flag, not
+                // passed through to mount data.
+                case "tmpcopyup":      tmpcopyup = true; break;
+
                 default:
                     long prop = propagationFlag(o);
                     if (prop != 0) {
@@ -164,6 +174,6 @@ public final class MountOptions {
         }
         return new Parsed(flags, propagation,
                 data.length() > 0 ? data.toString() : null,
-                isBind, recAttrSet, recAttrClr, clearedFlags);
+                isBind, recAttrSet, recAttrClr, clearedFlags, tmpcopyup);
     }
 }

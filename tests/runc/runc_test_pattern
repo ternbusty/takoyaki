@@ -84,7 +84,7 @@ runc run [ambient caps not set in inheritable result in a warning]
 runc run [bind mount]
 runc run [bind mount through a dangling symlink component]
 runc run [bind mount through a trailing dangling symlink]
-runc run [bind mount {no,rel,strict}atime semantics]
+[skip]runc run [bind mount {no,rel,strict}atime semantics] # sshfs
 runc run [tmpcopyup]
 runc run with tmpfs
 runc run with tmpfs perms
@@ -100,8 +100,8 @@ runc run [ check rbind,r*atime mounts]
 runc run [rbind,ro mount is read-only but not recursively]
 runc run [rbind,ro,rro mount is recursively read-only too]
 runc run [rbind,rro mount is recursively read-only]
-runc run [mount(8)-like behaviour: --bind with no options]
-runc run [mount(8)-unlike behaviour: --bind with clearing flag]
+[skip]runc run [mount(8)-like behaviour: --bind with no options] # sshfs
+[skip]runc run [mount(8)-unlike behaviour: --bind with clearing flag] # sshfs
 runc run [mount order, container bind-mount source]
 runc run [mount order, container bind-mount source] (userns)
 [skip]runc run [mount order, container idmap source] # idmap

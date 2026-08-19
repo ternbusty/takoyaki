@@ -9,6 +9,7 @@ public final class SyncChannel {
     public static final int MSG_INIT_READY = 0x50;
     public static final int MSG_USERMAP_PLS = 0x40;
     public static final int MSG_USERMAP_ACK = 0x41;
+    public static final int MSG_CGROUP_ACK  = 0x42;
 
     private SyncChannel() {}
 

@@ -110,7 +110,6 @@ public final class MainProcess {
 
             stage2Pid = SyncChannel.readInt32(syncFd);
             Logger.debug("received stage-2 pid=" + stage2Pid);
-            PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
 
             // The first Cgroup.setup (for stage1Pid) already created the
@@ -123,6 +122,13 @@ public final class MainProcess {
             // assignment, so the container inherits the cpuset mask rather
             // than the parent's (potentially restricted) affinity.
             resetCpuAffinity(stage2Pid);
+
+            // Notify stage-1 that the init process has been moved to the
+            // container's cgroup. Stage-1 forwards this to stage-2, which
+            // then calls unshare(CLONE_NEWCGROUP) so the cgroupns root is
+            // the container's cgroup (not the parent's).
+            SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
+            PosixIO.close(syncFd);
 
             int initReady = SyncChannel.readInt32(mainSenderFd);
             if (initReady != SyncChannel.MSG_INIT_READY) {

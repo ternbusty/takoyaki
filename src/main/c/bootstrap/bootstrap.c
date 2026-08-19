@@ -55,6 +55,7 @@ static int t0_set = 0;
 enum sync_t {
     SYNC_USERMAP_PLS = 0x40,
     SYNC_USERMAP_ACK = 0x41,
+    SYNC_CGROUP_ACK  = 0x42,
     SYNC_GRANDCHILD = 0x44,
     SYNC_CHILD_FINISH = 0x45,
 };
@@ -485,15 +486,10 @@ void takoyaki_bootstrap(void) {
         DBG("[stage-1] now root in user namespace\n");
     }
 
-    /* cgroup namespace must be unshared BEFORE mount namespace so that the new mount
-     * namespace observes the cgroup namespace's view of /sys/fs/cgroup. */
-    if (clone_flags & CLONE_NEWCGROUP) {
-        DBG("[stage-1] unshare(CLONE_NEWCGROUP)\n");
-        if (unshare(CLONE_NEWCGROUP) < 0) {
-            fprintf(stderr, "[stage-1] unshare(CLONE_NEWCGROUP) failed: %s\n", strerror(errno));
-            exit(1);
-        }
-    }
+    /* CLONE_NEWCGROUP is NOT unshared here. The cgroup namespace root is
+     * captured at unshare time, and we need the init process to be in the
+     * container's cgroup first (via addPid). Stage-1 waits for the parent's
+     * CGROUP_ACK, then stage-2 calls unshare(CLONE_NEWCGROUP). */
     if (clone_flags & CLONE_NEWNS) {
         DBG("[stage-1] unshare(CLONE_NEWNS)\n");
         if (unshare(CLONE_NEWNS) < 0) {
@@ -594,6 +590,16 @@ void takoyaki_bootstrap(void) {
             fprintf(stderr, "[stage-2] expected SYNC_GRANDCHILD, got 0x%x\n", s);
             _exit(1);
         }
+        /* Create the cgroup namespace NOW, after the parent has moved us into
+         * the container's cgroup. This ensures the cgroupns root is the
+         * container's cgroup, so /proc/self/cgroup shows "0::/" inside. */
+        if (clone_flags & CLONE_NEWCGROUP) {
+            DBG("[stage-2] unshare(CLONE_NEWCGROUP)\n");
+            if (unshare(CLONE_NEWCGROUP) < 0) {
+                fprintf(stderr, "[stage-2] unshare(CLONE_NEWCGROUP) failed: %s\n", strerror(errno));
+                _exit(1);
+            }
+        }
         if (setsid() < 0) {
             fprintf(stderr, "[stage-2] setsid failed: %s\n", strerror(errno));
             _exit(1);
@@ -625,6 +631,21 @@ void takoyaki_bootstrap(void) {
     if (write(sync_fd, &stage2_pid, sizeof(stage2_pid)) != sizeof(stage2_pid)) {
         fprintf(stderr, "[stage-1] write stage-2 pid failed: %s\n", strerror(errno));
         exit(1);
+    }
+
+    /* Wait for the parent to move the init process into the container's
+     * cgroup (addPid). Stage-2 will unshare CLONE_NEWCGROUP after this
+     * so the cgroupns root is the container's cgroup, not the parent's. */
+    if (clone_flags & CLONE_NEWCGROUP) {
+        if (read(sync_fd, &s, sizeof(s)) != sizeof(s)) {
+            fprintf(stderr, "[stage-1] read SYNC_CGROUP_ACK failed: %s\n", strerror(errno));
+            exit(1);
+        }
+        if (s != SYNC_CGROUP_ACK) {
+            fprintf(stderr, "[stage-1] expected SYNC_CGROUP_ACK, got 0x%x\n", s);
+            exit(1);
+        }
+        DBG("[stage-1] received CGROUP_ACK from parent\n");
     }
 
     s = SYNC_GRANDCHILD;

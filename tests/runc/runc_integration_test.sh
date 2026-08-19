@@ -77,6 +77,23 @@ for name in "${TEST_NAMES[@]}"; do
         ERRORS="${ERRORS}\n  - $name"
         echo "FAIL  $name (rc=$rc)"
     fi
+
+    # Clean up stale cgroups left by timed-out or crashed tests. When
+    # timeout(1) kills the bats process tree, teardown_bundle never runs,
+    # leaving the cgroup directory (with processes) behind. The next test
+    # would fail with "container's cgroup is not empty".
+    for _cgdir in /sys/fs/cgroup/takoyaki/*/; do
+        [ -d "$_cgdir" ] || continue
+        sudo bash -c '
+            echo 1 > "'"$_cgdir"'cgroup.kill" 2>/dev/null || true
+            sleep 0.2
+            for sub in "'"$_cgdir"'"/*/; do
+                [ -d "$sub" ] || continue
+                rmdir "$sub" 2>/dev/null || true
+            done
+            rmdir "'"$_cgdir"'" 2>/dev/null || true
+        '
+    done
 done
 
 echo ""
