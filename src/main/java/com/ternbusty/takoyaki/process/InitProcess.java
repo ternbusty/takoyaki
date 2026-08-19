@@ -387,6 +387,13 @@ public final class InitProcess {
                         "startContainer", hookEnv);
             }
 
+            // Re-apply CLOEXEC on all FDs >= 3. The first closeAllAbove(0)
+            // ran earlier, but Java code between then and now may have opened
+            // new FDs (e.g. Files.readString for /etc/passwd, FFM library
+            // handles, hook fork/exec). This second pass catches any late
+            // arrivals right before execvp closes them.
+            CloseRange.closeAllAbove(0);
+
             Libc.execvp(arena, argv[0], argv);
             // runc-compatible error message: plain text to stderr regardless
             // of Logger level, so bats tests can assert on it.

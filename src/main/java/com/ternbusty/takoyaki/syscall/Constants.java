@@ -31,6 +31,7 @@ public final class Constants {
     public static final long MS_NOATIME = Consts.MS_NOATIME();
     public static final long MS_RELATIME = Consts.MS_RELATIME();
     public static final long MS_STRICTATIME = Consts.MS_STRICTATIME();
+    public static final long MS_NODIRATIME = 2048L;   // 0x800, stable across architectures
     public static final long MS_NOSYMFOLLOW = Consts.MS_NOSYMFOLLOW();
     public static final long MS_PRIVATE = Consts.MS_PRIVATE();
     public static final long MS_SLAVE = Consts.MS_SLAVE();
@@ -153,4 +154,19 @@ public final class Constants {
 
     // ioprio constants (from linux/ioprio.h)
     public static final int IOPRIO_WHO_PROCESS = 1;
+
+    // mount_setattr(2) constants (linux/mount.h, since kernel 5.12)
+    // Syscall 442 on both aarch64 and x86_64 (added in 5.12, same ABI number).
+    public static final long NR_mount_setattr = 442L;
+    public static final long MOUNT_ATTR_RDONLY       = 0x1L;
+    public static final long MOUNT_ATTR_NOSUID       = 0x2L;
+    public static final long MOUNT_ATTR_NODEV        = 0x4L;
+    public static final long MOUNT_ATTR_NOEXEC       = 0x8L;
+    public static final long MOUNT_ATTR_NOATIME      = 0x10L;
+    public static final long MOUNT_ATTR_STRICTATIME  = 0x20L;
+    public static final long MOUNT_ATTR_NODIRATIME   = 0x80L;
+    public static final long MOUNT_ATTR_RELATIME     = 0x0L;
+    public static final long MOUNT_ATTR_NOSYMFOLLOW  = 0x200000L;
+    public static final long MOUNT_ATTR__ATIME       = 0x70L;
+    public static final int  AT_RECURSIVE            = 0x8000;
 }

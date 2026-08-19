@@ -177,6 +177,9 @@ public final class ExecProcess {
             }
 
             Logger.debug("setns_init: about to exec");
+            // Re-apply CLOEXEC right before exec to catch FDs opened by
+            // rlimit or other code since the first closeAllAbove.
+            CloseRange.closeAllAbove(payload.preserveFds);
             Libc.execvp(arena, argv[0], argv);
             String rawErr = Libc.strerror(Libc.errno());
             String errMsg = rawErr.isEmpty() ? rawErr

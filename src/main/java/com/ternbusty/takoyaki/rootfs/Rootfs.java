@@ -10,6 +10,8 @@ import com.ternbusty.takoyaki.syscall.Syscalls;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -49,13 +51,12 @@ public final class Rootfs {
                     Constants.MS_BIND | Constants.MS_REC, null) != 0) {
                 throw new RuntimeException("bind mount rootfs failed: " + Libc.strerror(Libc.errno()));
             }
-            // pivot_root requires the new root and its parent to not have MS_SHARED
-            // propagation. Force the rootfs mount to private so it satisfies the rule
-            // regardless of what the host had.
-            if (Libc.mount(arena, null, rootfsPath, null,
-                    Constants.MS_PRIVATE, null) != 0) {
-                Logger.debug("set rootfs private failed: " + Libc.strerror(Libc.errno()));
-            }
+            // Do NOT set the rootfs mount to MS_PRIVATE here. The bind mount
+            // inherits MS_SLAVE propagation from "/", and that satisfies
+            // pivot_root's requirement (new root must not be MS_SHARED).
+            // Setting MS_PRIVATE would sever the peer group, making
+            // rootfsPropagation "slave" impossible after pivot_root because
+            // there would be no peer to slave to.
             // Remount rootfs with MS_NOSUID so setuid binaries inside the container
             // can't gain extra privileges through the host's mount layer.
             if (Libc.mount(arena, null, rootfsPath, null,
@@ -358,14 +359,16 @@ public final class Rootfs {
             // bind mounts ignore MS_RDONLY (and other access flags) on the initial
             // mount; the kernel just bind-attaches the source as-is. A second
             // MS_BIND|MS_REMOUNT with the desired flags is required to actually
-            // enforce read-only / nosuid / nodev / noexec on the bind.
-            if (isBind && (flags & (Constants.MS_RDONLY | Constants.MS_NOSUID
-                    | Constants.MS_NODEV | Constants.MS_NOEXEC)) != 0) {
+            // enforce them. This also handles "clearing" flags: e.g. "bind,dev"
+            // means clear MS_NODEV by not including it in the remount.
+            long vfsFlags = Constants.MS_RDONLY | Constants.MS_NOSUID
+                    | Constants.MS_NODEV | Constants.MS_NOEXEC
+                    | Constants.MS_NOATIME | Constants.MS_RELATIME
+                    | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW
+                    | Constants.MS_NODIRATIME;
+            if (isBind && ((flags & vfsFlags) != 0 || parsed.clearedFlags != 0)) {
                 long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
-                        | (flags & (Constants.MS_RDONLY | Constants.MS_NOSUID
-                                  | Constants.MS_NODEV | Constants.MS_NOEXEC
-                                  | Constants.MS_NOATIME | Constants.MS_RELATIME
-                                  | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW));
+                        | (flags & vfsFlags);
                 if (sc.mount(null, target, null, remountFlags, null) != 0) {
                     Logger.debug("bind remount with access flags on " + m.destination
                             + " failed: " + sc.strerror(sc.errno()));
@@ -378,6 +381,13 @@ public final class Rootfs {
                     Logger.debug("propagation set on " + m.destination + " failed: "
                             + sc.strerror(sc.errno()));
                 }
+            }
+            // Recursive mount attributes (rro, rnoatime, etc.) require the
+            // mount_setattr(2) syscall with AT_RECURSIVE, applied after the
+            // regular mount(2). This makes the attribute change propagate to
+            // all submounts recursively.
+            if (parsed.hasRecAttr()) {
+                mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
             }
         }
     }
@@ -625,6 +635,41 @@ public final class Rootfs {
         } catch (Exception e) {
             Logger.debug("could not read target mode for tmpfs: " + e.getMessage());
             return data;
+        }
+    }
+
+    /**
+     * Call mount_setattr(2) with AT_RECURSIVE on the given path.
+     *
+     * struct mount_attr (size = MOUNT_ATTR_SIZE_VER0 = 32 bytes)
+     *   u64 attr_set      (offset  0)
+     *   u64 attr_clr      (offset  8)
+     *   u64 propagation   (offset 16)
+     *   u64 userns_fd     (offset 24)
+     *
+     * runc pattern (rootfs_linux.go setRecAttr): opens the target via
+     * /proc/self/fd to avoid TOCTOU, then calls mount_setattr(-1, procfd,
+     * AT_RECURSIVE, &attr). We simplify by passing the path directly since
+     * we are in a private mount namespace and there is no TOCTOU window.
+     */
+    private static void mountSetattr(String target, long attrSet, long attrClr) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment attr = arena.allocate(32);
+            attr.set(ValueLayout.JAVA_LONG, 0, attrSet);
+            attr.set(ValueLayout.JAVA_LONG, 8, attrClr);
+            attr.set(ValueLayout.JAVA_LONG, 16, 0L); // propagation
+            attr.set(ValueLayout.JAVA_LONG, 24, 0L); // userns_fd
+            MemorySegment path = arena.allocateFrom(target);
+            long rc = Libc.syscall(Constants.NR_mount_setattr,
+                    -1, path.address(), Constants.AT_RECURSIVE, attr.address(), 32);
+            if (rc != 0) {
+                Logger.debug("mount_setattr(AT_RECURSIVE) on " + target + " failed: "
+                        + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("mount_setattr(AT_RECURSIVE) applied on " + target
+                        + " set=0x" + Long.toHexString(attrSet)
+                        + " clr=0x" + Long.toHexString(attrClr));
+            }
         }
     }
 }
