@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/syscall.h>
 #include <time.h>
 
@@ -206,6 +207,23 @@ static void exec_setns_pass(const char *env, int want_mnt) {
                     exit(1);
                 }
                 close(fd);
+                /* After joining a user namespace, become root in it so
+                 * the kernel restores our effective capabilities. Without
+                 * this, subsequent setns(mnt) or mount operations fail
+                 * with EPERM. */
+                if (strcmp(token, "user") == 0) {
+                    if (setuid(0) < 0) {
+                        fprintf(stderr, "[exec-setns] setuid(0) after user setns failed: %s\n",
+                                strerror(errno));
+                        exit(1);
+                    }
+                    if (setgid(0) < 0) {
+                        fprintf(stderr, "[exec-setns] setgid(0) after user setns failed: %s\n",
+                                strerror(errno));
+                        exit(1);
+                    }
+                    DBG("[exec-setns] now root in joined user namespace\n");
+                }
             }
         }
         token = strtok_r(NULL, ",", &saveptr);
@@ -334,6 +352,13 @@ void takoyaki_bootstrap(void) {
     enum sync_t s;
     unsigned int clone_flags;
 
+    /* Ignore SIGPIPE so that writing to a broken pipe (e.g. a log fd whose
+     * reader has closed) returns EPIPE instead of terminating the process.
+     * Without this, a stale pipe can silently kill the init before it
+     * finishes the sync handshake, causing flaky test failures. runc's Go
+     * runtime ignores SIGPIPE by default; we match that here. */
+    signal(SIGPIPE, SIG_IGN);
+
     /* Stamp the earliest reachable timestamp. The constructor runs from the
      * dynamic linker's init_array before main(), so this captures everything
      * the loader, libc, glibc relocation, and SubstrateVM heap mapping cost
@@ -392,9 +417,30 @@ void takoyaki_bootstrap(void) {
     /* Join existing namespaces specified via spec.linux.namespaces[].path.
      * CreateCommand opens the path on the host (host's /proc) and passes the
      * fds through _TAKOYAKI_NS_FDS=type:fd,type:fd,... so we can call setns
-     * here before any unshare. The user fd, if any, is processed first so
-     * subsequent setns/unshare calls operate inside the joined user namespace.
-     * Format mirrors the env var written in CreateCommand. */
+     * here before any unshare. Format mirrors the env var written in
+     * CreateCommand.
+     *
+     * Three-pass approach (matching runc's join_namespaces):
+     *   Pass 1: non-user namespaces (while still in init userns with host caps)
+     *           EPERM is silently skipped because the namespace might be owned
+     *           by the target userns we haven't joined yet.
+     *   Pass 2: user namespace (switches to target userns)
+     *   Pass 3: retry non-user namespaces that got EPERM in pass 1, now that
+     *           we are in the target userns and have its capabilities.
+     *
+     * This handles containers that join some externally-created namespace
+     * alongside an unrelated user namespace. */
+#define MAX_NS_FDS 16
+    struct ns_entry {
+        char type[16];
+        int fd;
+        int nstype;
+        int joined;
+    };
+    struct ns_entry ns_entries[MAX_NS_FDS];
+    int ns_count = 0;
+    int joined_userns = 0;
+
     char *ns_fds_env = getenv("_TAKOYAKI_NS_FDS");
     if (ns_fds_env && *ns_fds_env) {
         char *copy = strdup(ns_fds_env);
@@ -402,45 +448,95 @@ void takoyaki_bootstrap(void) {
             fprintf(stderr, "[stage-1] strdup ns_fds_env failed\n");
             exit(1);
         }
-        /* Two passes: user first, then everything else. */
-        for (int pass = 0; pass < 2; pass++) {
-            char *saveptr = NULL;
-            char *src = strdup(copy);
-            if (!src) {
-                fprintf(stderr, "[stage-1] strdup failed\n");
-                exit(1);
+        /* Parse the entries. */
+        char *saveptr = NULL;
+        char *token = strtok_r(copy, ",", &saveptr);
+        while (token && ns_count < MAX_NS_FDS) {
+            char *colon = strchr(token, ':');
+            if (colon) {
+                *colon = '\0';
+                struct ns_entry *e = &ns_entries[ns_count];
+                snprintf(e->type, sizeof(e->type), "%s", token);
+                e->fd = atoi(colon + 1);
+                e->joined = 0;
+                if      (strcmp(e->type, "user")    == 0) e->nstype = CLONE_NEWUSER;
+                else if (strcmp(e->type, "ipc")     == 0) e->nstype = CLONE_NEWIPC;
+                else if (strcmp(e->type, "uts")     == 0) e->nstype = CLONE_NEWUTS;
+                else if (strcmp(e->type, "network") == 0) e->nstype = CLONE_NEWNET;
+                else if (strcmp(e->type, "pid")     == 0) e->nstype = CLONE_NEWPID;
+                else if (strcmp(e->type, "mount")   == 0) e->nstype = CLONE_NEWNS;
+                else if (strcmp(e->type, "cgroup")  == 0) e->nstype = CLONE_NEWCGROUP;
+                else if (strcmp(e->type, "time")    == 0) e->nstype = CLONE_NEWTIME;
+                else e->nstype = 0;
+                ns_count++;
             }
-            char *token = strtok_r(src, ",", &saveptr);
-            while (token) {
-                char *colon = strchr(token, ':');
-                if (colon) {
-                    *colon = '\0';
-                    const char *type = token;
-                    int fd = atoi(colon + 1);
-                    int is_user = strcmp(type, "user") == 0;
-                    if ((pass == 0 && is_user) || (pass == 1 && !is_user)) {
-                        int nstype = 0;
-                        if      (strcmp(type, "user")    == 0) nstype = CLONE_NEWUSER;
-                        else if (strcmp(type, "ipc")     == 0) nstype = CLONE_NEWIPC;
-                        else if (strcmp(type, "uts")     == 0) nstype = CLONE_NEWUTS;
-                        else if (strcmp(type, "network") == 0) nstype = CLONE_NEWNET;
-                        else if (strcmp(type, "pid")     == 0) nstype = CLONE_NEWPID;
-                        else if (strcmp(type, "mount")   == 0) nstype = CLONE_NEWNS;
-                        else if (strcmp(type, "cgroup")  == 0) nstype = CLONE_NEWCGROUP;
-                        else if (strcmp(type, "time")    == 0) nstype = CLONE_NEWTIME;
-                        DBG("[stage-1] setns(fd=%d, %s)\n", fd, type);
-                        if (setns(fd, nstype) < 0) {
-                            fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
-                                    type, fd, strerror(errno));
-                            exit(1);
-                        }
-                    }
-                }
-                token = strtok_r(NULL, ",", &saveptr);
-            }
-            free(src);
+            token = strtok_r(NULL, ",", &saveptr);
         }
         free(copy);
+
+        /* Pass 1: join non-user namespaces (EPERM silently skipped). */
+        for (int i = 0; i < ns_count; i++) {
+            struct ns_entry *e = &ns_entries[i];
+            if (e->nstype == CLONE_NEWUSER) continue;
+            DBG("[stage-1] setns(fd=%d, %s) [pass 1]\n", e->fd, e->type);
+            if (setns(e->fd, e->nstype) < 0) {
+                if (errno == EPERM) {
+                    DBG("[stage-1] setns(%s) EPERM, will retry after userns join\n", e->type);
+                    continue;
+                }
+                fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
+                        e->type, e->fd, strerror(errno));
+                exit(1);
+            }
+            e->joined = 1;
+            close(e->fd);
+            e->fd = -1;
+        }
+
+        /* Pass 2: join user namespace. */
+        for (int i = 0; i < ns_count; i++) {
+            struct ns_entry *e = &ns_entries[i];
+            if (e->nstype != CLONE_NEWUSER) continue;
+            DBG("[stage-1] setns(fd=%d, %s) [pass 2]\n", e->fd, e->type);
+            if (setns(e->fd, e->nstype) < 0) {
+                fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
+                        e->type, e->fd, strerror(errno));
+                exit(1);
+            }
+            e->joined = 1;
+            joined_userns = 1;
+            close(e->fd);
+            e->fd = -1;
+            /* setns(CLONE_NEWUSER) clears effective capabilities.
+             * Become root in the joined userns to restore them (matching
+             * runc's setresuid(0,0,0) after user namespace join). */
+            if (setresuid(0, 0, 0) < 0) {
+                fprintf(stderr, "[stage-1] setresuid(0,0,0) after userns join failed: %s\n",
+                        strerror(errno));
+                exit(1);
+            }
+            if (setresgid(0, 0, 0) < 0) {
+                fprintf(stderr, "[stage-1] setresgid(0,0,0) after userns join failed: %s\n",
+                        strerror(errno));
+                exit(1);
+            }
+            DBG("[stage-1] now root in joined user namespace\n");
+        }
+
+        /* Pass 3: retry non-user namespaces skipped with EPERM. */
+        for (int i = 0; i < ns_count; i++) {
+            struct ns_entry *e = &ns_entries[i];
+            if (e->joined || e->nstype == CLONE_NEWUSER) continue;
+            DBG("[stage-1] setns(fd=%d, %s) [pass 3]\n", e->fd, e->type);
+            if (setns(e->fd, e->nstype) < 0) {
+                fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
+                        e->type, e->fd, strerror(errno));
+                exit(1);
+            }
+            e->joined = 1;
+            close(e->fd);
+            e->fd = -1;
+        }
     }
 
     if (clone_flags & CLONE_NEWUSER) {
@@ -646,6 +742,7 @@ void takoyaki_bootstrap(void) {
                 "_TAKOYAKI_MAIN_SENDER_FD",
                 "_TAKOYAKI_NOTIFY_LISTENER_FD",
                 "_TAKOYAKI_SECCOMP_LISTENER_FD",
+                "_TAKOYAKI_CONSOLE_SOCKET_FD",
                 NULL
             };
             for (int i = 0; keep_vars[i]; i++) {

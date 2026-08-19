@@ -134,7 +134,20 @@ public final class CreateCommand {
         if (logFilePath != null) envList.add("_TAKOYAKI_LOG_FILE=" + logFilePath);
         String logFmt = Logger.getFormatName();
         if (logFmt != null) envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
-        if (consoleSocket != null) envList.add("_TAKOYAKI_CONSOLE_SOCKET=" + consoleSocket);
+        // Pre-connect to the console socket on the HOST side so the init
+        // process (which may run inside a user namespace as an unmapped uid)
+        // doesn't need filesystem access to the socket path.  The connected
+        // fd survives fork+execve (no CLOEXEC); InitProcess uses it directly.
+        int consoleSocketFd = -1;
+        if (consoleSocket != null) {
+            consoleSocketFd = com.ternbusty.takoyaki.console.ConsoleSocket.connectTo(consoleSocket);
+            if (consoleSocketFd >= 0) {
+                envList.add("_TAKOYAKI_CONSOLE_SOCKET_FD=" + consoleSocketFd);
+            } else {
+                // Fall back to passing the path (non-userns case).
+                envList.add("_TAKOYAKI_CONSOLE_SOCKET=" + consoleSocket);
+            }
+        }
         if (noNewKeyring) envList.add("_TAKOYAKI_NO_NEW_KEYRING=1");
         if (noPivot) envList.add("_TAKOYAKI_NO_PIVOT=1");
 

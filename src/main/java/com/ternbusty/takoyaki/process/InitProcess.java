@@ -163,17 +163,25 @@ public final class InitProcess {
 
             String containerId = System.getenv("_TAKOYAKI_CONTAINER_ID");
 
-            // Connect to the console socket BEFORE pivot_root while the host
-            // filesystem (and the socket path on it) is still reachable. The fd
-            // survives across pivot_root; PTY allocation + sendMasterVia happen
-            // later, after the container devpts is visible at /dev/pts.
-            String consoleSocketPath = System.getenv("_TAKOYAKI_CONSOLE_SOCKET");
+            // Console socket: prefer the pre-connected fd from CreateCommand
+            // (which connects on the host side, before entering any userns).
+            // Fall back to connecting via path for the non-userns case or when
+            // the CLI couldn't pre-connect.
             boolean wantTerminal = spec.process != null && Boolean.TRUE.equals(spec.process.terminal);
             int consoleSocketFd = -1;
-            if (wantTerminal && consoleSocketPath != null) {
-                consoleSocketFd = ConsoleSocket.connectTo(consoleSocketPath);
-                if (consoleSocketFd < 0) {
-                    Logger.warn("failed to connect to console socket " + consoleSocketPath);
+            if (wantTerminal) {
+                String preConnectedFd = System.getenv("_TAKOYAKI_CONSOLE_SOCKET_FD");
+                if (preConnectedFd != null) {
+                    consoleSocketFd = Integer.parseInt(preConnectedFd);
+                    Logger.debug("using pre-connected console socket fd " + consoleSocketFd);
+                } else {
+                    String consoleSocketPath = System.getenv("_TAKOYAKI_CONSOLE_SOCKET");
+                    if (consoleSocketPath != null) {
+                        consoleSocketFd = ConsoleSocket.connectTo(consoleSocketPath);
+                        if (consoleSocketFd < 0) {
+                            Logger.warn("failed to connect to console socket " + consoleSocketPath);
+                        }
+                    }
                 }
             }
 

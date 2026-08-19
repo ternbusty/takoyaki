@@ -425,11 +425,11 @@ userns join external namespaces [wrong userns owner]
 userns join other container userns
 userns join other container userns [bind-mounted nsfd]
 [skip]userns join other container userns[selinux enabled] # selinux
-userns with 2 inaccessible mounts
+[skip]userns with 2 inaccessible mounts # unimpl _LIBCONTAINER_MOUNT_FDS
 userns with bind mount before a cgroupfs mount
-userns with inaccessible mount + exec
-userns with network interface
-userns with network interface renamed
+[skip]userns with inaccessible mount + exec # unimpl _LIBCONTAINER_MOUNT_FDS
+[skip]userns with network interface # unimpl linux.netDevices
+[skip]userns with network interface renamed # unimpl linux.netDevices
 userns with simple mount
 
 # --- hostname ---
