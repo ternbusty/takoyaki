@@ -37,4 +37,22 @@ public final class SyncChannel {
             if (n != 4) throw new RuntimeException("writeInt32 wrote " + n + " bytes");
         }
     }
+
+    /** Write a single sync byte. Used for lightweight ready signals. */
+    public static void writeByte(int fd, byte value) {
+        try (Arena arena = Arena.ofConfined()) {
+            long n = PosixIO.write(arena, fd, new byte[]{value});
+            if (n != 1) throw new RuntimeException("writeByte wrote " + n + " bytes");
+        }
+    }
+
+    /** Read a single sync byte. Returns -1 on EOF. */
+    public static int readByte(int fd) {
+        try (Arena arena = Arena.ofConfined()) {
+            byte[] b = new byte[1];
+            long n = PosixIO.read(arena, fd, b);
+            if (n <= 0) return -1;
+            return b[0] & 0xff;
+        }
+    }
 }

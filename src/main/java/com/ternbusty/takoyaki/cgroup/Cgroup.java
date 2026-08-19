@@ -92,11 +92,13 @@ public final class Cgroup {
 
         addPid(cgroupPath, pid);
 
-        // eBPF device cgroup for resources.devices (cgroup v2 only path).
-        if (linux != null && linux.resources != null && linux.resources.devices != null
-                && !linux.resources.devices.isEmpty()) {
-            DeviceCgroup.apply(cgroupPath, linux.resources.devices);
-        }
+        // The eBPF device program is NOT attached here. It is deferred to
+        // applyDeferredDevices() which MainProcess calls after INIT_READY.
+        // The init process needs to create device nodes (mknod) during
+        // rootfs setup, and attaching the BPF program before that would
+        // block mknod for devices not in the allow list. This matches
+        // runc's ordering: cgroupManager.Set (which includes devices) runs
+        // after SYNC_READY, not during Apply.
     }
 
     /**
@@ -197,6 +199,12 @@ public final class Cgroup {
         Path full = dir(cgroupPath);
         enableControllers(full, r);
         applyLimits(full, r);
+        // Update the eBPF device cgroup program when the update payload
+        // includes device rules. Without this, "runc update" with a new
+        // device policy would silently leave the old BPF program in place.
+        if (r != null && r.devices != null && !r.devices.isEmpty()) {
+            DeviceCgroup.apply(cgroupPath, r.devices);
+        }
     }
 
     private static void applyLimits(Path full, Spec.LinuxResources r) {
@@ -236,7 +244,7 @@ public final class Cgroup {
      * (e.g. 1 from pids.limit=0) would prevent the init from starting.
      */
     public static void applyDeferredPids(String cgroupPath, Spec.LinuxResources r) {
-        if (cgroupPath == null || r == null || r.pids == null) return;
+        if (cgroupPath == null || r == null) return;
         Path full = dir(cgroupPath);
         for (Map.Entry<String, String> e : plannedWrites(r)) {
             if (e.getKey().equals("pids.max")) {
@@ -244,6 +252,19 @@ public final class Cgroup {
                 Logger.debug("deferred pids.max=" + e.getValue());
             }
         }
+    }
+
+    /**
+     * Attach the eBPF device cgroup program after the init process has
+     * finished rootfs setup. Called from MainProcess after INIT_READY.
+     * The init must create device nodes (mknod) during rootfs setup, and
+     * an early BPF attachment would block mknod for devices not in the
+     * allow list. This mirrors runc's ordering where cgroupManager.Set
+     * (including device BPF) runs after SYNC_READY.
+     */
+    public static void applyDeferredDevices(String cgroupPath, Spec.LinuxResources r) {
+        if (cgroupPath == null || r == null || r.devices == null || r.devices.isEmpty()) return;
+        DeviceCgroup.apply(cgroupPath, r.devices);
     }
 
     /**

@@ -6,8 +6,11 @@ import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.libseccomp.SeccompH;
 import com.ternbusty.takoyaki.syscall.libseccomp.scmp_arg_cmp;
 
+import com.ternbusty.takoyaki.syscall.Libc;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 
 /**
  * libseccomp facade over the jextract-generated {@link SeccompH} bindings. The
@@ -164,20 +167,24 @@ public final class Seccomp {
                             // when action == SCMP_ACT_NOTIFY. Skipping would silently
                             // drop the notify state and seccomp_notify_fd would then
                             // return -EFAULT.
-                            int rc;
                             if (sc.args == null || sc.args.isEmpty()) {
                                 // Use seccomp_rule_add_array even with zero args. The
                                 // variadic seccomp_rule_add silently mis-loads the
                                 // notify state under Panama FFM (seccomp_notify_fd
                                 // returns -EFAULT afterwards), while the non-variadic
                                 // array variant works.
-                                rc = SeccompH.seccomp_rule_add_array(
+                                int rc = SeccompH.seccomp_rule_add_array(
                                         ctx, action, nr, 0, MemorySegment.NULL);
+                                if (rc != 0) {
+                                    Logger.debug("rule_add " + name + " failed: " + rc);
+                                }
                             } else {
-                                rc = addRuleWithArgs(arena, ctx, action, nr, sc.args);
-                            }
-                            if (rc != 0) {
-                                Logger.debug("rule_add " + name + " failed: " + rc);
+                                // runc compat: when multiple args reference the same
+                                // index, they form an OR (any match triggers the
+                                // action). libseccomp treats all args in a single
+                                // rule_add as AND. Split into groups where each group
+                                // has at most one condition per arg index.
+                                addRulesWithOrSplit(arena, ctx, action, nr, sc.args);
                             }
                         }
                     }
@@ -193,6 +200,13 @@ public final class Seccomp {
                     throw new RuntimeException("seccomp_load failed: " + loadRc);
                 }
                 Logger.info("seccomp filter loaded");
+
+                // runc compat (patchbpf): install a second BPF filter that
+                // returns ENOSYS for syscall numbers beyond the native arch's
+                // known range. Without this stub, unknown/future syscalls hit
+                // the libseccomp default action (typically ERRNO+EPERM) instead
+                // of the expected ENOSYS.
+                installEnosysStub(arena, sec.syscalls, filterFlagsValue);
 
                 // If the spec declared any SCMP_ACT_NOTIFY rules, pull the notify fd
                 // out of the loaded context. We don't manage a listener — that's the
@@ -220,6 +234,51 @@ public final class Seccomp {
             }
         } catch (Throwable t) {
             Logger.error("seccomp apply error: " + t.getMessage());
+        }
+    }
+
+    /**
+     * Split args that reference the same index into separate rule_add calls
+     * (OR semantics). Args with distinct indices within each group are passed
+     * as a single rule_add call (AND semantics within the group).
+     *
+     * Example: args [{index=0, op=EQ, val=100}, {index=0, op=EQ, val=9001}]
+     * produces two rule_add calls, one for each arg0 value. This matches
+     * runc's matchCall() splitting logic.
+     */
+    private static void addRulesWithOrSplit(Arena arena, MemorySegment ctx, int action, int nr,
+                                             java.util.List<Spec.SeccompArg> args) {
+        // Group args by index. If all indices are unique, we can use a single rule.
+        java.util.Map<Integer, java.util.List<Spec.SeccompArg>> byIndex = new java.util.LinkedHashMap<>();
+        for (Spec.SeccompArg a : args) {
+            byIndex.computeIfAbsent(a.index, k -> new java.util.ArrayList<>()).add(a);
+        }
+        boolean hasDuplicateIndex = byIndex.values().stream().anyMatch(v -> v.size() > 1);
+        if (!hasDuplicateIndex) {
+            // Simple case: all unique indices, single AND rule.
+            int rc = addRuleWithArgs(arena, ctx, action, nr, args);
+            if (rc != 0) Logger.debug("rule_add failed: " + rc);
+            return;
+        }
+        // Generate the Cartesian product of per-index arg groups.
+        // Each combination becomes one rule_add call.
+        java.util.List<java.util.List<Spec.SeccompArg>> groups = new java.util.ArrayList<>(byIndex.values());
+        java.util.List<java.util.List<Spec.SeccompArg>> combos = new java.util.ArrayList<>();
+        combos.add(new java.util.ArrayList<>());
+        for (java.util.List<Spec.SeccompArg> group : groups) {
+            java.util.List<java.util.List<Spec.SeccompArg>> next = new java.util.ArrayList<>();
+            for (java.util.List<Spec.SeccompArg> prefix : combos) {
+                for (Spec.SeccompArg a : group) {
+                    java.util.List<Spec.SeccompArg> combo = new java.util.ArrayList<>(prefix);
+                    combo.add(a);
+                    next.add(combo);
+                }
+            }
+            combos = next;
+        }
+        for (java.util.List<Spec.SeccompArg> combo : combos) {
+            int rc = addRuleWithArgs(arena, ctx, action, nr, combo);
+            if (rc != 0) Logger.debug("rule_add (OR split) failed: " + rc);
         }
     }
 
@@ -272,6 +331,120 @@ public final class Seccomp {
             if (s.names != null) n += s.names.size();
         }
         return n;
+    }
+
+    /**
+     * Install a raw BPF filter that returns ENOSYS for syscall numbers beyond
+     * the native architecture's known range. This is the equivalent of runc's
+     * patchbpf prepend. The filter is installed as a SECOND seccomp filter
+     * (after the libseccomp one). Since the kernel picks the most restrictive
+     * result when multiple filters exist, and ERRNO(ENOSYS) beats ALLOW, this
+     * correctly upgrades "unknown syscall gets ALLOW" to ENOSYS. For syscalls
+     * where the main filter returns something more restrictive than ERRNO
+     * (KILL, TRAP), that still wins.
+     */
+    private static void installEnosysStub(Arena arena,
+                                           java.util.List<Spec.LinuxSyscall> syscalls,
+                                           int filterFlags) {
+        int maxNr = findMaxSyscallNr(arena, syscalls);
+        if (maxNr <= 0) {
+            Logger.debug("patchbpf: no syscalls resolved, skipping ENOSYS stub");
+            return;
+        }
+        int threshold = maxNr + 1;
+        Logger.debug("patchbpf: ENOSYS stub for nr >= " + threshold);
+
+        // AUDIT_ARCH_AARCH64 = EM_AARCH64(183) | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE
+        long auditArch = 0xC00000B7L;
+        // SECCOMP_RET_ERRNO(ENOSYS) = SECCOMP_RET_ERRNO_BASE | 38
+        int retEnosys = 0x00050000 | 38;
+        // SECCOMP_RET_ALLOW
+        int retAllow = 0x7FFF0000;
+
+        // BPF program: 6 instructions
+        //  [0] LD_ABS  arch          (seccomp_data.arch at offset 4)
+        //  [1] JEQ     auditArch 0 3 (if arch != native, skip to ALLOW)
+        //  [2] LD_ABS  nr            (seccomp_data.nr at offset 0)
+        //  [3] JGE     threshold 0 1 (if nr < threshold, skip to ALLOW)
+        //  [4] RET     ERRNO|ENOSYS
+        //  [5] RET     ALLOW
+        int instCount = 6;
+        int instSize = 8; // struct sock_filter = 8 bytes
+        MemorySegment filter = arena.allocate(instCount * instSize);
+        // Helper to write one BPF instruction
+        // struct sock_filter { __u16 code; __u8 jt; __u8 jf; __u32 k; }
+        writeBpfInst(filter, 0, (short) 0x20, (byte) 0, (byte) 0, 4);                     // LD_ABS arch
+        writeBpfInst(filter, 1, (short) 0x15, (byte) 0, (byte) 3, (int) auditArch);       // JEQ native
+        writeBpfInst(filter, 2, (short) 0x20, (byte) 0, (byte) 0, 0);                     // LD_ABS nr
+        writeBpfInst(filter, 3, (short) 0x35, (byte) 0, (byte) 1, threshold);             // JGE threshold
+        writeBpfInst(filter, 4, (short) 0x06, (byte) 0, (byte) 0, retEnosys);             // RET ENOSYS
+        writeBpfInst(filter, 5, (short) 0x06, (byte) 0, (byte) 0, retAllow);              // RET ALLOW
+
+        // struct sock_fprog { unsigned short len; /*pad*/ struct sock_filter *filter; }
+        // On 64-bit: 2 + 6(pad) + 8(pointer) = 16 bytes
+        MemorySegment prog = arena.allocate(16);
+        prog.set(ValueLayout.JAVA_SHORT, 0, (short) instCount);
+        prog.set(ValueLayout.ADDRESS, 8, filter);
+
+        // seccomp(SECCOMP_SET_MODE_FILTER=1, flags, &prog)
+        // SYS_seccomp = 277 on aarch64
+        // Always include TSYNC (flag 1) so the filter covers all JVM threads.
+        int flags = filterFlags | 1; // SECCOMP_FILTER_FLAG_TSYNC = 1
+        long rc = Libc.syscall(277, 1, flags, prog.address(), 0, 0);
+        if (rc != 0) {
+            Logger.warn("patchbpf: seccomp(SET_MODE_FILTER) failed: "
+                    + Libc.strerror(Libc.errno()));
+        } else {
+            Logger.debug("patchbpf: ENOSYS stub installed");
+        }
+    }
+
+    private static void writeBpfInst(MemorySegment buf, int idx, short code,
+                                      byte jt, byte jf, int k) {
+        long off = idx * 8L;
+        buf.set(ValueLayout.JAVA_SHORT, off, code);
+        buf.set(ValueLayout.JAVA_BYTE, off + 2, jt);
+        buf.set(ValueLayout.JAVA_BYTE, off + 3, jf);
+        buf.set(ValueLayout.JAVA_INT, off + 4, k);
+    }
+
+    /**
+     * Find the highest native syscall number by probing libseccomp with known
+     * syscall names (from the spec and from a list of recently-added syscalls).
+     */
+    private static int findMaxSyscallNr(Arena arena,
+                                         java.util.List<Spec.LinuxSyscall> syscalls) {
+        int max = 0;
+        // Probe spec-referenced syscalls.
+        if (syscalls != null) {
+            for (Spec.LinuxSyscall sc : syscalls) {
+                if (sc.names == null) continue;
+                for (String name : sc.names) {
+                    int nr = SeccompH.seccomp_syscall_resolve_name(arena.allocateFrom(name));
+                    if (nr != SeccompH.__NR_SCMP_ERROR() && nr > 0 && nr > max) max = nr;
+                }
+            }
+        }
+        // Probe well-known high-numbered syscalls to find the native arch's max.
+        // Listed from newest to oldest so the first match gives the highest number.
+        String[] probes = {
+            "removexattrat", "listxattrat", "getxattrat", "setxattrat",
+            "mseal", "lsm_list_modules", "lsm_set_self_attr", "lsm_get_self_attr",
+            "listmount", "statmount", "futex_requeue", "futex_wait", "futex_wake",
+            "fchmodat2", "cachestat", "set_mempolicy_home_node", "process_mrelease",
+            "futex_waitv", "epoll_pwait2", "mount_setattr", "openat2", "pidfd_getfd",
+            "close_range", "io_uring_setup", "pidfd_send_signal", "io_uring_enter",
+            "rseq", "pkey_free", "pkey_alloc", "pkey_mprotect", "statx",
+            "copy_file_range", "preadv2", "memfd_create", "getrandom", "membarrier",
+            "execveat", "userfaultfd", "seccomp", "sched_setattr", "renameat2",
+            "kcmp", "finit_module", "process_vm_writev", "process_vm_readv",
+        };
+        for (String name : probes) {
+            int nr = SeccompH.seccomp_syscall_resolve_name(arena.allocateFrom(name));
+            if (nr != SeccompH.__NR_SCMP_ERROR() && nr > 0 && nr > max) max = nr;
+        }
+        if (max < 100) max = 450; // safe fallback
+        return max;
     }
 
     private static int actionToken(String action, Long errnoRet) {

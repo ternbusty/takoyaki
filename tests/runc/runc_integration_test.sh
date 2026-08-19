@@ -78,6 +78,14 @@ for name in "${TEST_NAMES[@]}"; do
         echo "FAIL  $name (rc=$rc)"
     fi
 
+    # Clean up stale notify sockets left by crashed tests. Without this,
+    # the next test using the same container name would fail with
+    # "Address already in use".
+    sudo rm -f /tmp/takoyaki-*.sock 2>/dev/null || true
+
+    # Clean up stale state directories.
+    sudo rm -rf /run/takoyaki/* 2>/dev/null || true
+
     # Clean up stale cgroups left by timed-out or crashed tests. When
     # timeout(1) kills the bats process tree, teardown_bundle never runs,
     # leaving the cgroup directory (with processes) behind. The next test

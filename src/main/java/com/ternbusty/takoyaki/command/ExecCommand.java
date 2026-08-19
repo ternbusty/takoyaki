@@ -335,6 +335,20 @@ public final class ExecCommand {
         int readFd = payloadFds[0];
         int writeFd = payloadFds[1];
 
+        // "Exec ready" sync socketpair: ExecProcess writes a byte after all
+        // process restrictions are applied; ExecCommand reads it before
+        // writing the pid file. This ensures scheduler, capabilities, seccomp
+        // etc. are in place by the time external observers inspect the pid.
+        int[] execSyncFds = new int[2];
+        int execSyncReadFd = -1; // ExecCommand reads from this
+        int execSyncWriteFd = -1; // ExecProcess writes to this
+        if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, execSyncFds) < 0) {
+            Logger.warn("exec sync socketpair failed, pid file may race with restrictions");
+        } else {
+            execSyncReadFd = execSyncFds[0];
+            execSyncWriteFd = execSyncFds[1];
+        }
+
         // Console socketpair for exec -t: one end goes to ExecProcess so it
         // can send back the PTY master fd via SCM_RIGHTS after opening a pty
         // in the container's devpts.
@@ -366,6 +380,9 @@ public final class ExecCommand {
         }
         if (cgroupNsFd >= 0) {
             envList.add("_TAKOYAKI_EXEC_CGROUPNS_FD=" + cgroupNsFd);
+        }
+        if (execSyncWriteFd >= 0) {
+            envList.add("_TAKOYAKI_EXEC_SYNC_FD=" + execSyncWriteFd);
         }
         if (Logger.isDebugEnabled()) {
             envList.add("_TAKOYAKI_EXEC_DEBUG=1");
@@ -405,12 +422,14 @@ public final class ExecCommand {
             // Close the write side so the payload read sees EOF once the
             // parent is done; everything else is meant to be inherited.
             PosixIO.close(writeFd);
+            if (execSyncReadFd >= 0) PosixIO.close(execSyncReadFd);
             PosixIO.invokeExecve(execve);
             PosixIO._exit(1);
             return 1;
         }
 
         PosixIO.close(readFd);
+        if (execSyncWriteFd >= 0) PosixIO.close(execSyncWriteFd);
         for (int fd : nsFds) PosixIO.close(fd);
         if (seccompListenerFd >= 0) PosixIO.close(seccompListenerFd);
 
@@ -444,8 +463,8 @@ public final class ExecCommand {
             // cgroup. If the root cgroup has domain controllers enabled,
             // writing to cgroup.procs returns EBUSY. Report this as an error
             // rather than silently falling through.
-            System.err.println("unable to add process to cgroups: "
-                    + "writing " + workloadPid + " to " + Cgroup.dir(cgroupPath)
+            System.err.println("error adding pid " + workloadPid
+                    + " to cgroups: write " + Cgroup.dir(cgroupPath)
                     + "/cgroup.procs: device or resource busy");
             // Kill the workload and return an error.
             Libc.kill(workloadPid, 9);
@@ -509,6 +528,15 @@ public final class ExecCommand {
                 ioThread = com.ternbusty.takoyaki.console.InternalConsole
                         .startIOCopyForFd(masterFd);
             }
+        }
+
+        // Wait for the "exec ready" sync byte before writing the pid file.
+        // ExecProcess sends this after applying all process restrictions
+        // (scheduler, capabilities, seccomp) so the pid file only appears
+        // once the workload is fully configured.
+        if (execSyncReadFd >= 0 && written) {
+            SyncChannel.readByte(execSyncReadFd);
+            PosixIO.close(execSyncReadFd);
         }
 
         if (pidFile != null && written) {

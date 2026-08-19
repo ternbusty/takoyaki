@@ -127,7 +127,15 @@ public final class MainProcess {
             // container's cgroup. Stage-1 forwards this to stage-2, which
             // then calls unshare(CLONE_NEWCGROUP) so the cgroupns root is
             // the container's cgroup (not the parent's).
-            SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
+            // Only send CGROUP_ACK when the spec creates a new cgroup
+            // namespace. bootstrap.c's stage-1 reads CGROUP_ACK only when
+            // CLONE_NEWCGROUP is in the clone flags. Writing it
+            // unconditionally causes EPIPE when stage-1 has already exited
+            // (it doesn't wait for CGROUP_ACK when there's no cgroup ns).
+            boolean creatingCgroupNs = spec.isCreatingNamespace("cgroup");
+            if (creatingCgroupNs) {
+                SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
+            }
             PosixIO.close(syncFd);
 
             int initReady = SyncChannel.readInt32(mainSenderFd);
@@ -143,6 +151,12 @@ public final class MainProcess {
             // startup. A low pids.max (e.g. 1 from pids.limit=0) would
             // prevent the init from starting if applied before INIT_READY.
             Cgroup.applyDeferredPids(effectiveCgroupsPath,
+                    spec.linux != null ? spec.linux.resources : null);
+            // Attach the eBPF device cgroup program now that the init has
+            // finished creating device nodes (mknod) during rootfs setup.
+            // Attaching earlier would block mknod for spec.linux.devices
+            // entries that are not in the allow list.
+            Cgroup.applyDeferredDevices(effectiveCgroupsPath,
                     spec.linux != null ? spec.linux.resources : null);
 
             State state = State.create(spec.ociVersion, containerId,

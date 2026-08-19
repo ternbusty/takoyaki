@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.process;
 
+import com.ternbusty.takoyaki.ipc.SyncChannel;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.state.ContainerStatus;
 import com.ternbusty.takoyaki.state.State;
@@ -57,12 +58,15 @@ public final class ExecProcess {
         int payloadFd;
         int seccompListenerFd;
         int consoleFd;
+        int execSyncFd;
         try {
             payloadFd = Integer.parseInt(System.getenv("_TAKOYAKI_EXEC_PAYLOAD_FD"));
             String listenerFdStr = System.getenv("_TAKOYAKI_SECCOMP_LISTENER_FD");
             seccompListenerFd = listenerFdStr != null ? Integer.parseInt(listenerFdStr) : -1;
             String consoleFdStr = System.getenv("_TAKOYAKI_EXEC_CONSOLE_FD");
             consoleFd = consoleFdStr != null ? Integer.parseInt(consoleFdStr) : -1;
+            String syncFdStr = System.getenv("_TAKOYAKI_EXEC_SYNC_FD");
+            execSyncFd = syncFdStr != null ? Integer.parseInt(syncFdStr) : -1;
         } catch (RuntimeException e) {
             Logger.error("bad exec env vars: " + e.getMessage());
             PosixIO._exit(1);
@@ -188,9 +192,18 @@ public final class ExecProcess {
             }
             if (consoleFd >= 0) PosixIO.close(consoleFd);
 
+            // Signal ExecCommand that all process restrictions have been applied.
+            // ExecCommand waits for this byte before writing the pid file, so
+            // the scheduler / capabilities / seccomp are guaranteed to be in
+            // place before any external observer can inspect the process.
+            if (execSyncFd >= 0) {
+                SyncChannel.writeByte(execSyncFd, (byte) 0);
+                PosixIO.close(execSyncFd);
+            }
+
             // Flag every inherited runtime fd CLOEXEC so nothing leaks into the
-            // user process (the payload fd is closed; the seccomp listener fd
-            // has been forwarded by Seccomp.apply if it was needed).
+            // user process (the seccomp listener fd has been forwarded by
+            // Seccomp.apply if it was needed).
             CloseRange.closeAllAbove(payload.preserveFds);
 
             String[] argv = payload.process.args.toArray(new String[0]);

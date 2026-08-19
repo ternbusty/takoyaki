@@ -547,6 +547,13 @@ void takoyaki_bootstrap(void) {
                 len += snprintf(buf + len, sizeof(buf) - len, "monotonic %s %s\n",
                                 mt_s, mt_n ? mt_n : "0");
             }
+            /* In a user namespace, prctl(PR_SET_DUMPABLE, 0) makes /proc/self
+             * inaccessible (owned by root in the INIT userns). Temporarily
+             * restore dumpability so we can write timens_offsets, then clear
+             * it again. Outside a userns this is harmless. */
+            if (clone_flags & CLONE_NEWUSER) {
+                prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+            }
             int fd = open("/proc/self/timens_offsets", O_WRONLY);
             if (fd < 0) {
                 fprintf(stderr, "[stage-1] open timens_offsets failed: %s\n",
@@ -559,6 +566,9 @@ void takoyaki_bootstrap(void) {
                     DBG("[stage-1] timens_offsets applied: %.*s", len, buf);
                 }
                 close(fd);
+            }
+            if (clone_flags & CLONE_NEWUSER) {
+                prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
             }
         }
     }
@@ -617,6 +627,41 @@ void takoyaki_bootstrap(void) {
         unsetenv(ENV_IS_BOOTSTRAP);
         unsetenv(ENV_SYNCPIPE);
         unsetenv(ENV_CLONE_FLAGS);
+
+        /* Close all fds >= 3 (except those the Java init needs, which are
+         * passed via env vars). Mark them CLOEXEC first, then clear the flag
+         * on the fds that must survive execve. This prevents stray fds
+         * (e.g. bats output) from leaking into the container process. */
+#ifndef SYS_close_range
+#define SYS_close_range 436
+#endif
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC (1U << 2)
+#endif
+        if (syscall(SYS_close_range, 3, ~0U, CLOSE_RANGE_CLOEXEC) == 0) {
+            /* Clear CLOEXEC on fds that the Java init reads from env vars. */
+            char *env_val;
+            int keep_fd;
+            const char *keep_vars[] = {
+                "_TAKOYAKI_MAIN_SENDER_FD",
+                "_TAKOYAKI_NOTIFY_LISTENER_FD",
+                "_TAKOYAKI_SECCOMP_LISTENER_FD",
+                NULL
+            };
+            for (int i = 0; keep_vars[i]; i++) {
+                env_val = getenv(keep_vars[i]);
+                if (env_val) {
+                    keep_fd = atoi(env_val);
+                    if (keep_fd >= 3) {
+                        int fl = fcntl(keep_fd, F_GETFD, 0);
+                        if (fl != -1) fcntl(keep_fd, F_SETFD, fl & ~FD_CLOEXEC);
+                    }
+                }
+            }
+            DBG("[stage-2] CLOEXEC set on fds >= 3 (kept needed fds)\n");
+        } else {
+            DBG("[stage-2] close_range CLOEXEC not available: %s\n", strerror(errno));
+        }
 
         DBG("[stage-2] execve(/proc/self/exe __init__) to start fresh runtime\n");
         char *argv[] = { "takoyaki", "__init__", NULL };

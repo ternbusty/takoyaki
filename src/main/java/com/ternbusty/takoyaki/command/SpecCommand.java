@@ -163,7 +163,7 @@ public final class SpecCommand {
                 List.of("nosuid", "noexec", "nodev")));
         mounts.add(mount("/sys", "sysfs", "sysfs",
                 List.of("nosuid", "noexec", "nodev", "ro")));
-        mounts.add(mount("/sys/fs/cgroup", "cgroup", "cgroup2",
+        mounts.add(mount("/sys/fs/cgroup", "cgroup", "cgroup",
                 List.of("nosuid", "noexec", "nodev", "relatime", "ro")));
 
         return mounts;

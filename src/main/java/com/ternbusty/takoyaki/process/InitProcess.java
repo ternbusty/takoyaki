@@ -318,7 +318,11 @@ public final class InitProcess {
                 ConsoleSocket.wireStdio(ptySlave);
             }
 
-            CloseRange.closeAllAbove(0);
+            // Close all fds >= 3 except notifyListenerFd. Using actual close
+            // (not just CLOEXEC) so the fd leak test does not see stray fds
+            // during the "created" wait. After this, only stdio and the
+            // notify socket remain open.
+            CloseRange.closeAllExcept(notifyListenerFd);
 
             Logger.debug("waiting for start signal on notify fd " + notifyListenerFd);
             NotifySocket.waitForStart(notifyListenerFd);

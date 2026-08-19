@@ -229,14 +229,36 @@ public final class Rootfs {
                 }
             }
         }
-        // Bind-mount the container's cgroup directory to /sys/fs/cgroup.
-        // We always use bind mount rather than a fresh cgroup2 filesystem
-        // because CLONE_NEWCGROUP runs before addPid, so the cgroupns root
-        // would be the parent's cgroup, not the container's. Bind-mounting
-        // the correct path sidesteps this ordering issue and works with or
-        // without cgroupns.
-        if (containerCgPath != null) {
+        // When the spec creates a cgroup namespace, bind-mount only the
+        // container's cgroup subtree so the namespace root matches. When
+        // there is no cgroup namespace (the spec removes it or joins an
+        // existing one via .path), the container must see the full host
+        // cgroup tree, so bind-mount the cgroup root instead.
+        boolean hasCgroupNs = spec != null && spec.hasNamespace("cgroup");
+        if (hasCgroupNs && containerCgPath != null) {
             mountCgroupBind(arena, cg, containerCgPath, cgroupRo);
+        } else {
+            mountCgroupRoot(arena, cg, cgroupRo);
+        }
+    }
+
+    /**
+     * Mount the full host cgroup tree at the container's /sys/fs/cgroup.
+     * Used when no cgroup namespace is configured so the container can see
+     * all cgroups on the host (matching runc behaviour).
+     */
+    private static void mountCgroupRoot(Arena arena, String cg, boolean cgroupRo) {
+        if (Libc.mount(arena, "/sys/fs/cgroup", cg, null,
+                Constants.MS_BIND | Constants.MS_REC, null) == 0) {
+            long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                    | Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC;
+            if (cgroupRo) remountFlags |= Constants.MS_RDONLY;
+            Libc.mount(arena, null, cg, null, remountFlags, null);
+            Logger.debug("bound /sys/fs/cgroup from host root"
+                    + (cgroupRo ? " (ro)" : " (rw)"));
+        } else {
+            Logger.warn("bind /sys/fs/cgroup from host root: "
+                    + Libc.strerror(Libc.errno()));
         }
     }
 
@@ -285,16 +307,27 @@ public final class Rootfs {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
             if (m.destination == null) continue;
+            // Strip rootfs prefix from destination if present.  The OCI spec
+            // says destination is a container-absolute path ("/mnt/x"), but
+            // some callers (e.g. runc integration tests) pass host-absolute
+            // paths like "$rootfs/mnt/x" where $rootfs is the host rootfs
+            // directory.  This matches runc's LexicallyStripRoot behaviour.
+            String dest = m.destination;
+            if (dest.startsWith(rootfsPath + "/")) {
+                dest = dest.substring(rootfsPath.length());
+            } else if (dest.equals(rootfsPath)) {
+                dest = "/";
+            }
             // skip already-handled paths
-            if (m.destination.equals("/proc") || m.destination.equals("/dev")
-                || m.destination.equals("/sys") || m.destination.equals("/dev/shm")
-                || m.destination.equals("/dev/pts") || m.destination.equals("/dev/mqueue")
-                || m.destination.equals("/sys/fs/cgroup")) continue;
+            if (dest.equals("/proc") || dest.equals("/dev")
+                || dest.equals("/sys") || dest.equals("/dev/shm")
+                || dest.equals("/dev/pts") || dest.equals("/dev/mqueue")
+                || dest.equals("/sys/fs/cgroup")) continue;
             // Resolve symlinks in the destination path within the rootfs
             // scope, so bind mounts through dangling symlinks end up at the
             // correct host-side path. The resolved target is used for both
             // mkdir and mount(2); the original destination stays for logging.
-            String resolved = resolveInRootfs(rootfsPath, m.destination);
+            String resolved = resolveInRootfs(rootfsPath, dest);
             String target = resolved;
             String type = m.type != null ? m.type : "none";
             MountOptions.Parsed parsed = MountOptions.parse(m.options);
@@ -348,7 +381,20 @@ public final class Rootfs {
                 tmpcopyupSnapshot = snapshotDirectory(Path.of(target));
             }
 
-            int rc = sc.mount(m.source, target, isBind ? null : type, flags, data);
+            // Container bind-mount source: when the source path does not
+            // exist on the host but DOES exist under the rootfs, it refers
+            // to a location created by an earlier mount in the same spec
+            // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
+            // so the mount sees the right content.  This matches runc.
+            String mountSource = m.source;
+            if (isBind && mountSource != null
+                    && !new java.io.File(mountSource).exists()
+                    && new java.io.File(rootfsPath + mountSource).exists()) {
+                mountSource = rootfsPath + mountSource;
+                Logger.debug("resolved container bind source " + m.source
+                        + " -> " + mountSource);
+            }
+            int rc = sc.mount(mountSource, target, isBind ? null : type, flags, data);
             if (rc != 0) {
                 Logger.debug("optional mount " + m.destination + " failed: "
                         + sc.strerror(sc.errno()));
@@ -475,10 +521,69 @@ public final class Rootfs {
     public static void msMoveRoot(String newRoot, String rootfsPropagation) {
         try (Arena arena = Arena.ofConfined()) {
             Logger.debug("msMoveRoot (no-pivot) to " + newRoot);
+
+            // Before MS_MOVE, mask host procfs and sysfs mounts.  runc
+            // lazy-unmounts them so the container cannot re-mount procfs
+            // writable (which would expose bare /proc).  Collect targets
+            // first because /proc/self/mountinfo disappears after unmount.
+            java.util.List<String> toUnmount = new java.util.ArrayList<>();
+            try {
+                for (String line : Files.readAllLines(Path.of("/proc/self/mountinfo"))) {
+                    String[] parts = line.split(" ");
+                    if (parts.length < 9) continue;
+                    String root = parts[3];
+                    String mountPoint = parts[4];
+                    int dashIdx = -1;
+                    for (int i = 6; i < parts.length; i++) {
+                        if ("-".equals(parts[i])) { dashIdx = i; break; }
+                    }
+                    if (dashIdx < 0 || dashIdx + 1 >= parts.length) continue;
+                    String fstype = parts[dashIdx + 1];
+                    if (!"/".equals(root)) continue;
+                    if (!"proc".equals(fstype) && !"sysfs".equals(fstype)) continue;
+                    if (mountPoint.startsWith(newRoot)) continue;
+                    toUnmount.add(mountPoint);
+                }
+            } catch (IOException e) {
+                Logger.warn("msMoveRoot: failed to read mountinfo: " + e.getMessage());
+            }
+            for (String mp : toUnmount) {
+                Libc.mount(arena, null, mp, null,
+                        Constants.MS_SLAVE | Constants.MS_REC, null);
+                if (Libc.umount2(arena, mp, Constants.MNT_DETACH) != 0) {
+                    Libc.mount(arena, "tmpfs", mp, "tmpfs", 0, null);
+                    Logger.debug("covered " + mp + " with tmpfs");
+                } else {
+                    Logger.debug("lazy-unmounted host mount at " + mp);
+                }
+            }
+
+            // Grab an fd to the rootfs BEFORE MS_MOVE. After the move, the
+            // process cwd/root still reference the ORIGINAL root mount (now
+            // covered by the rootfs mount). Path-based chdir("/") would stay
+            // on the original root because "/" resolves to the process root
+            // without mount traversal. Using fchdir(fd) sidesteps this: the
+            // fd follows the mount wherever it goes.
+            int rootFd = PosixIO.open(arena, newRoot,
+                    Constants.O_DIRECTORY | Constants.O_RDONLY, 0);
+            if (rootFd < 0) {
+                throw new RuntimeException("open " + newRoot + ": "
+                        + Libc.strerror(Libc.errno()));
+            }
+
             if (Libc.mount(arena, newRoot, "/", null, Constants.MS_MOVE, null) != 0) {
+                PosixIO.close(rootFd);
                 throw new RuntimeException("mount MS_MOVE " + newRoot + " to /: "
                         + Libc.strerror(Libc.errno()));
             }
+
+            // fchdir to the rootfs mount (fd follows the MS_MOVE), then
+            // chroot(".") to lock the root. Finally chdir("/") for sanity.
+            if (PosixIO.fchdir(rootFd) != 0) {
+                PosixIO.close(rootFd);
+                throw new RuntimeException("fchdir: " + Libc.strerror(Libc.errno()));
+            }
+            PosixIO.close(rootFd);
             if (Libc.chroot(arena, ".") != 0) {
                 throw new RuntimeException("chroot: " + Libc.strerror(Libc.errno()));
             }
