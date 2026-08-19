@@ -33,6 +33,10 @@ public final class EventsCommand {
         }
         long intervalMs = parseInterval(interval);
         Path cg = Cgroup.dir(cgroupPath);
+
+        // Start OOM watcher thread that monitors memory.events for oom_kill.
+        Thread oomWatcher = startOomWatcher(cg, containerId);
+
         do {
             Map<String, Object> snap = snapshot(cg, containerId);
             System.out.println(Json.encode(snap));
@@ -42,7 +46,52 @@ public final class EventsCommand {
                 break;
             }
         } while (true);
+
+        if (oomWatcher != null) oomWatcher.interrupt();
         return 0;
+    }
+
+    /** Monitor memory.events for oom_kill events and emit {"type":"oom"} JSON. */
+    private static Thread startOomWatcher(Path cg, String containerId) {
+        Path memEvents = cg.resolve("memory.events");
+        if (!Files.exists(memEvents)) return null;
+        Thread t = new Thread(() -> {
+            long lastOomKill = readOomKillCount(memEvents);
+            try (java.nio.file.WatchService ws = cg.getFileSystem().newWatchService()) {
+                cg.register(ws, java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY);
+                while (!Thread.currentThread().isInterrupted()) {
+                    java.nio.file.WatchKey key = ws.take();
+                    for (java.nio.file.WatchEvent<?> event : key.pollEvents()) {
+                        if ("memory.events".equals(event.context().toString())) {
+                            long current = readOomKillCount(memEvents);
+                            if (current > lastOomKill) {
+                                Map<String, Object> oomEvent = new LinkedHashMap<>();
+                                oomEvent.put("type", "oom");
+                                oomEvent.put("id", containerId);
+                                System.out.println(Json.encode(oomEvent));
+                                lastOomKill = current;
+                            }
+                        }
+                    }
+                    key.reset();
+                }
+            } catch (InterruptedException ignored) {
+                // shutting down
+            } catch (IOException e) {
+                // memory.events not watchable, give up silently
+            }
+        }, "oom-watcher");
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
+    /** Read the oom_kill count from cgroup v2 memory.events. */
+    private static long readOomKillCount(Path memEvents) {
+        Map<String, Long> kv = readKvFile(memEvents);
+        if (kv == null) return 0;
+        Long v = kv.get("oom_kill");
+        return v != null ? v : 0;
     }
 
     /** Parse Go-style duration string (5s, 100ms, 1m, etc.) to milliseconds. */

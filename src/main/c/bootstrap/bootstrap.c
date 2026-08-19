@@ -63,6 +63,22 @@ static int debug_enabled = 0;
 
 #define DBG(fmt, ...) do { if (debug_enabled) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
+static void log_cpu_affinity(void) {
+    if (!debug_enabled) return;
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    if (sched_getaffinity(0, sizeof(cpus), &cpus) < 0) {
+        DBG("sched_getaffinity: %s\n", strerror(errno));
+        return;
+    }
+    size_t i, mask = 0;
+    for (i = 0; i < sizeof(mask) * 8; i++) {
+        if (CPU_ISSET(i, &cpus))
+            mask |= (size_t)1 << i;
+    }
+    DBG("nsexec: affinity: 0x%zx\n", mask);
+}
+
 static int getenv_int(const char *name) {
     char *val = getenv(name);
     if (!val) return -1;
@@ -218,6 +234,7 @@ static void exec_bootstrap(void) {
     }
 
     DBG("nsexec container setup\n");
+    log_cpu_affinity();
 
     char *ns_env = getenv("_TAKOYAKI_EXEC_NS_FDS");
 
@@ -333,6 +350,7 @@ void takoyaki_bootstrap(void) {
     }
 
     DBG("nsexec container setup\n");
+    log_cpu_affinity();
     DBG("[stage-1] starting namespace setup\n");
 
     clone_flags = getenv_uint_hex(ENV_CLONE_FLAGS);

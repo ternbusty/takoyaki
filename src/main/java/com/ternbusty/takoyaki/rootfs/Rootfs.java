@@ -392,6 +392,9 @@ public final class Rootfs {
         Syscalls sc = SyscallHost.current();
         // runc compat: deduplicate paths so each is masked exactly once.
         java.util.LinkedHashSet<String> deduped = new java.util.LinkedHashSet<>(paths);
+        // runc mounts a single tmpfs for all directory masks and bind-mounts
+        // it onto each target, so all share the same device number.
+        String tmpfsSource = null;
         for (String p : deduped) {
             int rc = sc.mount("/dev/null", p, null, Constants.MS_BIND, null);
             if (rc == 0) {
@@ -400,12 +403,25 @@ public final class Rootfs {
             }
             int err = sc.errno();
             if (err == Constants.ENOENT) continue; // skip nonexistent
-            // Likely a directory — mask with tmpfs.
-            rc = sc.mount("tmpfs", p, "tmpfs", Constants.MS_RDONLY, null);
-            if (rc != 0) {
-                Logger.debug("mask " + p + " failed: " + sc.strerror(sc.errno()));
+            // Likely a directory. Mount a single shared tmpfs on the first
+            // directory, then bind-mount it onto subsequent directories so
+            // all directory masks share the same device number (runc compat).
+            if (tmpfsSource == null) {
+                rc = sc.mount("tmpfs", p, "tmpfs", Constants.MS_RDONLY, null);
+                if (rc != 0) {
+                    Logger.debug("mask " + p + " failed: " + sc.strerror(sc.errno()));
+                } else {
+                    tmpfsSource = p;
+                    Logger.debug("masked " + p + " with tmpfs");
+                }
             } else {
-                Logger.debug("masked " + p + " with tmpfs");
+                rc = sc.mount(tmpfsSource, p, null,
+                        Constants.MS_BIND | Constants.MS_RDONLY, null);
+                if (rc != 0) {
+                    Logger.debug("mask bind " + p + " failed: " + sc.strerror(sc.errno()));
+                } else {
+                    Logger.debug("masked " + p + " via bind from " + tmpfsSource);
+                }
             }
         }
     }
