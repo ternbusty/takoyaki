@@ -216,7 +216,14 @@ public final class InitProcess {
             }
 
             // Bring up loopback so localhost works inside the network namespace.
+            // Rename network devices that were moved into this namespace by
+            // MainProcess before loopback comes up.
             if (spec.hasNamespace("network")) {
+                if (spec.linux != null && spec.linux.netDevices != null
+                        && !spec.linux.netDevices.isEmpty()) {
+                    com.ternbusty.takoyaki.network.NetDevice.renameDevices(
+                            spec.linux.netDevices);
+                }
                 Loopback.up();
             }
 
@@ -278,6 +285,12 @@ public final class InitProcess {
             if (spec.process != null) {
                 ProcessRestrictions.applyIOPriority(spec.process.ioPriority);
                 ProcessRestrictions.applyScheduler(spec.process.scheduler);
+            }
+
+            // NUMA memory policy (linux.memoryPolicy): applied before cap drop
+            // and inherited by execve.
+            if (spec.linux != null) {
+                MemPolicy.apply(spec.linux.memoryPolicy);
             }
 
             // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).

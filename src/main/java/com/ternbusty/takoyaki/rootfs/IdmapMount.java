@@ -38,15 +38,28 @@ public final class IdmapMount {
     private static final int MOVE_MOUNT_F_EMPTY_PATH = 0x4;
 
     private static final long MOUNT_ATTR_IDMAP = 0x00100000L;
+    private static final int AT_RECURSIVE     = 0x8000;
 
     private IdmapMount() {}
 
     /** Open a clone of {@code source} as a detached mount tree, ready for setattr. */
     public static int openTree(String source) {
+        return openTree(source, false);
+    }
+
+    /**
+     * Open a clone of {@code source} as a detached mount tree.
+     * When {@code cloneRecursive} is true, AT_RECURSIVE is passed so
+     * the clone captures all submounts (needed for rbind sources that
+     * have overlaid mounts from earlier spec entries).
+     */
+    public static int openTree(String source, boolean cloneRecursive) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment path = arena.allocateFrom(source);
+            int flags = OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC;
+            if (cloneRecursive) flags |= AT_RECURSIVE;
             long rc = Libc.syscall(NR_open_tree, AT_FDCWD, path.address(),
-                    OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC, 0, 0);
+                    flags, 0, 0);
             if (rc < 0) {
                 Logger.debug("open_tree(" + source + ") failed: " + Libc.strerror(Libc.errno()));
                 return -1;
@@ -57,6 +70,15 @@ public final class IdmapMount {
 
     /** Apply MOUNT_ATTR_IDMAP using the given user namespace fd. */
     public static boolean setIdmap(int treeFd, int usernsFd) {
+        return setIdmap(treeFd, usernsFd, false);
+    }
+
+    /**
+     * Apply MOUNT_ATTR_IDMAP using the given user namespace fd.
+     * When {@code recursive} is true, AT_RECURSIVE is passed to mount_setattr
+     * so the id-mapping applies to all submounts (ridmap behaviour).
+     */
+    public static boolean setIdmap(int treeFd, int usernsFd, boolean recursive) {
         try (Arena arena = Arena.ofConfined()) {
             // struct mount_attr { u64 attr_set; u64 attr_clr; u64 propagation; u64 userns_fd; }
             MemorySegment attr = arena.allocate(32);
@@ -65,8 +87,9 @@ public final class IdmapMount {
             attr.set(ValueLayout.JAVA_LONG, 16, 0L);
             attr.set(ValueLayout.JAVA_LONG, 24, (long) usernsFd);
             MemorySegment empty = arena.allocateFrom("");
+            int flags = AT_EMPTY_PATH | (recursive ? AT_RECURSIVE : 0);
             long rc = Libc.syscall(NR_mount_setattr, treeFd, empty.address(),
-                    AT_EMPTY_PATH, attr.address(), 32);
+                    flags, attr.address(), 32);
             if (rc != 0) {
                 Logger.warn("mount_setattr(IDMAP) failed: " + Libc.strerror(Libc.errno()));
                 return false;
@@ -92,10 +115,27 @@ public final class IdmapMount {
 
     /** Convenience: open tree, apply id-map, then move to destination. */
     public static boolean apply(String source, int usernsFd, String destination) {
-        int tree = openTree(source);
+        return apply(source, usernsFd, destination, false, false);
+    }
+
+    /** Convenience: open tree, apply id-map (optionally recursive), then move to destination. */
+    public static boolean apply(String source, int usernsFd, String destination,
+                                boolean recursive) {
+        return apply(source, usernsFd, destination, recursive, false);
+    }
+
+    /**
+     * Convenience: open tree, apply id-map, then move to destination.
+     *
+     * @param recursive    pass AT_RECURSIVE to mount_setattr (ridmap)
+     * @param cloneRecursive pass AT_RECURSIVE to open_tree (rbind sources with submounts)
+     */
+    public static boolean apply(String source, int usernsFd, String destination,
+                                boolean recursive, boolean cloneRecursive) {
+        int tree = openTree(source, cloneRecursive);
         if (tree < 0) return false;
         try {
-            if (!setIdmap(tree, usernsFd)) return false;
+            if (!setIdmap(tree, usernsFd, recursive)) return false;
             return moveMount(tree, destination);
         } finally {
             PosixIO.close(tree);

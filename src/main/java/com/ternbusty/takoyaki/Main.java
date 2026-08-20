@@ -295,7 +295,7 @@ public final class Main {
         CreateOptions o = parseCreateOptions("create", args, subStart, false);
         if (o == null) return 1;
         return CreateCommand.run(rootPath, debug, o.id, o.bundle, o.pidFile, o.consoleSocket,
-                o.noPivot, o.noNewKeyring, o.preserveFds);
+                o.noPivot, o.noNewKeyring, o.preserveFds, o.pidfdSocket);
     }
 
     private static int dispatchRun(String[] args, int subStart, String rootPath, boolean debug) {
@@ -308,7 +308,7 @@ public final class Main {
         CreateOptions o = parseCreateOptions("run", args, subStart, true);
         if (o == null) return 1;
         return RunCommand.run(rootPath, debug, o.id, o.bundle, o.pidFile, o.consoleSocket,
-                o.noPivot, o.noNewKeyring, o.preserveFds, o.detach);
+                o.noPivot, o.noNewKeyring, o.preserveFds, o.detach, o.pidfdSocket);
     }
 
     /** Options shared by create and run (run additionally accepts -d/--detach). */
@@ -316,6 +316,7 @@ public final class Main {
         String bundle = ".";
         String pidFile = null;
         String consoleSocket = null;
+        String pidfdSocket = null;
         boolean noPivot = false;
         boolean noNewKeyring = false;
         int preserveFds = 0;
@@ -351,6 +352,10 @@ public final class Main {
                 case "--console-socket" -> {
                     if (i + 1 >= args.length) { missingArg(sub, a); return null; }
                     o.consoleSocket = args[++i];
+                }
+                case "--pidfd-socket" -> {
+                    if (i + 1 >= args.length) { missingArg(sub, a); return null; }
+                    o.pidfdSocket = args[++i];
                 }
                 case "--no-pivot" -> o.noPivot = true;
                 case "--no-new-keyring" -> o.noNewKeyring = true;
@@ -566,6 +571,8 @@ public final class Main {
         String consoleSocket = null;
         String cgroupPath = null;
         String consoleSizeStr = null;
+        String pidfdSocket = null;
+        boolean ignorePaused = false;
         boolean afterPositional = false;
         for (int i = subStart; i < args.length; i++) {
             String a = args[i];
@@ -645,6 +652,12 @@ public final class Main {
                     else if (i + 1 >= args.length) return missingArg("exec", a);
                     else consoleSizeStr = args[++i];
                 }
+                case "--ignore-paused" -> ignorePaused = true;
+                case "--pidfd-socket" -> {
+                    if (flagVal != null) { pidfdSocket = flagVal; }
+                    else if (i + 1 >= args.length) return missingArg("exec", a);
+                    else pidfdSocket = args[++i];
+                }
                 case "--no-new-privs" -> { /* accepted for compat, always-on in takoyaki */ }
                 case "--apparmor", "--process-label" -> {
                     // Accept and skip these flags with their values
@@ -694,7 +707,7 @@ public final class Main {
         }
         return ExecCommand.run(rootPath, id, processJson, user, cwd, envs, command,
                 detach, pidFile, tty, consoleSocket, additionalGids, caps,
-                preserveFds, cgroupPath, consoleSize);
+                preserveFds, cgroupPath, consoleSize, ignorePaused, pidfdSocket);
     }
 
     // ---- small helpers ------------------------------------------------

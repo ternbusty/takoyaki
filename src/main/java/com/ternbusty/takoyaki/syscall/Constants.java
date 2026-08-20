@@ -159,6 +159,11 @@ public final class Constants {
     // ioprio constants (from linux/ioprio.h)
     public static final int IOPRIO_WHO_PROCESS = 1;
 
+    // pidfd_open(2) (kernel 5.3+)
+    public static final long NR_pidfd_open = Consts.SYS_pidfd_open();
+    // set_mempolicy(2) for NUMA memory policy
+    public static final long NR_set_mempolicy = Consts.SYS_set_mempolicy();
+
     // mount_setattr(2) constants (linux/mount.h, since kernel 5.12)
     // Syscall 442 on both aarch64 and x86_64 (added in 5.12, same ABI number).
     public static final long NR_mount_setattr = 442L;

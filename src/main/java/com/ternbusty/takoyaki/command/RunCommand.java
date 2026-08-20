@@ -30,7 +30,7 @@ public final class RunCommand {
     public static int run(String rootPath, boolean debug, String containerId,
                           String bundleIn, String pidFile, String consoleSocket,
                           boolean noPivot, boolean noNewKeyring, int preserveFds,
-                          boolean detach) {
+                          boolean detach, String pidfdSocket) {
 
         // For foreground runs with terminal=true and no --console-socket, create
         // an internal PTY proxy so the container's stdio flows through a real
@@ -54,7 +54,8 @@ public final class RunCommand {
         }
 
         int rc = CreateCommand.run(rootPath, debug, containerId, bundleIn,
-                pidFile, effectiveConsoleSocket, noPivot, noNewKeyring, preserveFds);
+                pidFile, effectiveConsoleSocket, noPivot, noNewKeyring, preserveFds,
+                pidfdSocket);
         if (rc != 0) {
             if (internalConsole != null) internalConsole.stop();
             return rc;

@@ -36,10 +36,14 @@ public final class MountOptions {
         public final long clearedFlags;
         /** OCI "tmpcopyup" option: copy rootfs contents into tmpfs after mount. */
         public final boolean tmpcopyup;
+        /** OCI "idmap" option: apply non-recursive id-mapped mount. */
+        public final boolean isIdmap;
+        /** OCI "ridmap" option: apply recursive id-mapped mount. */
+        public final boolean isRecursiveIdmap;
 
         Parsed(long flags, long propagation, String data, boolean isBind,
                long recAttrSet, long recAttrClr, long clearedFlags,
-               boolean tmpcopyup) {
+               boolean tmpcopyup, boolean isIdmap, boolean isRecursiveIdmap) {
             this.flags = flags;
             this.propagation = propagation;
             this.data = data;
@@ -48,6 +52,8 @@ public final class MountOptions {
             this.recAttrClr = recAttrClr;
             this.clearedFlags = clearedFlags;
             this.tmpcopyup = tmpcopyup;
+            this.isIdmap = isIdmap;
+            this.isRecursiveIdmap = isRecursiveIdmap;
         }
 
         /** True when mount_setattr(AT_RECURSIVE) should be called after mount. */
@@ -85,8 +91,10 @@ public final class MountOptions {
         StringBuilder data = new StringBuilder();
         boolean isBind = false;
         boolean tmpcopyup = false;
+        boolean isIdmap = false;
+        boolean isRecursiveIdmap = false;
         if (options == null) {
-            return new Parsed(0, 0, null, false, 0, 0, 0, false);
+            return new Parsed(0, 0, null, false, 0, 0, 0, false, false, false);
         }
         for (String o : options) {
             switch (o) {
@@ -149,6 +157,12 @@ public final class MountOptions {
                 // passed through to mount data.
                 case "tmpcopyup":      tmpcopyup = true; break;
 
+                // OCI id-mapped mount options. "idmap" applies the mapping
+                // non-recursively; "ridmap" applies recursively via
+                // AT_RECURSIVE in mount_setattr.
+                case "idmap":          isIdmap = true; break;
+                case "ridmap":         isRecursiveIdmap = true; break;
+
                 default:
                     long prop = propagationFlag(o);
                     if (prop != 0) {
@@ -174,6 +188,7 @@ public final class MountOptions {
         }
         return new Parsed(flags, propagation,
                 data.length() > 0 ? data.toString() : null,
-                isBind, recAttrSet, recAttrClr, clearedFlags, tmpcopyup);
+                isBind, recAttrSet, recAttrClr, clearedFlags, tmpcopyup,
+                isIdmap, isRecursiveIdmap);
     }
 }

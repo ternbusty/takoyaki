@@ -23,7 +23,8 @@ public final class CreateCommand {
 
     public static int run(String rootPath, boolean debug, String containerId,
                           String bundleIn, String pidFile, String consoleSocket,
-                          boolean noPivot, boolean noNewKeyring, int preserveFds) {
+                          boolean noPivot, boolean noNewKeyring, int preserveFds,
+                          String pidfdSocket) {
         if (State.exists(rootPath, containerId)) {
             System.err.println("container " + containerId + " already exists");
             return 1;
@@ -173,25 +174,118 @@ public final class CreateCommand {
             }
         }
 
-        // Mount idmap: set up helper user namespaces on the HOST (where we can use
-        // host pids to address /proc), keep the userns_fd open, pass it to the init
-        // via env var (fd inherits across fork+execve because we don't set CLOEXEC).
-        // Doing this from the host side avoids the /proc<->container-pid mismatch
-        // that prevents the init (which runs inside the container's pid namespace)
-        // from addressing its forked helpers via host-mounted /proc.
+        // Mount idmap: prepare fully-ready open_tree fds on the HOST side.
+        // mount_setattr(MOUNT_ATTR_IDMAP) requires CAP_SYS_ADMIN in init_user_ns,
+        // which the container init lacks when a user namespace is in use.
+        // By completing open_tree + mount_setattr here (on the host), the init
+        // only needs to call move_mount with the pre-prepared fd.
+        // For non-userns containers this also works correctly because CreateCommand
+        // runs as root in init_user_ns.
         if (spec.mounts != null) {
             StringJoiner fdMap = new StringJoiner(",");
             for (Spec.Mount m : spec.mounts) {
-                if (m.uidMappings == null || m.uidMappings.isEmpty()) continue;
-                int fd = com.ternbusty.takoyaki.rootfs.IdmapHelper.setupHostSide(
-                        m.uidMappings, m.gidMappings);
-                if (fd < 0) {
+                // Determine if this mount needs an idmap userns fd.
+                // Explicit uidMappings on the mount take precedence; otherwise
+                // the "idmap"/"ridmap" mount option with the container's userns
+                // mappings (implied mapping).
+                java.util.List<Spec.IdMapping> uidMaps = m.uidMappings;
+                java.util.List<Spec.IdMapping> gidMaps = m.gidMappings;
+                boolean hasExplicit = uidMaps != null && !uidMaps.isEmpty();
+                boolean hasIdmapOption = false;
+                boolean isRidmap = false;
+                if (m.options != null) {
+                    for (String opt : m.options) {
+                        if ("idmap".equals(opt)) {
+                            hasIdmapOption = true;
+                        } else if ("ridmap".equals(opt)) {
+                            hasIdmapOption = true;
+                            isRidmap = true;
+                        }
+                    }
+                }
+                if (!hasExplicit && hasIdmapOption && spec.linux != null) {
+                    uidMaps = spec.linux.uidMappings;
+                    gidMaps = spec.linux.gidMappings;
+                }
+
+                // When joining an existing user namespace (userns path is set)
+                // and no explicit mappings are available, use the joined userns's
+                // fd directly for mount_setattr. Its uid_map/gid_map were already
+                // set by whoever created it.
+                int usernsFd = -1;
+                if ((uidMaps == null || uidMaps.isEmpty()) && hasIdmapOption
+                        && spec.linux != null && spec.linux.namespaces != null) {
+                    for (Spec.Namespace ns : spec.linux.namespaces) {
+                        if ("user".equals(ns.type) && ns.path != null && !ns.path.isEmpty()) {
+                            try (Arena nsArena = Arena.ofConfined()) {
+                                usernsFd = PosixIO.open(nsArena, ns.path, Constants.O_RDONLY, 0);
+                            }
+                            if (usernsFd < 0) {
+                                Logger.warn("open joined userns " + ns.path
+                                        + " for idmap failed: " + Libc.strerror(Libc.errno()));
+                            }
+                            break;
+                        }
+                    }
+                }
+                if (usernsFd < 0 && (uidMaps == null || uidMaps.isEmpty())) continue;
+
+                // Step 1: create the helper userns with the desired uid/gid maps,
+                // unless we already have a userns fd from joining an existing one.
+                if (usernsFd < 0) {
+                    usernsFd = com.ternbusty.takoyaki.rootfs.IdmapHelper.setupHostSide(
+                            uidMaps, gidMaps);
+                }
+                if (usernsFd < 0) {
                     Logger.warn("idmap helper setup failed for " + m.destination
                             + "; mount will fall back to plain bind");
                     continue;
                 }
+
+                // Step 2: resolve the mount source to an absolute host path.
+                String source = m.source;
+                if (source != null && !source.isEmpty()) {
+                    java.io.File srcFile = new java.io.File(source);
+                    if (!srcFile.isAbsolute()) {
+                        source = srcFile.getAbsolutePath();
+                    }
+                }
+
+                // Step 3: determine open_tree / mount_setattr flags from options.
+                com.ternbusty.takoyaki.rootfs.MountOptions.Parsed parsed =
+                        com.ternbusty.takoyaki.rootfs.MountOptions.parse(m.options);
+                boolean cloneRecursive =
+                        (parsed.flags & com.ternbusty.takoyaki.syscall.Constants.MS_REC) != 0;
+                boolean recursive = isRidmap || parsed.isRecursiveIdmap;
+
+                // Step 4: open_tree on the source, then apply MOUNT_ATTR_IDMAP.
+                int treeFd = com.ternbusty.takoyaki.rootfs.IdmapMount.openTree(
+                        source, cloneRecursive);
+                if (treeFd < 0) {
+                    Logger.warn("open_tree(" + source + ") failed for " + m.destination
+                            + "; mount will fall back to plain bind");
+                    PosixIO.close(usernsFd);
+                    continue;
+                }
+                // open_tree sets CLOEXEC by default. Clear it so the fd
+                // survives fork+execve into bootstrap.c → Java init.
+                int fl = PosixIO.fcntl(treeFd, Constants.F_GETFD, 0);
+                if (fl >= 0) {
+                    PosixIO.fcntl(treeFd, Constants.F_SETFD,
+                            fl & ~Constants.FD_CLOEXEC);
+                }
+                if (!com.ternbusty.takoyaki.rootfs.IdmapMount.setIdmap(
+                        treeFd, usernsFd, recursive)) {
+                    Logger.warn("mount_setattr(IDMAP) failed for " + m.destination
+                            + "; mount will fall back to plain bind");
+                    PosixIO.close(treeFd);
+                    PosixIO.close(usernsFd);
+                    continue;
+                }
+                PosixIO.close(usernsFd);
+
                 fdMap.add(java.util.Base64.getEncoder().encodeToString(
-                        m.destination.getBytes()) + ":" + fd);
+                        m.destination.getBytes()) + ":" + treeFd);
             }
             if (fdMap.length() > 0) {
                 envList.add("_TAKOYAKI_IDMAP_FDS=" + fdMap);
@@ -253,7 +347,8 @@ public final class CreateCommand {
         PosixIO.close(mainChildFd);
 
         MainProcess.run(forkPid, syncFds[0], spec, containerId,
-                bundle, rootPath, pidFile, notifyListenerFd, mainParentFd);
+                bundle, rootPath, pidFile, notifyListenerFd, mainParentFd,
+                pidfdSocket);
         return 0;
     }
 }

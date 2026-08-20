@@ -223,6 +223,7 @@ val jextractConsts by tasks.registering(Exec::class) {
         // syscall numbers
         "SYS_capset", "SYS_close_range", "SYS_pivot_root", "SYS_keyctl", "SYS_bpf",
         "SYS_ioprio_set", "SYS_sched_setattr", "SYS_sched_setaffinity",
+        "SYS_pidfd_open", "SYS_set_mempolicy",
         // namespaces
         "CLONE_NEWNS", "CLONE_NEWUTS", "CLONE_NEWIPC", "CLONE_NEWUSER",
         "CLONE_NEWPID", "CLONE_NEWNET", "CLONE_NEWCGROUP", "CLONE_NEWTIME",

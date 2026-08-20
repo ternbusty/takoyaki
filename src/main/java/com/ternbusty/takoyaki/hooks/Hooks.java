@@ -129,9 +129,10 @@ public final class Hooks {
                     try {
                         hookOutput = new String(p.getInputStream().readAllBytes()).trim();
                     } catch (IOException ignored) {}
+                    String exitDesc = describeExit(rc);
                     String detail = hookOutput.isEmpty()
-                            ? "exit status " + rc
-                            : hookOutput + ": exit status " + rc;
+                            ? exitDesc
+                            : hookOutput + ": " + exitDesc;
                     String msg = "error running " + phase + " hook #" + hookNum
                             + ": " + detail;
                     if (failFast) throw new RuntimeException(msg);
@@ -149,5 +150,40 @@ public final class Hooks {
             }
         }
         return firstError;
+    }
+
+    /**
+     * Describe a process exit code the way Go does: if the process was killed
+     * by a signal (exit code > 128), produce "signal: <name>" instead of
+     * "exit status <code>". runc's bats tests rely on matching "bad system call"
+     * when a hook is killed by SIGSYS.
+     */
+    private static String describeExit(int rc) {
+        if (rc > 128) {
+            int sig = rc - 128;
+            String name = signalName(sig);
+            if (name != null) return "signal: " + name;
+        }
+        return "exit status " + rc;
+    }
+
+    private static String signalName(int sig) {
+        return switch (sig) {
+            case 1 -> "hangup";
+            case 2 -> "interrupt";
+            case 3 -> "quit";
+            case 4 -> "illegal instruction";
+            case 5 -> "trace/breakpoint trap";
+            case 6 -> "aborted";
+            case 7 -> "bus error";
+            case 8 -> "floating point exception";
+            case 9 -> "killed";
+            case 11 -> "segmentation fault";
+            case 13 -> "broken pipe";
+            case 14 -> "alarm clock";
+            case 15 -> "terminated";
+            case 31 -> "bad system call";
+            default -> null;
+        };
     }
 }

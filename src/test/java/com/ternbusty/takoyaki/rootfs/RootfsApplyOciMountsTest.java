@@ -47,7 +47,7 @@ class RootfsApplyOciMountsTest {
                     mount("/dev/pts",       "devpts", "devpts", null),
                     mount("/dev/mqueue",    "mqueue", "mqueue", null),
                     mount("/sys/fs/cgroup", "cgroup", "cgroup2", null)
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertTrue(rec.mountCalls().isEmpty(),
                 "the well-known mount points are skipped by applyOciMounts");
@@ -59,7 +59,7 @@ class RootfsApplyOciMountsTest {
         Spec.Mount m = new Spec.Mount(); // destination = null
         try (var s = SyscallHost.install(rec)) {
             assertDoesNotThrow(() -> Rootfs.applyOciMounts(tmp.toString(),
-                    List.of(m), Map.of()));
+                    List.of(m), Map.of(), new Spec()));
         }
         assertTrue(rec.mountCalls().isEmpty());
     }
@@ -73,7 +73,7 @@ class RootfsApplyOciMountsTest {
         try (var s = SyscallHost.install(rec)) {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/tmp", "tmpfs", "tmpfs", List.of("nosuid", "mode=755"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
 
         assertEquals(1, rec.mountCalls().size());
@@ -94,7 +94,7 @@ class RootfsApplyOciMountsTest {
         try (var s = SyscallHost.install(rec)) {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "/host/data", "none", List.of("bind"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertEquals(1, rec.mountCalls().size());
         assertNull(rec.mountCalls().get(0).fstype(),
@@ -113,7 +113,7 @@ class RootfsApplyOciMountsTest {
         try (var s = SyscallHost.install(rec)) {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/etc/ro", "/host/etc", null, List.of("bind", "ro"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         // Call 1: initial bind. Call 2: remount with MS_RDONLY.
         assertEquals(2, rec.mountCalls().size());
@@ -139,7 +139,7 @@ class RootfsApplyOciMountsTest {
         try (var s = SyscallHost.install(rec)) {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "/host/data", null, List.of("bind"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertEquals(1, rec.mountCalls().size(),
                 "plain bind must not be remounted");
@@ -156,7 +156,7 @@ class RootfsApplyOciMountsTest {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "tmpfs", "tmpfs",
                             List.of("nosuid", "rprivate"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertEquals(2, rec.mountCalls().size());
         // Call 1: tmpfs with regular MS_NOSUID, NO MS_PRIVATE bit.
@@ -178,7 +178,7 @@ class RootfsApplyOciMountsTest {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/etc/ro", "/host/etc", null,
                             List.of("bind", "ro", "private"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertEquals(3, rec.mountCalls().size());
         // Call 1: initial bind, source != null.
@@ -204,7 +204,7 @@ class RootfsApplyOciMountsTest {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/etc/ro", "/host/etc", null,
                             List.of("bind", "ro", "private"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertEquals(1, rec.mountCalls().size(),
                 "remount + propagation must not run when the initial mount failed");
@@ -221,7 +221,7 @@ class RootfsApplyOciMountsTest {
                     mount("/tmp",   "tmpfs",   "tmpfs", List.of("nosuid")),
                     mount("/run",   "tmpfs",   "tmpfs", List.of("nosuid", "mode=755")),
                     mount("/data",  "/host/d", null,    List.of("bind"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
 
         List<MountCall> calls = rec.mountCalls();
@@ -240,7 +240,7 @@ class RootfsApplyOciMountsTest {
             Rootfs.applyOciMounts(tmp.toString(), List.of(
                     mount("/data", "/host", null,
                             List.of("bind", "ro", "nosuid", "nodev", "noexec"))
-            ), Map.of());
+            ), Map.of(), new Spec());
         }
         assertEquals(2, rec.mountCalls().size());
         long expected = Constants.MS_BIND | Constants.MS_REMOUNT
