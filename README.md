@@ -21,10 +21,6 @@ sudo curl -sSL -o /etc/apparmor.d/takoyaki "$BASE/apparmor-profile"
 sudo apparmor_parser -r /etc/apparmor.d/takoyaki
 ```
 
-The AppArmor profile is required on Ubuntu 24.04 and later. Ubuntu restricts unprivileged user namespace creation by default (`kernel.apparmor_restrict_unprivileged_userns=1`). Without a profile that permits `userns`, container workloads calling `unshare(CLONE_NEWUSER)` receive zero capabilities in the new namespace and rootless operation fails entirely. System-packaged runtimes (runc, crun, podman, ...) ship the same kind of profile in their packages.
-
-If you installed the binary to a path other than `/usr/local/bin/takoyaki`, edit the path in the profile before loading it.
-
 ### Runtime requirements
 
 - Linux 5.12+ (for idmap mount; older kernels still work for simpler bundles)
