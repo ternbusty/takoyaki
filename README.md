@@ -28,6 +28,19 @@ curl -sSL https://github.com/ternbusty/takoyaki/releases/latest/download/takoyak
     | sha256sum -c
 ```
 
+### AppArmor profile (Ubuntu 24.04+)
+
+Ubuntu 24.04 restricts unprivileged user namespace creation by default (`kernel.apparmor_restrict_unprivileged_userns=1`). Without an AppArmor profile that permits `userns`, container workloads that call `unshare(CLONE_NEWUSER)` will receive zero capabilities in the new namespace. Rootless operation also requires this profile.
+
+```sh
+sudo cp dist/apparmor/takoyaki /etc/apparmor.d/takoyaki
+sudo apparmor_parser -r /etc/apparmor.d/takoyaki
+```
+
+If you installed the binary to a path other than `/usr/local/bin/takoyaki`, edit the path in the profile before loading it.
+
+System-packaged runtimes (runc, crun, podman, ...) ship the same kind of profile in their packages.
+
 ### Runtime requirements
 
 - Linux 5.12+ (for idmap mount; older kernels still work for simpler bundles)
