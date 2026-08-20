@@ -33,6 +33,16 @@ chmod +x "$RUNC_DIR/runc"
 
 cd "$RUNC_DIR" || exit 1
 
+# Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1. Without
+# an AppArmor profile that allows "userns," the kernel grants zero
+# capabilities inside user namespaces created by processes lacking
+# CAP_SYS_ADMIN. The system ships /etc/apparmor.d/runc with the rule.
+# Rewrite the path to match the copied binary, just as runc's own CI does.
+if [ -f /etc/apparmor.d/runc ]; then
+    sed "s;^profile runc /usr/sbin/runc;profile takoyaki-test $PWD/runc;" \
+        < /etc/apparmor.d/runc | sudo apparmor_parser -r 2>/dev/null || true
+fi
+
 # Build runc's Go test helper binaries (recvtty, seccompagent, etc.)
 sudo make test-binaries
 

@@ -46,12 +46,29 @@ class ListCommandTest {
     }
 
     @Test
-    void missingRootDirectoryAlsoPrintsEmptyJson() {
-        // No /run/takoyaki at all (first invocation, before any create) — still
-        // a valid "no containers" answer. Must NOT return non-zero.
-        int rc = ListCommand.run("/this/does/not/exist", "json", false);
+    void missingDefaultRootDirectoryPrintsEmptyJson() {
+        // /run/runc is a default root path that does not exist on a machine
+        // without runc installed. The first invocation (before any create)
+        // should return a valid "no containers" answer.
+        int rc = ListCommand.run("/run/runc", "json", false);
         assertEquals(0, rc);
         assertEquals("[]\n", captured.toString());
+    }
+
+    @Test
+    void missingNonDefaultRootDirectoryReturnsError() {
+        // An explicit --root that does not exist is an error. The runtime
+        // can't list containers from a directory that doesn't exist when it
+        // is not the default path.
+        PrintStream realErr = System.err;
+        ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(errBuf));
+        try {
+            int rc = ListCommand.run("/this/does/not/exist", "json", false);
+            assertEquals(1, rc);
+        } finally {
+            System.setErr(realErr);
+        }
     }
 
     @Test

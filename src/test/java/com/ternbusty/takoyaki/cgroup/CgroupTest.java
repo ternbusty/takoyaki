@@ -32,6 +32,7 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
 
             Cgroup.setup(123, "/takoyaki-x", null);
             fm.verify(() -> Files.createDirectories(
@@ -53,6 +54,7 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
             Spec.Linux linux = new Spec.Linux();
             linux.resources = r;
             Cgroup.setup(123, "/takoyaki-mem", linux);
@@ -72,6 +74,7 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
             Spec.Linux linux = new Spec.Linux();
             linux.resources = r;
             Cgroup.setup(123, "/takoyaki-mem", linux);
@@ -91,6 +94,7 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
             Spec.Linux linux = new Spec.Linux();
             linux.resources = r;
             Cgroup.setup(123, "/takoyaki-cpu", linux);
@@ -112,6 +116,7 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
             Spec.Linux linux = new Spec.Linux();
             linux.resources = r;
             Cgroup.setup(123, "/takoyaki-q", linux);
@@ -123,7 +128,9 @@ class CgroupTest {
     }
 
     @Test
-    void pidsLimitIsApplied() {
+    void pidsLimitIsDeferredDuringSetup() {
+        // pids.max is deferred during setup() so the GraalVM init process
+        // can create threads. applyDeferredPids() writes it after INIT_READY.
         Spec.LinuxResources r = resources();
         r.pids = new Spec.LinuxPids();
         r.pids.limit = 100;
@@ -131,9 +138,27 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
             Spec.Linux linux = new Spec.Linux();
             linux.resources = r;
             Cgroup.setup(123, "/takoyaki-p", linux);
+
+            // pids.max must NOT be written during setup.
+            fm.verify(() -> Files.writeString(
+                    eq(Path.of("/sys/fs/cgroup/takoyaki-p/pids.max")),
+                    anyString()), never());
+        }
+    }
+
+    @Test
+    void applyDeferredPidsWritesPidsMax() {
+        Spec.LinuxResources r = resources();
+        r.pids = new Spec.LinuxPids();
+        r.pids.limit = 100;
+
+        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+            fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            Cgroup.applyDeferredPids("/takoyaki-p", r);
 
             fm.verify(() -> Files.writeString(
                     eq(Path.of("/sys/fs/cgroup/takoyaki-p/pids.max")),
@@ -153,6 +178,7 @@ class CgroupTest {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.createDirectories(any())).thenReturn(null);
             fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
             Spec.Linux linux = new Spec.Linux();
             linux.resources = r;
             Cgroup.setup(123, "/takoyaki/sub", linux);
@@ -174,6 +200,7 @@ class CgroupTest {
             fm.when(() -> Files.exists(eq(cgDir))).thenReturn(true);
             fm.when(() -> Files.writeString(any(Path.class), anyString()))
                     .thenReturn(cgDir);
+            fm.when(() -> Files.readString(any())).thenReturn("");
             // Files.delete returns void; the default (no stub) is to do nothing
             // and return successfully, which matches the happy path.
 

@@ -59,12 +59,19 @@ class CapabilityTest {
     }
 
     @Test
-    void applyBoundingSetIsNoOpWhenBoundingNotSpecified() {
+    void applyBoundingSetDropsAllWhenBoundingNotSpecified() {
+        // When caps is non-null but bounding is null, runc treats it as an
+        // empty keep set and drops every capability from the bounding set.
         try (MockedStatic<Libc> lm = mockStatic(Libc.class)) {
+            lm.when(() -> Libc.prctl(anyInt(), anyLong(), anyLong(), anyLong(), anyLong()))
+                    .thenReturn(0);
             Spec.LinuxCapabilities caps = new Spec.LinuxCapabilities();
-            // bounding == null
             Capability.applyBoundingSet(caps);
-            lm.verifyNoInteractions();
+            // CAP_CHOWN (0), CAP_DAC_OVERRIDE (1), etc. must all be dropped.
+            lm.verify(() -> Libc.prctl(
+                    eq(Constants.PR_CAPBSET_DROP), eq(0L), eq(0L), eq(0L), eq(0L)));
+            lm.verify(() -> Libc.prctl(
+                    eq(Constants.PR_CAPBSET_DROP), eq(1L), eq(0L), eq(0L), eq(0L)));
         }
     }
 
@@ -168,11 +175,10 @@ class CapabilityTest {
     }
 
     @Test
-    void applyFinalSetsSkipsAmbientRaiseWhenPermittedOrInheritableMissing() {
+    void applyFinalSetsAttemptsAmbientRaiseEvenWithoutPermittedOrInheritable() {
         // Spec asks for ambient=[CAP_KILL] but doesn't put CAP_KILL in
-        // permitted+inheritable. The pre-check must skip the RAISE (kernel
-        // would reject it anyway) and warn instead, leaving CLEAR_ALL as
-        // the only ambient prctl call.
+        // permitted+inheritable. Runc always attempts the RAISE and prints
+        // a warning on failure rather than skipping the call.
         Spec.LinuxCapabilities caps = new Spec.LinuxCapabilities();
         caps.effective = caps.permitted = caps.inheritable = List.of();
         caps.ambient = List.of("CAP_KILL");
@@ -189,11 +195,12 @@ class CapabilityTest {
                     eq(Constants.PR_CAP_AMBIENT),
                     eq((long) Constants.PR_CAP_AMBIENT_CLEAR_ALL),
                     eq(0L), eq(0L), eq(0L)));
-            // The RAISE must NOT be invoked for CAP_KILL — no per/inh backing.
+            // RAISE is always attempted (runc compat). On a real kernel the
+            // call would fail with EPERM and a warning is printed to stderr.
             lm.verify(() -> Libc.prctl(
                     eq(Constants.PR_CAP_AMBIENT),
                     eq((long) Constants.PR_CAP_AMBIENT_RAISE),
-                    anyLong(), anyLong(), anyLong()), never());
+                    eq(5L), eq(0L), eq(0L)));
         }
     }
 

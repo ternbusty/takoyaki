@@ -73,13 +73,16 @@ class ExecCommandTest {
 
     @Test
     void defaultEnvWhenSpecHasNone() {
+        // When the spec has no env, buildEffectiveProcess returns an empty
+        // list (HOME is added later by ExecProcess from /etc/passwd).
         Spec.Process base = Json.decode("""
                 { "args": ["x"] }
                 """, Spec.Process::fromJson);
         Spec.Process p = ExecCommand.buildEffectiveProcess(
                 base, null, null, List.of(), List.of("id"),
                 false, List.of(), List.of());
-        assertTrue(p.env.stream().anyMatch(e -> e.startsWith("PATH=")));
+        assertNotNull(p.env);
+        assertTrue(p.env.isEmpty());
     }
 
     @Test
