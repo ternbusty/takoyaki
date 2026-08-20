@@ -801,6 +801,29 @@ void takoyaki_bootstrap(void) {
                     free(copy);
                 }
             }
+            /* _TAKOYAKI_BIND_SOURCE_FDS has format:
+             *   base64(dest):fd,...
+             * Extract the fd (second colon-separated field). */
+            env_val = getenv("_TAKOYAKI_BIND_SOURCE_FDS");
+            if (env_val) {
+                char *copy = strdup(env_val);
+                if (copy) {
+                    char *saveptr, *token;
+                    for (token = strtok_r(copy, ",", &saveptr);
+                         token;
+                         token = strtok_r(NULL, ",", &saveptr)) {
+                        char *colon = strchr(token, ':');
+                        if (colon) {
+                            keep_fd = atoi(colon + 1);
+                            if (keep_fd >= 3) {
+                                int fl = fcntl(keep_fd, F_GETFD, 0);
+                                if (fl != -1) fcntl(keep_fd, F_SETFD, fl & ~FD_CLOEXEC);
+                            }
+                        }
+                    }
+                    free(copy);
+                }
+            }
             DBG("[stage-2] CLOEXEC set on fds >= 3 (kept needed fds)\n");
         } else {
             DBG("[stage-2] close_range CLOEXEC not available: %s\n", strerror(errno));

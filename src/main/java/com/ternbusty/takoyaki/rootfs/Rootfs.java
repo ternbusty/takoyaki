@@ -29,7 +29,8 @@ public final class Rootfs {
 
     public static void prepare(String rootfsPath, Spec spec,
                                java.util.Map<String, Integer> idmapFds,
-                               java.util.Map<String, int[]> idmapUsernsFds) {
+                               java.util.Map<String, int[]> idmapUsernsFds,
+                               java.util.Map<String, Integer> bindSourceFds) {
         try (Arena arena = Arena.ofConfined()) {
             if (PosixIO.access(arena, rootfsPath, Constants.F_OK) != 0) {
                 throw new RuntimeException("rootfs not found: " + rootfsPath);
@@ -76,7 +77,8 @@ public final class Rootfs {
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
-                applyOciMounts(rootfsPath, spec.mounts, idmapFds, idmapUsernsFds, spec);
+                applyOciMounts(rootfsPath, spec.mounts, idmapFds, idmapUsernsFds,
+                        bindSourceFds, spec);
             }
         }
     }
@@ -306,6 +308,7 @@ public final class Rootfs {
     static void applyOciMounts(String rootfsPath, List<Spec.Mount> mounts,
                                java.util.Map<String, Integer> idmapFds,
                                java.util.Map<String, int[]> idmapUsernsFds,
+                               java.util.Map<String, Integer> bindSourceFds,
                                Spec spec) {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
@@ -456,15 +459,55 @@ public final class Rootfs {
                 tmpcopyupSnapshot = snapshotDirectory(Path.of(target));
             }
 
-            // Container bind-mount source: when the source path does not
-            // exist on the host but DOES exist under the rootfs, it refers
-            // to a location created by an earlier mount in the same spec
-            // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
-            // so the mount sees the right content.  This matches runc.
+            // Pre-opened bind source fd: the host used open_tree(OPEN_TREE_CLONE)
+            // to create a detached mount tree fd for sources that become
+            // inaccessible inside the user namespace. Attach it via move_mount.
+            Integer bindSrcFd = (isBind && bindSourceFds != null)
+                    ? bindSourceFds.get(m.destination) : null;
+            if (bindSrcFd != null) {
+                boolean ok = IdmapMount.moveMount(bindSrcFd, target);
+                PosixIO.close(bindSrcFd);
+                if (ok) {
+                    Logger.debug("move_mount bind source fd " + bindSrcFd
+                            + " -> " + m.destination);
+                    long vfsBind = Constants.MS_RDONLY | Constants.MS_NOSUID
+                            | Constants.MS_NODEV | Constants.MS_NOEXEC
+                            | Constants.MS_NOATIME | Constants.MS_RELATIME
+                            | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW
+                            | Constants.MS_NODIRATIME;
+                    if ((flags & vfsBind) != 0 || parsed.clearedFlags != 0) {
+                        long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                                | (flags & vfsBind);
+                        if (sc.mount(null, target, null, remountFlags, null) != 0) {
+                            Logger.debug("bind remount on " + m.destination
+                                    + " (bind-source-fd) failed: "
+                                    + sc.strerror(sc.errno()));
+                        }
+                    }
+                    if (propagation != 0) {
+                        if (sc.mount(null, target, null, propagation, null) != 0) {
+                            Logger.debug("propagation on " + m.destination
+                                    + " (bind-source-fd) failed: "
+                                    + sc.strerror(sc.errno()));
+                        }
+                    }
+                    if (parsed.hasRecAttr()) {
+                        mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
+                    }
+                    continue;
+                }
+                Logger.warn("move_mount for " + m.destination
+                        + " failed, falling back to regular mount");
+            }
             String mountSource = m.source;
             if (isBind && mountSource != null
                     && !new java.io.File(mountSource).exists()
                     && new java.io.File(rootfsPath + mountSource).exists()) {
+                // Container bind-mount source: when the source path does not
+                // exist on the host but DOES exist under the rootfs, it refers
+                // to a location created by an earlier mount in the same spec
+                // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
+                // so the mount sees the right content.  This matches runc.
                 mountSource = rootfsPath + mountSource;
                 Logger.debug("resolved container bind source " + m.source
                         + " -> " + mountSource);

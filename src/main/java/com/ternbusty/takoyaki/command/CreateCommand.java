@@ -317,6 +317,88 @@ public final class CreateCommand {
             }
         }
 
+        // Bind mount source fds: when a user namespace is configured, bind
+        // mount sources that are inaccessible to the mapped container UID
+        // must be pre-opened on the host side (as root in init_user_ns).
+        // We use open_tree(OPEN_TREE_CLONE) to create a detached mount tree
+        // fd, which the init process can later attach via move_mount().
+        // This avoids the EINVAL that mount(2) returns when resolving
+        // /proc/self/fd/N through inaccessible intermediate directories.
+        boolean hasUserns = (cloneFlags & Constants.CLONE_NEWUSER) != 0
+                || spec.hasNamespace("user");
+        if (hasUserns && spec.mounts != null) {
+            StringJoiner bindFdMap = new StringJoiner(",");
+            try (Arena bindArena = Arena.ofConfined()) {
+                for (Spec.Mount m : spec.mounts) {
+                    if (m.source == null || m.source.isEmpty()) continue;
+                    boolean isBind = false;
+                    boolean isRbind = false;
+                    if (m.options != null) {
+                        for (String opt : m.options) {
+                            if ("bind".equals(opt)) { isBind = true; }
+                            if ("rbind".equals(opt)) { isBind = true; isRbind = true; }
+                        }
+                    }
+                    if (!isBind) continue;
+
+                    String absSource = m.source;
+                    if (!new java.io.File(absSource).isAbsolute()) {
+                        absSource = new java.io.File(absSource).getAbsolutePath();
+                    }
+
+                    if (PosixIO.access(bindArena, absSource, Constants.F_OK) != 0) {
+                        continue;
+                    }
+
+                    // Only pre-open sources that would become inaccessible
+                    // inside the user namespace. Check each intermediate
+                    // directory for others-execute (o+x) permission. If all
+                    // components are world-traversable, the regular mount
+                    // path will work fine and pre-opening would be wrong for
+                    // container-internal sources (earlier mounts in the spec
+                    // that shadow the host path).
+                    boolean needsPreOpen = false;
+                    java.nio.file.Path srcPath = java.nio.file.Path.of(absSource);
+                    for (java.nio.file.Path dir = srcPath.getParent();
+                         dir != null && !"/".equals(dir.toString());
+                         dir = dir.getParent()) {
+                        if (!java.nio.file.Files.exists(dir)) break;
+                        try {
+                            int mode = ((int) java.nio.file.Files.getAttribute(
+                                    dir, "unix:mode")) & 07777;
+                            if ((mode & 001) == 0) {
+                                needsPreOpen = true;
+                                break;
+                            }
+                        } catch (Exception e) { break; }
+                    }
+                    if (!needsPreOpen) continue;
+
+                    int srcFd = com.ternbusty.takoyaki.rootfs.IdmapMount.openTree(
+                            absSource, isRbind);
+                    if (srcFd < 0) {
+                        Logger.warn("open_tree " + absSource + " failed; "
+                                + "bind mount will be attempted directly");
+                        continue;
+                    }
+                    // open_tree sets CLOEXEC by default. Clear it so the fd
+                    // survives fork+execve into bootstrap.c → Java init.
+                    int fl = PosixIO.fcntl(srcFd, Constants.F_GETFD, 0);
+                    if (fl >= 0) {
+                        PosixIO.fcntl(srcFd, Constants.F_SETFD,
+                                fl & ~Constants.FD_CLOEXEC);
+                    }
+                    bindFdMap.add(java.util.Base64.getEncoder().encodeToString(
+                            m.destination.getBytes()) + ":" + srcFd);
+                    Logger.debug("open_tree bind source " + absSource
+                            + " as fd " + srcFd + " for " + m.destination);
+                }
+            }
+            if (bindFdMap.length() > 0) {
+                envList.add("_TAKOYAKI_BIND_SOURCE_FDS=" + bindFdMap);
+            }
+        }
+
         // Seccomp notify listener: connect on the host side (where the listener
         // socket path actually resolves) and pass the connected fd to the init via
         // env. After the init pivots into the container rootfs the listener path is

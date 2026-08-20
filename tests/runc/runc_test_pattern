@@ -420,9 +420,9 @@ userns join external namespaces [wrong userns owner]
 userns join other container userns
 userns join other container userns [bind-mounted nsfd]
 [skip]userns join other container userns[selinux enabled] # selinux
-[skip]userns with 2 inaccessible mounts # _LIBCONTAINER_MOUNT_FDS
+userns with 2 inaccessible mounts
 userns with bind mount before a cgroupfs mount
-[skip]userns with inaccessible mount + exec # _LIBCONTAINER_MOUNT_FDS
+userns with inaccessible mount + exec
 userns with network interface
 userns with network interface renamed
 userns with simple mount

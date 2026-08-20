@@ -101,6 +101,29 @@ public final class InitProcess {
         return out;
     }
 
+    /**
+     * Parse pre-opened bind mount source fds from _TAKOYAKI_BIND_SOURCE_FDS.
+     * Format: base64(dest):fd,...
+     * Returns map from destination to fd.
+     */
+    static java.util.Map<String, Integer> parseBindSourceFds(String env) {
+        java.util.Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        if (env == null || env.isEmpty()) return out;
+        for (String entry : env.split(",")) {
+            String[] parts = entry.split(":");
+            if (parts.length < 2) continue;
+            try {
+                String dest = new String(java.util.Base64.getDecoder()
+                        .decode(parts[0]));
+                int fd = Integer.parseInt(parts[1]);
+                out.put(dest, fd);
+            } catch (IllegalArgumentException ignored) {
+                // bad base64 or non-numeric; skip
+            }
+        }
+        return out;
+    }
+
     public static void run() {
         Logger.setContext("init");
         // Inherit log configuration from the main process so that debug/warn
@@ -185,6 +208,16 @@ public final class InitProcess {
                 Logger.debug("idmap fd inherited: " + e.getKey() + " -> " + e.getValue());
             }
 
+            // Pre-opened bind mount source fds: when a user namespace is in use,
+            // the host opened bind mount sources that would be inaccessible to
+            // the mapped container uid. The init uses /proc/self/fd/N as source.
+            java.util.Map<String, Integer> bindSourceFds =
+                    parseBindSourceFds(System.getenv("_TAKOYAKI_BIND_SOURCE_FDS"));
+            for (var e : bindSourceFds.entrySet()) {
+                Logger.debug("bind source fd inherited: " + e.getKey()
+                        + " -> fd=" + e.getValue());
+            }
+
             // Deferred idmap userns fds: for container-internal sources where
             // open_tree failed on the host (source depends on earlier mounts),
             // the host created the userns fd but skipped open_tree + mount_setattr.
@@ -223,7 +256,8 @@ public final class InitProcess {
             }
 
             if (spec.hasNamespace("mount")) {
-                Rootfs.prepare(rootfsPath, spec, idmapFds, idmapUsernsFds);
+                Rootfs.prepare(rootfsPath, spec, idmapFds, idmapUsernsFds,
+                        bindSourceFds);
                 // Additional devices declared in spec.linux.devices, before pivot_root.
                 if (spec.linux != null && spec.linux.devices != null) {
                     Devices.create(rootfsPath, spec.linux.devices);
