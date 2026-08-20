@@ -16,9 +16,6 @@ BASE=https://github.com/ternbusty/takoyaki/releases/latest/download
 sudo curl -sSL -o /usr/local/bin/takoyaki "$BASE/takoyaki-linux-$ARCH"
 sudo chmod +x /usr/local/bin/takoyaki
 
-# Verify checksum
-curl -sSL "$BASE/takoyaki-linux-$ARCH.sha256" | sha256sum -c
-
 # AppArmor profile (Ubuntu 24.04+)
 sudo curl -sSL -o /etc/apparmor.d/takoyaki "$BASE/apparmor-profile"
 sudo apparmor_parser -r /etc/apparmor.d/takoyaki
