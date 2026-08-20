@@ -115,6 +115,9 @@ public final class ExecProcess {
             ProcessRestrictions.applyIOPriority(payload.process.ioPriority);
             ProcessRestrictions.applyScheduler(payload.process.scheduler);
 
+            // NUMA memory policy inherited from the container's linux config.
+            MemPolicy.apply(payload.memoryPolicy);
+
             // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).
             // Setting RLIMIT_NOFILE above fs.nr_open requires CAP_SYS_RESOURCE,
             // which is gone after cap drop. RLIMIT_AS is deferred to just before

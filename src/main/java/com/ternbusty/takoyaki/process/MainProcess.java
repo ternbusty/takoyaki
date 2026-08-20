@@ -22,7 +22,8 @@ public final class MainProcess {
 
     public static void run(int stage1Pid, int syncFd, Spec spec, String containerId,
                            String bundlePath, String rootPath, String pidFile,
-                           int notifyListenerFd, int mainSenderFd) {
+                           int notifyListenerFd, int mainSenderFd,
+                           String pidfdSocket) {
         Logger.setContext("main");
         Logger.debug("main proc started; stage1=" + stage1Pid);
         if (Logger.isDebugEnabled()) {
@@ -112,6 +113,15 @@ public final class MainProcess {
             Logger.debug("received stage-2 pid=" + stage2Pid);
             PosixIO.close(notifyListenerFd);
 
+            // Move network devices into the container's network namespace.
+            // Must happen after the init has created its namespaces (we have its
+            // pid) and before the init configures networking inside them.
+            if (spec.linux != null && spec.linux.netDevices != null
+                    && !spec.linux.netDevices.isEmpty()) {
+                com.ternbusty.takoyaki.network.NetDevice.moveDevices(
+                        spec.linux.netDevices, stage2Pid);
+            }
+
             // The first Cgroup.setup (for stage1Pid) already created the
             // directory, enabled controllers, applied limits, and attached
             // the device BPF program for this same cgroupPath. Re-running
@@ -184,6 +194,10 @@ public final class MainProcess {
                     throw new RuntimeException(
                             "open " + pidFile + ": no such file or directory");
                 }
+            }
+
+            if (pidfdSocket != null) {
+                com.ternbusty.takoyaki.console.PidfdSocket.sendPidfd(pidfdSocket, stage2Pid);
             }
 
             Logger.info("container " + containerId + " created with init pid " + stage2Pid);

@@ -956,6 +956,8 @@ public final class Spec {
         public String rootfsPropagation;
         public Map<String, String> sysctl;
         public Map<String, TimeOffset> timeOffsets;
+        public MemoryPolicy memoryPolicy;
+        public Map<String, NetDevice> netDevices;
 
         public static Linux fromJson(Object node) {
             if (node == null) return null;
@@ -973,6 +975,8 @@ public final class Spec {
             l.rootfsPropagation = JsonMap.str(o, "rootfsPropagation");
             l.sysctl = JsonMap.strMap(o, "sysctl");
             l.timeOffsets = JsonMap.map(o, "timeOffsets", TimeOffset::fromJson);
+            l.memoryPolicy = MemoryPolicy.fromJson(o.get("memoryPolicy"));
+            l.netDevices = JsonMap.map(o, "netDevices", NetDevice::fromJson);
             return l;
         }
 
@@ -989,6 +993,14 @@ public final class Spec {
             JsonMap.put(o, "readonlyPaths", readonlyPaths);
             JsonMap.put(o, "rootfsPropagation", rootfsPropagation);
             JsonMap.put(o, "sysctl", sysctl);
+            if (memoryPolicy != null) JsonMap.put(o, "memoryPolicy", memoryPolicy.toJson());
+            if (netDevices != null) {
+                Map<String, Object> nd = JsonMap.obj();
+                for (Map.Entry<String, NetDevice> e : netDevices.entrySet()) {
+                    nd.put(e.getKey(), e.getValue().toJson());
+                }
+                JsonMap.put(o, "netDevices", nd);
+            }
             if (timeOffsets != null) {
                 Map<String, Object> to = JsonMap.obj();
                 for (Map.Entry<String, TimeOffset> e : timeOffsets.entrySet()) {
@@ -996,6 +1008,50 @@ public final class Spec {
                 }
                 JsonMap.put(o, "timeOffsets", to);
             }
+            return o;
+        }
+    }
+
+    /** NUMA memory policy (linux.memoryPolicy). */
+    public static final class MemoryPolicy {
+        public String mode;
+        public String nodes;
+        public List<String> flags;
+
+        public static MemoryPolicy fromJson(Object node) {
+            if (node == null) return null;
+            Map<String, Object> o = JsonMap.asObject(node);
+            MemoryPolicy m = new MemoryPolicy();
+            m.mode = JsonMap.str(o, "mode");
+            m.nodes = JsonMap.str(o, "nodes");
+            m.flags = JsonMap.strList(o, "flags");
+            return m;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "mode", mode);
+            JsonMap.put(o, "nodes", nodes);
+            JsonMap.put(o, "flags", flags);
+            return o;
+        }
+    }
+
+    /** Network device to move into the container namespace (linux.netDevices). */
+    public static final class NetDevice {
+        public String name;
+
+        public static NetDevice fromJson(Object node) {
+            if (node == null) return new NetDevice();
+            Map<String, Object> o = JsonMap.asObject(node);
+            NetDevice d = new NetDevice();
+            d.name = JsonMap.str(o, "name");
+            return d;
+        }
+
+        public Object toJson() {
+            Map<String, Object> o = JsonMap.obj();
+            JsonMap.put(o, "name", name);
             return o;
         }
     }

@@ -77,6 +77,53 @@ public final class InitProcess {
         return out;
     }
 
+    /**
+     * Parse deferred idmap userns fds from _TAKOYAKI_IDMAP_USERNS_FDS.
+     * Format: base64(dest):usernsFd:recursive,...
+     * Returns map from destination to [usernsFd, recursive].
+     */
+    static java.util.Map<String, int[]> parseDeferredIdmapFds(String env) {
+        java.util.Map<String, int[]> out = new java.util.LinkedHashMap<>();
+        if (env == null || env.isEmpty()) return out;
+        for (String entry : env.split(",")) {
+            String[] parts = entry.split(":");
+            if (parts.length < 3) continue;
+            try {
+                String dest = new String(java.util.Base64.getDecoder()
+                        .decode(parts[0]));
+                int fd = Integer.parseInt(parts[1]);
+                int recursive = Integer.parseInt(parts[2]);
+                out.put(dest, new int[]{fd, recursive});
+            } catch (IllegalArgumentException ignored) {
+                // bad base64 or non-numeric; skip
+            }
+        }
+        return out;
+    }
+
+    /**
+     * Parse pre-opened bind mount source fds from _TAKOYAKI_BIND_SOURCE_FDS.
+     * Format: base64(dest):fd,...
+     * Returns map from destination to fd.
+     */
+    static java.util.Map<String, Integer> parseBindSourceFds(String env) {
+        java.util.Map<String, Integer> out = new java.util.LinkedHashMap<>();
+        if (env == null || env.isEmpty()) return out;
+        for (String entry : env.split(",")) {
+            String[] parts = entry.split(":");
+            if (parts.length < 2) continue;
+            try {
+                String dest = new String(java.util.Base64.getDecoder()
+                        .decode(parts[0]));
+                int fd = Integer.parseInt(parts[1]);
+                out.put(dest, fd);
+            } catch (IllegalArgumentException ignored) {
+                // bad base64 or non-numeric; skip
+            }
+        }
+        return out;
+    }
+
     public static void run() {
         Logger.setContext("init");
         // Inherit log configuration from the main process so that debug/warn
@@ -161,6 +208,29 @@ public final class InitProcess {
                 Logger.debug("idmap fd inherited: " + e.getKey() + " -> " + e.getValue());
             }
 
+            // Pre-opened bind mount source fds: when a user namespace is in use,
+            // the host opened bind mount sources that would be inaccessible to
+            // the mapped container uid. The init uses /proc/self/fd/N as source.
+            java.util.Map<String, Integer> bindSourceFds =
+                    parseBindSourceFds(System.getenv("_TAKOYAKI_BIND_SOURCE_FDS"));
+            for (var e : bindSourceFds.entrySet()) {
+                Logger.debug("bind source fd inherited: " + e.getKey()
+                        + " -> fd=" + e.getValue());
+            }
+
+            // Deferred idmap userns fds: for container-internal sources where
+            // open_tree failed on the host (source depends on earlier mounts),
+            // the host created the userns fd but skipped open_tree + mount_setattr.
+            // The init does open_tree locally (after earlier mounts are applied)
+            // then mount_setattr + move_mount.
+            // Format: base64(dest):usernsFd:recursive,...
+            java.util.Map<String, int[]> idmapUsernsFds =
+                    parseDeferredIdmapFds(System.getenv("_TAKOYAKI_IDMAP_USERNS_FDS"));
+            for (var e : idmapUsernsFds.entrySet()) {
+                Logger.debug("deferred idmap userns fd: " + e.getKey()
+                        + " -> fd=" + e.getValue()[0] + " recursive=" + e.getValue()[1]);
+            }
+
             String containerId = System.getenv("_TAKOYAKI_CONTAINER_ID");
 
             // Console socket: prefer the pre-connected fd from CreateCommand
@@ -186,7 +256,8 @@ public final class InitProcess {
             }
 
             if (spec.hasNamespace("mount")) {
-                Rootfs.prepare(rootfsPath, spec, idmapFds);
+                Rootfs.prepare(rootfsPath, spec, idmapFds, idmapUsernsFds,
+                        bindSourceFds);
                 // Additional devices declared in spec.linux.devices, before pivot_root.
                 if (spec.linux != null && spec.linux.devices != null) {
                     Devices.create(rootfsPath, spec.linux.devices);
@@ -216,7 +287,14 @@ public final class InitProcess {
             }
 
             // Bring up loopback so localhost works inside the network namespace.
+            // Rename network devices that were moved into this namespace by
+            // MainProcess before loopback comes up.
             if (spec.hasNamespace("network")) {
+                if (spec.linux != null && spec.linux.netDevices != null
+                        && !spec.linux.netDevices.isEmpty()) {
+                    com.ternbusty.takoyaki.network.NetDevice.renameDevices(
+                            spec.linux.netDevices);
+                }
                 Loopback.up();
             }
 
@@ -278,6 +356,12 @@ public final class InitProcess {
             if (spec.process != null) {
                 ProcessRestrictions.applyIOPriority(spec.process.ioPriority);
                 ProcessRestrictions.applyScheduler(spec.process.scheduler);
+            }
+
+            // NUMA memory policy (linux.memoryPolicy): applied before cap drop
+            // and inherited by execve.
+            if (spec.linux != null) {
+                MemPolicy.apply(spec.linux.memoryPolicy);
             }
 
             // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).

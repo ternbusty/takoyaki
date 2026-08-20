@@ -28,7 +28,9 @@ public final class Rootfs {
             {"null", "zero", "random", "urandom", "tty", "full", "console"};
 
     public static void prepare(String rootfsPath, Spec spec,
-                               java.util.Map<String, Integer> idmapFds) {
+                               java.util.Map<String, Integer> idmapFds,
+                               java.util.Map<String, int[]> idmapUsernsFds,
+                               java.util.Map<String, Integer> bindSourceFds) {
         try (Arena arena = Arena.ofConfined()) {
             if (PosixIO.access(arena, rootfsPath, Constants.F_OK) != 0) {
                 throw new RuntimeException("rootfs not found: " + rootfsPath);
@@ -75,7 +77,8 @@ public final class Rootfs {
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
-                applyOciMounts(rootfsPath, spec.mounts, idmapFds);
+                applyOciMounts(rootfsPath, spec.mounts, idmapFds, idmapUsernsFds,
+                        bindSourceFds, spec);
             }
         }
     }
@@ -303,7 +306,10 @@ public final class Rootfs {
      * path which can't be unit-tested.
      */
     static void applyOciMounts(String rootfsPath, List<Spec.Mount> mounts,
-                               java.util.Map<String, Integer> idmapFds) {
+                               java.util.Map<String, Integer> idmapFds,
+                               java.util.Map<String, int[]> idmapUsernsFds,
+                               java.util.Map<String, Integer> bindSourceFds,
+                               Spec spec) {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
             if (m.destination == null) continue;
@@ -342,25 +348,97 @@ public final class Rootfs {
             boolean targetExisted = Files.isDirectory(Path.of(target));
             createMountTarget(rootfsPath, m, target, isBind);
 
-            // Id-mapped mounts: if uidMappings/gidMappings are present we route the
-            // bind through open_tree + mount_setattr(MOUNT_ATTR_IDMAP) + move_mount.
-            // Prefer the host-prepared fd that CreateCommand stashed in idmapFds —
-            // the in-init fork+unshare path doesn't work inside the container's
-            // pid namespace because /proc shows host pids but our forked helper is
-            // addressed via container-local pids.
-            if (m.uidMappings != null && !m.uidMappings.isEmpty() && isBind) {
+            // Id-mapped mounts: if uidMappings/gidMappings are present (or the
+            // "idmap"/"ridmap" option is set) we route the bind through
+            // open_tree + mount_setattr(MOUNT_ATTR_IDMAP) + move_mount.
+            // When "idmap"/"ridmap" is in the options but no mount-level mappings
+            // are provided, the container's userns mappings are used (implied).
+            // Prefer the host-prepared fd that CreateCommand stashed in idmapFds.
+            boolean hasExplicitMappings = m.uidMappings != null && !m.uidMappings.isEmpty();
+            boolean wantIdmap = hasExplicitMappings || parsed.isIdmap || parsed.isRecursiveIdmap;
+            if (wantIdmap && isBind) {
+                boolean recursive = parsed.isRecursiveIdmap;
+                // When the bind is recursive (rbind / MS_REC), pass
+                // AT_RECURSIVE to open_tree so the clone captures
+                // submounts created by earlier entries in this mount
+                // loop. Without this, only the top-level mount is
+                // cloned and deeply nested paths become invisible.
+                boolean cloneRecursive =
+                        (flags & Constants.MS_REC) != 0;
+                // For implied mapping, synthesize a mount with the container's
+                // userns mappings so IdmapHelper can create the right userns.
+                Spec.Mount effectiveMount = m;
+                if (!hasExplicitMappings && (parsed.isIdmap || parsed.isRecursiveIdmap)) {
+                    effectiveMount = new Spec.Mount();
+                    effectiveMount.source = m.source;
+                    effectiveMount.destination = m.destination;
+                    effectiveMount.type = m.type;
+                    effectiveMount.options = m.options;
+                    if (spec.linux != null) {
+                        effectiveMount.uidMappings = spec.linux.uidMappings;
+                        effectiveMount.gidMappings = spec.linux.gidMappings;
+                    }
+                }
                 Integer prepFd = idmapFds.get(m.destination);
+                int[] deferredInfo = idmapUsernsFds != null
+                        ? idmapUsernsFds.get(m.destination) : null;
                 boolean done;
                 if (prepFd != null) {
-                    done = IdmapHelper.applyWithFd(m, prepFd, target);
+                    // The host-side CreateCommand already did open_tree +
+                    // mount_setattr(MOUNT_ATTR_IDMAP), so prepFd is a
+                    // ready-to-install tree fd. Just move_mount it.
+                    done = IdmapMount.moveMount(prepFd, target);
+                    PosixIO.close(prepFd);
                     if (done) Logger.debug("idmap mounted " + m.destination
-                            + " using host-prepared fd " + prepFd);
+                            + " using host-prepared tree fd " + prepFd);
+                } else if (deferredInfo != null) {
+                    // Container-internal source: open_tree locally (earlier
+                    // mounts in this loop made the source visible), then apply
+                    // the id-map using the userns fd inherited from the host.
+                    int usernsFd = deferredInfo[0];
+                    boolean deferRecursive = deferredInfo[1] != 0;
+                    String src = m.source;
+                    done = IdmapMount.apply(src, usernsFd, target,
+                            deferRecursive, cloneRecursive);
+                    PosixIO.close(usernsFd);
+                    if (done) Logger.debug("idmap mounted " + m.destination
+                            + " using deferred userns fd (container-internal source)");
                 } else {
-                    done = IdmapHelper.apply(m, target);
+                    done = IdmapHelper.apply(effectiveMount, target,
+                            recursive, cloneRecursive);
                     if (done) Logger.debug("idmap mounted " + m.destination
                             + " using in-init helper");
                 }
-                if (done) continue;
+                if (done) {
+                    // Apply post-mount operations that a regular bind mount
+                    // would get below. The idmap path skips the initial
+                    // mount(2) call but the mount still needs propagation,
+                    // VFS-flag remounting, and recursive mount attributes.
+                    long vfsIdmap = Constants.MS_RDONLY | Constants.MS_NOSUID
+                            | Constants.MS_NODEV | Constants.MS_NOEXEC
+                            | Constants.MS_NOATIME | Constants.MS_RELATIME
+                            | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW
+                            | Constants.MS_NODIRATIME;
+                    if ((flags & vfsIdmap) != 0 || parsed.clearedFlags != 0) {
+                        long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                                | (flags & vfsIdmap);
+                        if (sc.mount(null, target, null, remountFlags, null) != 0) {
+                            Logger.debug("bind remount with access flags on "
+                                    + m.destination + " (idmap) failed: "
+                                    + sc.strerror(sc.errno()));
+                        }
+                    }
+                    if (propagation != 0) {
+                        if (sc.mount(null, target, null, propagation, null) != 0) {
+                            Logger.debug("propagation set on " + m.destination
+                                    + " (idmap) failed: " + sc.strerror(sc.errno()));
+                        }
+                    }
+                    if (parsed.hasRecAttr()) {
+                        mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
+                    }
+                    continue;
+                }
                 Logger.warn("idmap mount failed for " + m.destination + ", falling back to plain bind");
             }
 
@@ -381,15 +459,55 @@ public final class Rootfs {
                 tmpcopyupSnapshot = snapshotDirectory(Path.of(target));
             }
 
-            // Container bind-mount source: when the source path does not
-            // exist on the host but DOES exist under the rootfs, it refers
-            // to a location created by an earlier mount in the same spec
-            // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
-            // so the mount sees the right content.  This matches runc.
+            // Pre-opened bind source fd: the host used open_tree(OPEN_TREE_CLONE)
+            // to create a detached mount tree fd for sources that become
+            // inaccessible inside the user namespace. Attach it via move_mount.
+            Integer bindSrcFd = (isBind && bindSourceFds != null)
+                    ? bindSourceFds.get(m.destination) : null;
+            if (bindSrcFd != null) {
+                boolean ok = IdmapMount.moveMount(bindSrcFd, target);
+                PosixIO.close(bindSrcFd);
+                if (ok) {
+                    Logger.debug("move_mount bind source fd " + bindSrcFd
+                            + " -> " + m.destination);
+                    long vfsBind = Constants.MS_RDONLY | Constants.MS_NOSUID
+                            | Constants.MS_NODEV | Constants.MS_NOEXEC
+                            | Constants.MS_NOATIME | Constants.MS_RELATIME
+                            | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW
+                            | Constants.MS_NODIRATIME;
+                    if ((flags & vfsBind) != 0 || parsed.clearedFlags != 0) {
+                        long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                                | (flags & vfsBind);
+                        if (sc.mount(null, target, null, remountFlags, null) != 0) {
+                            Logger.debug("bind remount on " + m.destination
+                                    + " (bind-source-fd) failed: "
+                                    + sc.strerror(sc.errno()));
+                        }
+                    }
+                    if (propagation != 0) {
+                        if (sc.mount(null, target, null, propagation, null) != 0) {
+                            Logger.debug("propagation on " + m.destination
+                                    + " (bind-source-fd) failed: "
+                                    + sc.strerror(sc.errno()));
+                        }
+                    }
+                    if (parsed.hasRecAttr()) {
+                        mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
+                    }
+                    continue;
+                }
+                Logger.warn("move_mount for " + m.destination
+                        + " failed, falling back to regular mount");
+            }
             String mountSource = m.source;
             if (isBind && mountSource != null
                     && !new java.io.File(mountSource).exists()
                     && new java.io.File(rootfsPath + mountSource).exists()) {
+                // Container bind-mount source: when the source path does not
+                // exist on the host but DOES exist under the rootfs, it refers
+                // to a location created by an earlier mount in the same spec
+                // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
+                // so the mount sees the right content.  This matches runc.
                 mountSource = rootfsPath + mountSource;
                 Logger.debug("resolved container bind source " + m.source
                         + " -> " + mountSource);
@@ -446,31 +564,47 @@ public final class Rootfs {
     public static void pivot(String newRoot, String rootfsPropagation) {
         try (Arena arena = Arena.ofConfined()) {
             Logger.debug("pivot_root to " + newRoot);
+            // Open "/" BEFORE pivot so we have an fd to the old root.
+            // After pivot_root, this fd still references the old root mount.
+            int oldrootFd = PosixIO.open(arena, "/",
+                    Constants.O_DIRECTORY | Constants.O_RDONLY, 0);
+            if (oldrootFd < 0) {
+                throw new RuntimeException("open /: " + Libc.strerror(Libc.errno()));
+            }
+            // Also open the new root to fchdir into it for pivot_root(".", ".").
             int newrootFd = PosixIO.open(arena, newRoot,
                     Constants.O_DIRECTORY | Constants.O_RDONLY, 0);
             if (newrootFd < 0) {
+                PosixIO.close(oldrootFd);
                 throw new RuntimeException("open " + newRoot + ": " + Libc.strerror(Libc.errno()));
             }
             try {
-                if (Libc.pivotRoot(arena, newRoot, newRoot) != 0) {
+                // fchdir to new root so pivot_root(".", ".") acts on it.
+                if (PosixIO.fchdir(newrootFd) != 0) {
+                    throw new RuntimeException("fchdir newroot: " + Libc.strerror(Libc.errno()));
+                }
+                if (Libc.pivotRoot(arena, ".", ".") != 0) {
                     throw new RuntimeException("pivot_root: " + Libc.strerror(Libc.errno()));
                 }
-                // runc compat: after pivot_root(new, new), the old root is
-                // stacked on top of the new root. We need to make the old root
-                // (and all mounts under it) slaves before detaching. Using "."
-                // targets the old root mount rather than the new root underneath.
-                if (PosixIO.fchdir(newrootFd) != 0) {
-                    throw new RuntimeException("fchdir: " + Libc.strerror(Libc.errno()));
+                // After pivot_root(".", "."), cwd is the old root (kernel
+                // behavior). fchdir to the old root fd to be safe, then make
+                // the old root (and all its children) MS_SLAVE recursively
+                // so our unmount doesn't propagate to the host. This targets
+                // the OLD root only, preserving propagation flags on mounts
+                // under the NEW root (e.g. MS_SHARED on idmap mounts).
+                if (PosixIO.fchdir(oldrootFd) != 0) {
+                    throw new RuntimeException("fchdir oldroot: " + Libc.strerror(Libc.errno()));
                 }
                 if (Libc.mount(arena, null, ".", null,
                         Constants.MS_SLAVE | Constants.MS_REC, null) != 0) {
-                    Logger.warn("remount . as slave failed: " + Libc.strerror(Libc.errno()));
+                    Logger.warn("remount oldroot as slave failed: " + Libc.strerror(Libc.errno()));
                 }
                 if (Libc.umount2(arena, ".", Constants.MNT_DETACH) != 0) {
-                    Logger.warn("umount2 . failed: " + Libc.strerror(Libc.errno()));
+                    Logger.warn("umount2 oldroot failed: " + Libc.strerror(Libc.errno()));
                 }
             } finally {
                 PosixIO.close(newrootFd);
+                PosixIO.close(oldrootFd);
             }
             if (Libc.chdir(arena, "/") != 0) {
                 throw new RuntimeException("chdir /: " + Libc.strerror(Libc.errno()));

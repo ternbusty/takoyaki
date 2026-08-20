@@ -47,7 +47,8 @@ public final class ExecCommand {
                           String user, String cwd, List<String> envs, List<String> command,
                           boolean detach, String pidFile, boolean tty, String consoleSocket,
                           List<String> additionalGids, List<String> caps, int preserveFds,
-                          String subCgroupPath, Spec.Box consoleSize) {
+                          String subCgroupPath, Spec.Box consoleSize, boolean ignorePaused,
+                          String pidfdSocket) {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
             System.err.println(exclusivity);
@@ -62,8 +63,40 @@ public final class ExecCommand {
             return EXIT_RUNTIME_ERROR;
         }
         if (state.statusEnum() == ContainerStatus.PAUSED) {
-            System.err.println("cannot exec in a paused container");
-            return EXIT_RUNTIME_ERROR;
+            if (!ignorePaused) {
+                System.err.println("cannot exec in a paused container");
+                return EXIT_RUNTIME_ERROR;
+            }
+            // --ignore-paused: poll cgroup.freeze until the container is resumed.
+            String cgroupPathForFreeze;
+            try {
+                cgroupPathForFreeze = com.ternbusty.takoyaki.config.KontainerConfig
+                        .load(rootPath, containerId).cgroupPath;
+            } catch (Exception e) {
+                System.err.println("cannot read cgroup config for " + containerId);
+                return EXIT_RUNTIME_ERROR;
+            }
+            if (cgroupPathForFreeze != null) {
+                java.nio.file.Path freezePath =
+                        com.ternbusty.takoyaki.cgroup.Cgroup.dir(cgroupPathForFreeze)
+                                .resolve("cgroup.freeze");
+                while (true) {
+                    try {
+                        String val = java.nio.file.Files.readString(freezePath).trim();
+                        if ("0".equals(val)) break;
+                    } catch (java.io.IOException e) {
+                        break;
+                    }
+                    try { Thread.sleep(100); } catch (InterruptedException e) { break; }
+                }
+            }
+            // Re-read state after waiting for resume.
+            try {
+                state = State.load(rootPath, containerId).refreshStatus();
+            } catch (Exception e) {
+                System.err.println("container " + containerId + " does not exist");
+                return EXIT_RUNTIME_ERROR;
+            }
         }
         if ((state.statusEnum() != ContainerStatus.RUNNING
                 && state.statusEnum() != ContainerStatus.CREATED)
@@ -116,6 +149,7 @@ public final class ExecCommand {
         payload.ociVersion = state.ociVersion;
         payload.process = process;
         payload.seccomp = spec.linux != null ? spec.linux.seccomp : null;
+        payload.memoryPolicy = spec.linux != null ? spec.linux.memoryPolicy : null;
         payload.preserveFds = preserveFds;
         // A missing runtime config just means a container created before cgroup
         // support (skip); any other load failure must NOT silently exec the
@@ -154,7 +188,7 @@ public final class ExecCommand {
         try (Arena arena = Arena.ofConfined()) {
             return spawn(arena, state.pid, payload, effectiveCgroupPath, detach,
                     pidFile, effectiveAffinity, cgroupExplicitRoot, cgroupPath,
-                    consoleSocket);
+                    consoleSocket, pidfdSocket);
         }
     }
 
@@ -273,7 +307,7 @@ public final class ExecCommand {
                              String cgroupPath, boolean detach, String pidFile,
                              Spec.ExecCPUAffinity affinity,
                              boolean cgroupExplicitRoot, String containerCgroupPath,
-                             String consoleSocket) {
+                             String consoleSocket, String pidfdSocket) {
         String exePath = PosixIO.readlink(arena, "/proc/self/exe");
         if (exePath == null) {
             System.err.println("readlink /proc/self/exe failed");
@@ -450,6 +484,10 @@ public final class ExecCommand {
         // workload itself is also OUR child: exec_bootstrap clones it with
         // CLONE_PARENT, exactly like the create path's stage-2.
         Wait.waitForChild(childPid);
+
+        if (pidfdSocket != null) {
+            com.ternbusty.takoyaki.console.PidfdSocket.sendPidfd(pidfdSocket, workloadPid);
+        }
 
         // Container cgroup membership BEFORE sending the payload: the workload
         // proceeds past its payload read only after we finish writing, so it

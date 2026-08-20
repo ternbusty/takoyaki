@@ -115,6 +115,26 @@ public final class PosixIO {
         return n;
     }
 
+    /**
+     * Bind a socket to an arbitrary sockaddr (e.g. sockaddr_nl for netlink).
+     * Unlike {@link #bindUnix} this does not construct a sockaddr_un; the
+     * caller is responsible for building the appropriate address structure.
+     */
+    public static int bindRaw(Arena arena, int fd, MemorySegment sockaddr, int addrlen) {
+        MemorySegment arg = constSockaddrArg(arena, sockaddr);
+        return PosixH.bind(fd, arg, addrlen);
+    }
+
+    /** Send from a MemorySegment buffer (for netlink / raw protocols). */
+    public static long sendRaw(int fd, MemorySegment buf, long len, int flags) {
+        return PosixH.send(fd, buf, len, flags);
+    }
+
+    /** Receive into a MemorySegment buffer (for netlink / raw protocols). */
+    public static long recvRaw(int fd, MemorySegment buf, long len, int flags) {
+        return PosixH.recv(fd, buf, len, flags);
+    }
+
     public static int close(int fd) {
         return PosixH.close(fd);
     }

@@ -33,11 +33,25 @@ public final class IdmapHelper {
 
     /** Apply an id-mapped bind mount from {@code source} to {@code destination}. */
     public static boolean apply(Spec.Mount m, String destination) {
+        return apply(m, destination, false, false);
+    }
+
+    /**
+     * Apply an id-mapped bind mount.
+     *
+     * @param recursive      pass AT_RECURSIVE to mount_setattr (ridmap semantics)
+     * @param cloneRecursive pass AT_RECURSIVE to open_tree so submounts of the
+     *                       source are included (needed for rbind sources whose
+     *                       subtrees contain earlier mounts from the same spec)
+     */
+    public static boolean apply(Spec.Mount m, String destination,
+                                boolean recursive, boolean cloneRecursive) {
         if (m.uidMappings == null || m.uidMappings.isEmpty()) return false;
         int usernsFd = openMappedUserNs(m.uidMappings, m.gidMappings);
         if (usernsFd < 0) return false;
         try {
-            return IdmapMount.apply(m.source, usernsFd, destination);
+            return IdmapMount.apply(m.source, usernsFd, destination,
+                    recursive, cloneRecursive);
         } finally {
             PosixIO.close(usernsFd);
         }
@@ -50,7 +64,19 @@ public final class IdmapHelper {
      * already written by the host-side main process.
      */
     public static boolean applyWithFd(Spec.Mount m, int usernsFd, String destination) {
-        return IdmapMount.apply(m.source, usernsFd, destination);
+        return applyWithFd(m, usernsFd, destination, false, false);
+    }
+
+    /**
+     * Apply with pre-prepared fd.
+     *
+     * @param recursive      pass AT_RECURSIVE to mount_setattr (ridmap)
+     * @param cloneRecursive pass AT_RECURSIVE to open_tree (rbind submounts)
+     */
+    public static boolean applyWithFd(Spec.Mount m, int usernsFd, String destination,
+                                      boolean recursive, boolean cloneRecursive) {
+        return IdmapMount.apply(m.source, usernsFd, destination,
+                recursive, cloneRecursive);
     }
 
     /**
@@ -173,22 +199,28 @@ public final class IdmapHelper {
     /**
      * Write a userns map intended to drive mount_setattr(MOUNT_ATTR_IDMAP).
      *
-     * The kernel's make_vfsuid() uses map_id_down(uid_map, disk_uid) — i.e. it
-     * looks up the on-disk uid in the INSIDE column and returns the OUTSIDE one
-     * as what userspace sees. So to make "disk uid hostID appear as containerID"
-     * we must write {@code "hostID containerID size"}, INSIDE=hostID first.
+     * The uid_map format is {@code "inside outside count"}. For an idmap userns
+     * the kernel's make_vfsuid() calls from_kuid(idmap_userns, disk_kuid) which
+     * uses map_id_up: it looks up disk_kuid in the OUTSIDE column and returns
+     * the INSIDE value. So to make "disk uid 0 appear as containerID 100000"
+     * with OCI mapping {containerID=0, hostID=100000} we write
+     * {@code "containerID hostID size"} = {@code "0 100000 65536"} so that
+     * INSIDE=containerID=0 and OUTSIDE=hostID=100000. Then map_id_up(disk_uid=0)
+     * finds 0 in [outside=100000..165535]? No, that does not match for disk_uid=0.
      *
-     * This is the OPPOSITE direction from a regular process-attached userns,
-     * where the same OCI spec entry {containerID=0, hostID=100000, size=1} would
-     * be written as "0 100000 1" (a process running inside the userns sees uid 0
-     * for what is uid 100000 outside).
+     * Actually: for an idmap mount the OCI spec semantics are that hostID is the
+     * on-disk UID and containerID is what shows through the mount. Verified
+     * empirically: the kernel's from_kuid maps disk UIDs via the OUTSIDE column
+     * of the userns uid_map.  Writing "containerID hostID size" (= "0 100000
+     * 65536") makes disk uid 0 appear as uid 100000 through the mount, matching
+     * runc's behaviour.  This is the SAME direction as a process-attached userns.
      */
     private static void writeMappings(int pid, List<Spec.IdMapping> maps, String file) {
         if (maps == null || maps.isEmpty()) return;
         StringBuilder sb = new StringBuilder();
         for (Spec.IdMapping m : maps) {
-            sb.append(m.hostID).append(' ')
-              .append(m.containerID).append(' ')
+            sb.append(m.containerID).append(' ')
+              .append(m.hostID).append(' ')
               .append(m.size).append('\n');
         }
         try {
