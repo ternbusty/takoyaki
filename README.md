@@ -7,18 +7,8 @@ A GraalVM Native Image OCI container runtime, written in Java + Panama FFM. Impl
 
 ## Install
 
-Prebuilt static binaries are published on the [GitHub Releases](https://github.com/ternbusty/takoyaki/releases) page for each tag. Pick the asset that matches your host architecture.
-
 ```sh
-ARCH=$(uname -m)                            # aarch64 or x86_64
-BASE=https://github.com/ternbusty/takoyaki/releases/latest/download
-
-sudo curl -sSL -o /usr/local/bin/takoyaki "$BASE/takoyaki-linux-$ARCH"
-sudo chmod +x /usr/local/bin/takoyaki
-
-# AppArmor profile (Ubuntu 24.04+)
-sudo curl -sSL -o /etc/apparmor.d/takoyaki "$BASE/apparmor-profile"
-sudo apparmor_parser -r /etc/apparmor.d/takoyaki
+curl -sSL https://raw.githubusercontent.com/ternbusty/takoyaki/main/install.sh | sudo bash
 ```
 
 ### Runtime requirements
