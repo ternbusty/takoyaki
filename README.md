@@ -10,36 +10,23 @@ A GraalVM Native Image OCI container runtime, written in Java + Panama FFM. Impl
 Prebuilt static binaries are published on the [GitHub Releases](https://github.com/ternbusty/takoyaki/releases) page for each tag. Pick the asset that matches your host architecture.
 
 ```sh
-# aarch64 / arm64
-sudo curl -sSL -o /usr/local/bin/takoyaki \
-    https://github.com/ternbusty/takoyaki/releases/latest/download/takoyaki-linux-aarch64
+ARCH=$(uname -m)                            # aarch64 or x86_64
+BASE=https://github.com/ternbusty/takoyaki/releases/latest/download
+
+sudo curl -sSL -o /usr/local/bin/takoyaki "$BASE/takoyaki-linux-$ARCH"
 sudo chmod +x /usr/local/bin/takoyaki
 
-# x86_64 / amd64
-sudo curl -sSL -o /usr/local/bin/takoyaki \
-    https://github.com/ternbusty/takoyaki/releases/latest/download/takoyaki-linux-x86_64
-sudo chmod +x /usr/local/bin/takoyaki
-```
+# Verify checksum
+curl -sSL "$BASE/takoyaki-linux-$ARCH.sha256" | sha256sum -c
 
-A sha256 checksum is shipped alongside each binary as `<binary-name>.sha256`. Verify with:
-
-```sh
-curl -sSL https://github.com/ternbusty/takoyaki/releases/latest/download/takoyaki-linux-aarch64.sha256 \
-    | sha256sum -c
-```
-
-### AppArmor profile (Ubuntu 24.04+)
-
-Ubuntu 24.04 restricts unprivileged user namespace creation by default (`kernel.apparmor_restrict_unprivileged_userns=1`). Without an AppArmor profile that permits `userns`, container workloads that call `unshare(CLONE_NEWUSER)` will receive zero capabilities in the new namespace. Rootless operation also requires this profile.
-
-```sh
-sudo cp dist/apparmor/takoyaki /etc/apparmor.d/takoyaki
+# AppArmor profile (Ubuntu 24.04+)
+sudo curl -sSL -o /etc/apparmor.d/takoyaki "$BASE/apparmor-profile"
 sudo apparmor_parser -r /etc/apparmor.d/takoyaki
 ```
 
-If you installed the binary to a path other than `/usr/local/bin/takoyaki`, edit the path in the profile before loading it.
+The AppArmor profile is required on Ubuntu 24.04 and later. Ubuntu restricts unprivileged user namespace creation by default (`kernel.apparmor_restrict_unprivileged_userns=1`). Without a profile that permits `userns`, container workloads calling `unshare(CLONE_NEWUSER)` receive zero capabilities in the new namespace and rootless operation fails entirely. System-packaged runtimes (runc, crun, podman, ...) ship the same kind of profile in their packages.
 
-System-packaged runtimes (runc, crun, podman, ...) ship the same kind of profile in their packages.
+If you installed the binary to a path other than `/usr/local/bin/takoyaki`, edit the path in the profile before loading it.
 
 ### Runtime requirements
 

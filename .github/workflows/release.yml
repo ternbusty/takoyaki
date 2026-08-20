@@ -86,18 +86,19 @@ jobs:
       - name: Stage binary + checksum
         run: |
           set -eux
-          mkdir -p dist
-          cp build/native/nativeCompile/takoyaki dist/takoyaki-linux-${{ matrix.arch }}
-          (cd dist && sha256sum takoyaki-linux-${{ matrix.arch }} \
+          mkdir -p staging
+          cp build/native/nativeCompile/takoyaki staging/takoyaki-linux-${{ matrix.arch }}
+          (cd staging && sha256sum takoyaki-linux-${{ matrix.arch }} \
               > takoyaki-linux-${{ matrix.arch }}.sha256)
           # Quick smoke check that the produced binary at least responds to --version.
-          dist/takoyaki-linux-${{ matrix.arch }} --version
+          staging/takoyaki-linux-${{ matrix.arch }} --version
 
       - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
-            dist/takoyaki-linux-${{ matrix.arch }} \
-            dist/takoyaki-linux-${{ matrix.arch }}.sha256 \
+            staging/takoyaki-linux-${{ matrix.arch }} \
+            staging/takoyaki-linux-${{ matrix.arch }}.sha256 \
+            dist/apparmor/takoyaki#apparmor-profile \
             --clobber
