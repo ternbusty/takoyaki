@@ -28,7 +28,8 @@ public final class Rootfs {
             {"null", "zero", "random", "urandom", "tty", "full", "console"};
 
     public static void prepare(String rootfsPath, Spec spec,
-                               java.util.Map<String, Integer> idmapFds) {
+                               java.util.Map<String, Integer> idmapFds,
+                               java.util.Map<String, int[]> idmapUsernsFds) {
         try (Arena arena = Arena.ofConfined()) {
             if (PosixIO.access(arena, rootfsPath, Constants.F_OK) != 0) {
                 throw new RuntimeException("rootfs not found: " + rootfsPath);
@@ -75,7 +76,7 @@ public final class Rootfs {
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
-                applyOciMounts(rootfsPath, spec.mounts, idmapFds, spec);
+                applyOciMounts(rootfsPath, spec.mounts, idmapFds, idmapUsernsFds, spec);
             }
         }
     }
@@ -304,6 +305,7 @@ public final class Rootfs {
      */
     static void applyOciMounts(String rootfsPath, List<Spec.Mount> mounts,
                                java.util.Map<String, Integer> idmapFds,
+                               java.util.Map<String, int[]> idmapUsernsFds,
                                Spec spec) {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
@@ -375,6 +377,8 @@ public final class Rootfs {
                     }
                 }
                 Integer prepFd = idmapFds.get(m.destination);
+                int[] deferredInfo = idmapUsernsFds != null
+                        ? idmapUsernsFds.get(m.destination) : null;
                 boolean done;
                 if (prepFd != null) {
                     // The host-side CreateCommand already did open_tree +
@@ -384,6 +388,18 @@ public final class Rootfs {
                     PosixIO.close(prepFd);
                     if (done) Logger.debug("idmap mounted " + m.destination
                             + " using host-prepared tree fd " + prepFd);
+                } else if (deferredInfo != null) {
+                    // Container-internal source: open_tree locally (earlier
+                    // mounts in this loop made the source visible), then apply
+                    // the id-map using the userns fd inherited from the host.
+                    int usernsFd = deferredInfo[0];
+                    boolean deferRecursive = deferredInfo[1] != 0;
+                    String src = m.source;
+                    done = IdmapMount.apply(src, usernsFd, target,
+                            deferRecursive, cloneRecursive);
+                    PosixIO.close(usernsFd);
+                    if (done) Logger.debug("idmap mounted " + m.destination
+                            + " using deferred userns fd (container-internal source)");
                 } else {
                     done = IdmapHelper.apply(effectiveMount, target,
                             recursive, cloneRecursive);

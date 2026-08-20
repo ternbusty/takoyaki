@@ -183,6 +183,7 @@ public final class CreateCommand {
         // runs as root in init_user_ns.
         if (spec.mounts != null) {
             StringJoiner fdMap = new StringJoiner(",");
+            StringJoiner usernsFdMap = new StringJoiner(",");
             for (Spec.Mount m : spec.mounts) {
                 // Determine if this mount needs an idmap userns fd.
                 // Explicit uidMappings on the mount take precedence; otherwise
@@ -259,6 +260,27 @@ public final class CreateCommand {
                 boolean recursive = isRidmap || parsed.isRecursiveIdmap;
 
                 // Step 4: open_tree on the source, then apply MOUNT_ATTR_IDMAP.
+                // Container-internal source: when the source path is within
+                // the rootfs, its content may depend on earlier mounts in the
+                // spec that haven't been applied yet on the host side. Defer
+                // to the init process which can do open_tree after the
+                // preceding mounts have been applied in order.
+                boolean deferToInit = source != null
+                        && (source.startsWith(rootfsPath + "/")
+                            || source.equals(rootfsPath));
+                if (deferToInit) {
+                    Logger.debug("source " + source + " is inside rootfs for "
+                            + m.destination + "; deferring idmap to init");
+                    int ufl = PosixIO.fcntl(usernsFd, Constants.F_GETFD, 0);
+                    if (ufl >= 0) {
+                        PosixIO.fcntl(usernsFd, Constants.F_SETFD,
+                                ufl & ~Constants.FD_CLOEXEC);
+                    }
+                    usernsFdMap.add(java.util.Base64.getEncoder().encodeToString(
+                            m.destination.getBytes()) + ":" + usernsFd
+                            + ":" + (recursive ? 1 : 0));
+                    continue;
+                }
                 int treeFd = com.ternbusty.takoyaki.rootfs.IdmapMount.openTree(
                         source, cloneRecursive);
                 if (treeFd < 0) {
@@ -289,6 +311,9 @@ public final class CreateCommand {
             }
             if (fdMap.length() > 0) {
                 envList.add("_TAKOYAKI_IDMAP_FDS=" + fdMap);
+            }
+            if (usernsFdMap.length() > 0) {
+                envList.add("_TAKOYAKI_IDMAP_USERNS_FDS=" + usernsFdMap);
             }
         }
 

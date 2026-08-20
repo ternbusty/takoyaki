@@ -77,6 +77,30 @@ public final class InitProcess {
         return out;
     }
 
+    /**
+     * Parse deferred idmap userns fds from _TAKOYAKI_IDMAP_USERNS_FDS.
+     * Format: base64(dest):usernsFd:recursive,...
+     * Returns map from destination to [usernsFd, recursive].
+     */
+    static java.util.Map<String, int[]> parseDeferredIdmapFds(String env) {
+        java.util.Map<String, int[]> out = new java.util.LinkedHashMap<>();
+        if (env == null || env.isEmpty()) return out;
+        for (String entry : env.split(",")) {
+            String[] parts = entry.split(":");
+            if (parts.length < 3) continue;
+            try {
+                String dest = new String(java.util.Base64.getDecoder()
+                        .decode(parts[0]));
+                int fd = Integer.parseInt(parts[1]);
+                int recursive = Integer.parseInt(parts[2]);
+                out.put(dest, new int[]{fd, recursive});
+            } catch (IllegalArgumentException ignored) {
+                // bad base64 or non-numeric; skip
+            }
+        }
+        return out;
+    }
+
     public static void run() {
         Logger.setContext("init");
         // Inherit log configuration from the main process so that debug/warn
@@ -161,6 +185,19 @@ public final class InitProcess {
                 Logger.debug("idmap fd inherited: " + e.getKey() + " -> " + e.getValue());
             }
 
+            // Deferred idmap userns fds: for container-internal sources where
+            // open_tree failed on the host (source depends on earlier mounts),
+            // the host created the userns fd but skipped open_tree + mount_setattr.
+            // The init does open_tree locally (after earlier mounts are applied)
+            // then mount_setattr + move_mount.
+            // Format: base64(dest):usernsFd:recursive,...
+            java.util.Map<String, int[]> idmapUsernsFds =
+                    parseDeferredIdmapFds(System.getenv("_TAKOYAKI_IDMAP_USERNS_FDS"));
+            for (var e : idmapUsernsFds.entrySet()) {
+                Logger.debug("deferred idmap userns fd: " + e.getKey()
+                        + " -> fd=" + e.getValue()[0] + " recursive=" + e.getValue()[1]);
+            }
+
             String containerId = System.getenv("_TAKOYAKI_CONTAINER_ID");
 
             // Console socket: prefer the pre-connected fd from CreateCommand
@@ -186,7 +223,7 @@ public final class InitProcess {
             }
 
             if (spec.hasNamespace("mount")) {
-                Rootfs.prepare(rootfsPath, spec, idmapFds);
+                Rootfs.prepare(rootfsPath, spec, idmapFds, idmapUsernsFds);
                 // Additional devices declared in spec.linux.devices, before pivot_root.
                 if (spec.linux != null && spec.linux.devices != null) {
                     Devices.create(rootfsPath, spec.linux.devices);
