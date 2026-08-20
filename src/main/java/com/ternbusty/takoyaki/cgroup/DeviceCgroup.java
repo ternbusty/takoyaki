@@ -141,11 +141,25 @@ public final class DeviceCgroup {
         emit(out, BPF_LDX_MEM_W, 5, 1, 4, 0);           // R5 = major
         emit(out, BPF_LDX_MEM_W, 6, 1, 8, 0);           // R6 = minor
 
-        // For each rule: emit branch chain.
-        // We use a placeholder "skip distance" and patch later — but since we
-        // know each rule emits a fixed-size block we can compute targets in advance.
-        // Per-rule block size (max): 8 insns + final 2.
+        // runc compat: separate "wildcard" rules (type='a', no major/minor) from
+        // specific rules. Specific rules are emitted first. The LAST wildcard
+        // rule determines the default tail action. This way, the OCI pattern
+        // [{deny all}, {allow b 8:0}] works: the specific allow matches before
+        // the default deny.
+        boolean defaultAllow = false; // default tail
+        java.util.List<Spec.LinuxDeviceCgroup> specific = new java.util.ArrayList<>();
         for (Spec.LinuxDeviceCgroup r : rules) {
+            boolean isWildcard = (r.type == null || r.type.isEmpty() || "a".equals(r.type))
+                    && r.major == null && r.minor == null;
+            if (isWildcard) {
+                defaultAllow = r.allow;
+            } else {
+                specific.add(r);
+            }
+        }
+
+        // For each specific rule: emit branch chain.
+        for (Spec.LinuxDeviceCgroup r : specific) {
             int devType = parseDevType(r.type);
             int accBits = parseAccessBits(r.access);
 
@@ -181,8 +195,8 @@ public final class DeviceCgroup {
             out.writeBytes(subBytes);
         }
 
-        // Default tail: deny.
-        emit(out, BPF_ALU_MOV_K, 0, 0, 0, 0);
+        // Default tail: use the last wildcard rule's allow/deny decision.
+        emit(out, BPF_ALU_MOV_K, 0, 0, 0, defaultAllow ? 1 : 0);
         emit(out, BPF_EXIT_INSN, 0, 0, 0, 0);
 
         return out.toByteArray();
@@ -237,21 +251,38 @@ public final class DeviceCgroup {
         MemorySegment insns = arena.allocate(prog.length);
         insns.copyFrom(MemorySegment.ofArray(prog));
         MemorySegment license = arena.allocateFrom("GPL");
+        // Verifier log buffer: capture kernel messages on failure.
+        int logSize = 16384;
+        MemorySegment logBuf = arena.allocate(logSize);
         // Layout of bpf_attr for PROG_LOAD (relevant fields):
-        //   u32 prog_type
-        //   u32 insn_cnt
-        //   u64 insns
-        //   u64 license
-        //   u32 log_level
-        //   u32 log_size
-        //   u64 log_buf
-        //   u32 kern_version
-        //   u32 prog_flags
+        //   u32 prog_type        offset  0
+        //   u32 insn_cnt         offset  4
+        //   u64 insns            offset  8
+        //   u64 license          offset 16
+        //   u32 log_level        offset 24
+        //   u32 log_size         offset 28
+        //   u64 log_buf          offset 32
         attr.set(ValueLayout.JAVA_INT, 0, BPF_PROG_TYPE_CGROUP_DEVICE);
         attr.set(ValueLayout.JAVA_INT, 4, prog.length / 8);
         attr.set(ValueLayout.JAVA_LONG, 8, insns.address());
         attr.set(ValueLayout.JAVA_LONG, 16, license.address());
         long rc = Libc.syscall(bpfNr(), BPF_PROG_LOAD, attr.address(), 128, 0, 0);
+        if (rc < 0) {
+            // Retry with log_level=1 to get verifier output for diagnosis.
+            attr.fill((byte) 0);
+            attr.set(ValueLayout.JAVA_INT, 0, BPF_PROG_TYPE_CGROUP_DEVICE);
+            attr.set(ValueLayout.JAVA_INT, 4, prog.length / 8);
+            attr.set(ValueLayout.JAVA_LONG, 8, insns.address());
+            attr.set(ValueLayout.JAVA_LONG, 16, license.address());
+            attr.set(ValueLayout.JAVA_INT, 24, 1); // log_level
+            attr.set(ValueLayout.JAVA_INT, 28, logSize);
+            attr.set(ValueLayout.JAVA_LONG, 32, logBuf.address());
+            Libc.syscall(bpfNr(), BPF_PROG_LOAD, attr.address(), 128, 0, 0);
+            String log = logBuf.getString(0);
+            if (!log.isEmpty()) {
+                Logger.warn("bpf verifier: " + log.substring(0, Math.min(log.length(), 512)));
+            }
+        }
         return (int) rc;
     }
 

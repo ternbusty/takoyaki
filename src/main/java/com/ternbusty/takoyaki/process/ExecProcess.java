@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.process;
 
+import com.ternbusty.takoyaki.ipc.SyncChannel;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.state.ContainerStatus;
 import com.ternbusty.takoyaki.state.State;
@@ -43,13 +44,29 @@ public final class ExecProcess {
 
     public static void run() {
         Logger.setContext("exec");
+        // Inherit log file/format from the CLI so debug output goes to --log
+        // rather than leaking to stderr (same pattern as InitProcess).
+        String execLogFile = System.getenv("_TAKOYAKI_LOG_FILE");
+        if (execLogFile != null) {
+            Logger.setLogFile(execLogFile);
+        }
+        String execLogFormat = System.getenv("_TAKOYAKI_LOG_FORMAT");
+        if ("json".equalsIgnoreCase(execLogFormat)) {
+            Logger.setFormat(Logger.Format.JSON);
+        }
 
         int payloadFd;
         int seccompListenerFd;
+        int consoleFd;
+        int execSyncFd;
         try {
             payloadFd = Integer.parseInt(System.getenv("_TAKOYAKI_EXEC_PAYLOAD_FD"));
             String listenerFdStr = System.getenv("_TAKOYAKI_SECCOMP_LISTENER_FD");
             seccompListenerFd = listenerFdStr != null ? Integer.parseInt(listenerFdStr) : -1;
+            String consoleFdStr = System.getenv("_TAKOYAKI_EXEC_CONSOLE_FD");
+            consoleFd = consoleFdStr != null ? Integer.parseInt(consoleFdStr) : -1;
+            String syncFdStr = System.getenv("_TAKOYAKI_EXEC_SYNC_FD");
+            execSyncFd = syncFdStr != null ? Integer.parseInt(syncFdStr) : -1;
         } catch (RuntimeException e) {
             Logger.error("bad exec env vars: " + e.getMessage());
             PosixIO._exit(1);
@@ -72,9 +89,40 @@ public final class ExecProcess {
         }
         PosixIO.close(payloadFd);
 
+        // Enter the container's cgroup namespace NOW, after reading the payload.
+        // The payload read blocks until the CLI finishes Cgroup.addPid (which
+        // writes our pid to the container's cgroup.procs), so by this point we
+        // are a member of the container's cgroup. Entering cgroupns here makes
+        // /proc/self/cgroup correctly show "0::/" instead of a host-relative path.
+        // The fd was opened by ExecCommand and deliberately kept out of
+        // bootstrap.c's setns loop for this reason.
+        String cgroupNsFdStr = System.getenv("_TAKOYAKI_EXEC_CGROUPNS_FD");
+        if (cgroupNsFdStr != null) {
+            int cgroupNsFd = Integer.parseInt(cgroupNsFdStr);
+            if (Libc.setns(cgroupNsFd, Constants.CLONE_NEWCGROUP) != 0) {
+                Logger.warn("setns(cgroupns) failed: " + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("entered container cgroup namespace");
+            }
+            PosixIO.close(cgroupNsFd);
+        }
+
         try (Arena arena = Arena.ofConfined()) {
             // oom_score_adj first, while still privileged; inherited across execve.
             ProcessRestrictions.applyOomScoreAdj(payload.process.oomScoreAdj);
+
+            // I/O priority and scheduler before the restriction sequence.
+            ProcessRestrictions.applyIOPriority(payload.process.ioPriority);
+            ProcessRestrictions.applyScheduler(payload.process.scheduler);
+
+            // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).
+            // Setting RLIMIT_NOFILE above fs.nr_open requires CAP_SYS_RESOURCE,
+            // which is gone after cap drop. RLIMIT_AS is deferred to just before
+            // execve to avoid OOMing the JVM's heap. Same order as InitProcess.
+            if (payload.process.rlimits != null) {
+                com.ternbusty.takoyaki.syscall.Rlimit.applyExcept(
+                        Libc.getpid(), payload.process.rlimits, "RLIMIT_AS");
+            }
 
             // getpid() is the pid inside the container's pid ns — the same
             // perspective the init path reports to a SCMP_ACT_NOTIFY listener,
@@ -90,37 +138,99 @@ public final class ExecProcess {
                 Logger.warn("chdir " + cwd + " failed: " + Libc.strerror(Libc.errno()));
             }
 
-            Libc.clearenv();
+            // Prepare the environment: dedup (last wins), inject HOME if empty.
+            java.util.LinkedHashMap<String, String> envMap = new java.util.LinkedHashMap<>();
             if (payload.process.env != null) {
                 for (String entry : payload.process.env) {
                     int eq = entry.indexOf('=');
                     if (eq > 0) {
-                        Libc.setenv(arena, entry.substring(0, eq), entry.substring(eq + 1), true);
+                        envMap.put(entry.substring(0, eq), entry.substring(eq + 1));
                     }
                 }
             }
+            // runc behaviour (env.go prepareEnv): if HOME is empty or absent
+            // after dedup, look up the user's home in /etc/passwd and set it.
+            // Non-empty HOME is kept as-is.
+            String homeVal = envMap.get("HOME");
+            if (homeVal == null || homeVal.isEmpty()) {
+                int uid = payload.process.user != null ? payload.process.user.uid : 0;
+                String passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid);
+                if (passwdHome != null && !passwdHome.isEmpty()) {
+                    envMap.put("HOME", passwdHome);
+                } else {
+                    // /etc/passwd has no entry: default to "/" (runc's getUserHome default).
+                    envMap.put("HOME", "/");
+                }
+            }
+
+            Libc.clearenv();
+            for (var envEntry : envMap.entrySet()) {
+                Libc.setenv(arena, envEntry.getKey(), envEntry.getValue(), true);
+            }
+
+            // PTY setup for exec -t: allocate a pty from the container's devpts,
+            // ship the master back to ExecCommand via the console socketpair,
+            // and wire the slave to stdin/stdout/stderr.
+            if (Boolean.TRUE.equals(payload.process.terminal) && consoleFd >= 0) {
+                com.ternbusty.takoyaki.console.ConsoleSocket.PtyPair pty =
+                        com.ternbusty.takoyaki.console.ConsoleSocket.openPty();
+                if (pty != null) {
+                    if (com.ternbusty.takoyaki.console.ConsoleSocket
+                            .sendMasterVia(consoleFd, pty.master)) {
+                        if (payload.process.consoleSize != null) {
+                            com.ternbusty.takoyaki.console.ConsoleSocket.setWinsize(
+                                    pty.slave,
+                                    payload.process.consoleSize.height,
+                                    payload.process.consoleSize.width);
+                        }
+                        com.ternbusty.takoyaki.console.ConsoleSocket.wireStdio(pty.slave);
+                    }
+                    PosixIO.close(pty.master);
+                }
+                PosixIO.close(consoleFd);
+                consoleFd = -1;
+            }
+            if (consoleFd >= 0) PosixIO.close(consoleFd);
+
+            // Signal ExecCommand that all process restrictions have been applied.
+            // ExecCommand waits for this byte before writing the pid file, so
+            // the scheduler / capabilities / seccomp are guaranteed to be in
+            // place before any external observer can inspect the process.
+            if (execSyncFd >= 0) {
+                SyncChannel.writeByte(execSyncFd, (byte) 0);
+                PosixIO.close(execSyncFd);
+            }
 
             // Flag every inherited runtime fd CLOEXEC so nothing leaks into the
-            // user process (the payload fd is closed; the seccomp listener fd
-            // has been forwarded by Seccomp.apply if it was needed).
-            CloseRange.closeAllAbove(0);
+            // user process (the seccomp listener fd has been forwarded by
+            // Seccomp.apply if it was needed).
+            CloseRange.closeAllAbove(payload.preserveFds);
 
             String[] argv = payload.process.args.toArray(new String[0]);
 
-            // Rlimits dead-last: a low RLIMIT_AS applied any earlier could push
+            // RLIMIT_AS dead-last: a low RLIMIT_AS applied any earlier could push
             // the already-mapped SubstrateVM heap over the limit and abort us
-            // before execve. The user process picks the limits up across exec.
+            // before execve. Other rlimits were already applied above (before
+            // cap drop). Same deferred pattern as InitProcess.
             if (payload.process.rlimits != null) {
-                com.ternbusty.takoyaki.syscall.Rlimit.apply(Libc.getpid(),
-                        payload.process.rlimits);
+                com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(Libc.getpid(),
+                        payload.process.rlimits, "RLIMIT_AS");
             }
 
+            Logger.debug("setns_init: about to exec");
+            // Re-apply CLOEXEC right before exec to catch FDs opened by
+            // rlimit or other code since the first closeAllAbove.
+            CloseRange.closeAllAbove(payload.preserveFds);
             Libc.execvp(arena, argv[0], argv);
-            Logger.error("execvp failed: " + Libc.strerror(Libc.errno()));
+            String rawErr = Libc.strerror(Libc.errno());
+            String errMsg = rawErr.isEmpty() ? rawErr
+                    : Character.toLowerCase(rawErr.charAt(0)) + rawErr.substring(1);
+            System.err.println("exec " + argv[0] + ": " + errMsg);
+            Logger.error("execvp failed: " + errMsg);
         } catch (Exception e) {
             Logger.error("exec setup failed: " + e.getMessage());
         }
-        PosixIO._exit(127);
+        PosixIO._exit(255);
     }
 
     /** Read fd to EOF (retrying EINTR) and return the content as a string. */

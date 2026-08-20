@@ -25,7 +25,7 @@ public final class CreateCommand {
                           String bundleIn, String pidFile, String consoleSocket,
                           boolean noPivot, boolean noNewKeyring, int preserveFds) {
         if (State.exists(rootPath, containerId)) {
-            Logger.error("container " + containerId + " already exists");
+            System.err.println("container " + containerId + " already exists");
             return 1;
         }
 
@@ -35,15 +35,18 @@ public final class CreateCommand {
         try {
             bundle = Path.of(bundleIn).toAbsolutePath().normalize().toString();
         } catch (Exception e) {
-            Logger.error("invalid bundle path: " + e.getMessage());
+            System.err.println("invalid bundle path: " + e.getMessage());
             return 1;
         }
 
         Spec spec;
         try {
             spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson);
+        } catch (java.nio.file.NoSuchFileException e) {
+            System.err.println(bundle + " does not exist");
+            return 1;
         } catch (Exception e) {
-            Logger.error("failed to load config.json: " + e.getMessage());
+            System.err.println("failed to load config.json: " + e.getMessage());
             return 1;
         }
 
@@ -52,7 +55,18 @@ public final class CreateCommand {
         // else (e.g. "invalid" — runtime-tools misc_props test) is rejected.
         if (spec.ociVersion == null
                 || !spec.ociVersion.matches("\\d+\\.\\d+(\\.\\d+)?(-[\\w.+-]+)?")) {
-            Logger.error("invalid ociVersion: " + spec.ociVersion);
+            System.err.println("invalid ociVersion: " + spec.ociVersion);
+            return 1;
+        }
+
+        // runc compat: SCHED_DEADLINE cannot be used with CPU pinning.
+        if (spec.process != null && spec.process.scheduler != null
+                && "SCHED_DEADLINE".equals(spec.process.scheduler.policy)
+                && spec.linux != null && spec.linux.resources != null
+                && spec.linux.resources.cpu != null
+                && spec.linux.resources.cpu.cpus != null
+                && !spec.linux.resources.cpu.cpus.isEmpty()) {
+            System.err.println("process scheduler can't be used together with AllowedCPUs");
             return 1;
         }
 
@@ -61,6 +75,12 @@ public final class CreateCommand {
         // start to return an error (the spec is ambiguous on which phase
         // validates, but the conformance suite settles it). We therefore
         // defer this check to StartCommand below.
+
+        // Note: when process.terminal is true and no --console-socket is given,
+        // runc handles it internally for foreground runs (runc run without -d).
+        // Since CreateCommand is called from both `create` and `run`, we do not
+        // enforce console-socket presence here. Without it, InitProcess simply
+        // skips pty setup and the process inherits its parent's stdio.
 
         String rootfsPath = spec.root.path.startsWith("/")
                 ? spec.root.path
@@ -74,11 +94,11 @@ public final class CreateCommand {
         int[] mainFds = new int[2];
         try (Arena arena = Arena.ofConfined()) {
             if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, syncFds) < 0) {
-                Logger.error("socketpair sync failed: " + Libc.strerror(Libc.errno()));
+                System.err.println("socketpair sync failed: " + Libc.strerror(Libc.errno()));
                 return 1;
             }
             if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, mainFds) < 0) {
-                Logger.error("socketpair main failed: " + Libc.strerror(Libc.errno()));
+                System.err.println("socketpair main failed: " + Libc.strerror(Libc.errno()));
                 return 1;
             }
         }
@@ -93,7 +113,7 @@ public final class CreateCommand {
             exePath = PosixIO.readlink(arena, "/proc/self/exe");
         }
         if (exePath == null) {
-            Logger.error("readlink /proc/self/exe failed");
+            System.err.println("readlink /proc/self/exe failed");
             return 1;
         }
 
@@ -107,8 +127,29 @@ public final class CreateCommand {
         envList.add("_TAKOYAKI_ROOTFS_PATH=" + rootfsPath);
         envList.add("_TAKOYAKI_CONTAINER_ID=" + containerId);
         if (debug) envList.add("_TAKOYAKI_BOOTSTRAP_DEBUG=1");
-        if (consoleSocket != null) envList.add("_TAKOYAKI_CONSOLE_SOCKET=" + consoleSocket);
+        // Pass log configuration to the init process so it can redirect its
+        // Logger output to the same file as the main process. Without this,
+        // init's debug/warn output leaks to stderr (visible to bats tests).
+        String logFilePath = Logger.getLogFilePath();
+        if (logFilePath != null) envList.add("_TAKOYAKI_LOG_FILE=" + logFilePath);
+        String logFmt = Logger.getFormatName();
+        if (logFmt != null) envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
+        // Pre-connect to the console socket on the HOST side so the init
+        // process (which may run inside a user namespace as an unmapped uid)
+        // doesn't need filesystem access to the socket path.  The connected
+        // fd survives fork+execve (no CLOEXEC); InitProcess uses it directly.
+        int consoleSocketFd = -1;
+        if (consoleSocket != null) {
+            consoleSocketFd = com.ternbusty.takoyaki.console.ConsoleSocket.connectTo(consoleSocket);
+            if (consoleSocketFd >= 0) {
+                envList.add("_TAKOYAKI_CONSOLE_SOCKET_FD=" + consoleSocketFd);
+            } else {
+                // Fall back to passing the path (non-userns case).
+                envList.add("_TAKOYAKI_CONSOLE_SOCKET=" + consoleSocket);
+            }
+        }
         if (noNewKeyring) envList.add("_TAKOYAKI_NO_NEW_KEYRING=1");
+        if (noPivot) envList.add("_TAKOYAKI_NO_PIVOT=1");
 
         // Namespaces with an explicit `path` field: open the path on the host so
         // bootstrap.c can join via setns() instead of unshare(). The fd survives
@@ -121,7 +162,7 @@ public final class CreateCommand {
                     if (ns.path == null || ns.path.isEmpty()) continue;
                     int fd = PosixIO.open(openArena, ns.path, Constants.O_RDONLY, 0);
                     if (fd < 0) {
-                        Logger.error("open ns path " + ns.path + " failed: " + Libc.strerror(Libc.errno()));
+                        System.err.println("open ns path " + ns.path + " failed: " + Libc.strerror(Libc.errno()));
                         return 1;
                     }
                     nsFds.add(ns.type + ":" + fd);
@@ -197,7 +238,7 @@ public final class CreateCommand {
 
         int forkPid = PosixIO.fork();
         if (forkPid < 0) {
-            Logger.error("fork failed: " + Libc.strerror(Libc.errno()));
+            System.err.println("fork failed: " + Libc.strerror(Libc.errno()));
             return 1;
         }
         if (forkPid == 0) {

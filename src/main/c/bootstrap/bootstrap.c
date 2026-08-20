@@ -10,6 +10,7 @@
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/syscall.h>
 #include <time.h>
 
@@ -55,6 +56,7 @@ static int t0_set = 0;
 enum sync_t {
     SYNC_USERMAP_PLS = 0x40,
     SYNC_USERMAP_ACK = 0x41,
+    SYNC_CGROUP_ACK  = 0x42,
     SYNC_GRANDCHILD = 0x44,
     SYNC_CHILD_FINISH = 0x45,
 };
@@ -62,6 +64,22 @@ enum sync_t {
 static int debug_enabled = 0;
 
 #define DBG(fmt, ...) do { if (debug_enabled) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
+
+static void log_cpu_affinity(void) {
+    if (!debug_enabled) return;
+    cpu_set_t cpus;
+    CPU_ZERO(&cpus);
+    if (sched_getaffinity(0, sizeof(cpus), &cpus) < 0) {
+        DBG("sched_getaffinity: %s\n", strerror(errno));
+        return;
+    }
+    size_t i, mask = 0;
+    for (i = 0; i < sizeof(mask) * 8; i++) {
+        if (CPU_ISSET(i, &cpus))
+            mask |= (size_t)1 << i;
+    }
+    DBG("nsexec: affinity: 0x%zx\n", mask);
+}
 
 static int getenv_int(const char *name) {
     char *val = getenv(name);
@@ -189,6 +207,23 @@ static void exec_setns_pass(const char *env, int want_mnt) {
                     exit(1);
                 }
                 close(fd);
+                /* After joining a user namespace, become root in it so
+                 * the kernel restores our effective capabilities. Without
+                 * this, subsequent setns(mnt) or mount operations fail
+                 * with EPERM. */
+                if (strcmp(token, "user") == 0) {
+                    if (setuid(0) < 0) {
+                        fprintf(stderr, "[exec-setns] setuid(0) after user setns failed: %s\n",
+                                strerror(errno));
+                        exit(1);
+                    }
+                    if (setgid(0) < 0) {
+                        fprintf(stderr, "[exec-setns] setgid(0) after user setns failed: %s\n",
+                                strerror(errno));
+                        exit(1);
+                    }
+                    DBG("[exec-setns] now root in joined user namespace\n");
+                }
             }
         }
         token = strtok_r(NULL, ",", &saveptr);
@@ -200,6 +235,45 @@ static void exec_bootstrap(void) {
     char *sync_env = getenv("_TAKOYAKI_EXEC_PAYLOAD_FD");
     if (!sync_env) return;
     int sync_fd = atoi(sync_env);
+
+    /* Enable debug output for exec path (mirrors create path's ENV_DEBUG). */
+    debug_enabled = getenv("_TAKOYAKI_EXEC_DEBUG") != NULL;
+
+    /* Redirect stderr to the log file so that DBG() messages from the exec
+     * bootstrap go to the same log file the CLI specified via --log. */
+    {
+        const char *log_file = getenv("_TAKOYAKI_LOG_FILE");
+        if (log_file) {
+            int log_fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (log_fd >= 0) {
+                dup2(log_fd, STDERR_FILENO);
+                close(log_fd);
+            }
+        }
+    }
+
+    /* Apply initial CPU affinity before any namespace operations.
+     * This sets the affinity on our thread; the child inherits it via clone. */
+    {
+        const char *cpu_initial = getenv("_TAKOYAKI_EXEC_CPU_INITIAL");
+        if (cpu_initial) {
+            unsigned int mask_val = parse_hex(cpu_initial);
+            if (mask_val) {
+                cpu_set_t cpus;
+                CPU_ZERO(&cpus);
+                for (unsigned int i = 0; i < sizeof(mask_val) * 8; i++) {
+                    if (mask_val & (1u << i))
+                        CPU_SET(i, &cpus);
+                }
+                if (sched_setaffinity(0, sizeof(cpus), &cpus) < 0) {
+                    DBG("sched_setaffinity(initial 0x%x): %s\n", mask_val, strerror(errno));
+                }
+            }
+        }
+    }
+
+    DBG("nsexec container setup\n");
+    log_cpu_affinity();
 
     char *ns_env = getenv("_TAKOYAKI_EXEC_NS_FDS");
 
@@ -258,6 +332,7 @@ static void exec_bootstrap(void) {
      * does not exist inside the container pid ns we were born into. execve
      * rebuilds libc from scratch for our real pid. The create path's stage-2
      * re-execs after its raw clone for the same reason. */
+    DBG("child process in init()\n");
     if (setenv("_TAKOYAKI_EXEC_STAGE2", "1", 1) != 0) {
         fprintf(stderr, "[exec-bootstrap] setenv failed: %s\n", strerror(errno));
         _exit(1);
@@ -276,6 +351,13 @@ void takoyaki_bootstrap(void) {
     pid_t stage2_pid = -1;
     enum sync_t s;
     unsigned int clone_flags;
+
+    /* Ignore SIGPIPE so that writing to a broken pipe (e.g. a log fd whose
+     * reader has closed) returns EPIPE instead of terminating the process.
+     * Without this, a stale pipe can silently kill the init before it
+     * finishes the sync handshake, causing flaky test failures. runc's Go
+     * runtime ignores SIGPIPE by default; we match that here. */
+    signal(SIGPIPE, SIG_IGN);
 
     /* Stamp the earliest reachable timestamp. The constructor runs from the
      * dynamic linker's init_array before main(), so this captures everything
@@ -298,6 +380,23 @@ void takoyaki_bootstrap(void) {
 
     debug_enabled = getenv(ENV_DEBUG) != NULL;
 
+    /* Redirect stderr to the log file so that DBG() and error messages from
+     * bootstrap.c go to the same place as the Java Logger output. Without
+     * this, bootstrap debug lines leak to the terminal and cause bats tests
+     * like "global --debug to --log" to fail. */
+    {
+        const char *log_file = getenv("_TAKOYAKI_LOG_FILE");
+        if (log_file) {
+            int log_fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            if (log_fd >= 0) {
+                dup2(log_fd, STDERR_FILENO);
+                close(log_fd);
+            }
+        }
+    }
+
+    DBG("nsexec container setup\n");
+    log_cpu_affinity();
     DBG("[stage-1] starting namespace setup\n");
 
     clone_flags = getenv_uint_hex(ENV_CLONE_FLAGS);
@@ -318,9 +417,30 @@ void takoyaki_bootstrap(void) {
     /* Join existing namespaces specified via spec.linux.namespaces[].path.
      * CreateCommand opens the path on the host (host's /proc) and passes the
      * fds through _TAKOYAKI_NS_FDS=type:fd,type:fd,... so we can call setns
-     * here before any unshare. The user fd, if any, is processed first so
-     * subsequent setns/unshare calls operate inside the joined user namespace.
-     * Format mirrors the env var written in CreateCommand. */
+     * here before any unshare. Format mirrors the env var written in
+     * CreateCommand.
+     *
+     * Three-pass approach (matching runc's join_namespaces):
+     *   Pass 1: non-user namespaces (while still in init userns with host caps)
+     *           EPERM is silently skipped because the namespace might be owned
+     *           by the target userns we haven't joined yet.
+     *   Pass 2: user namespace (switches to target userns)
+     *   Pass 3: retry non-user namespaces that got EPERM in pass 1, now that
+     *           we are in the target userns and have its capabilities.
+     *
+     * This handles containers that join some externally-created namespace
+     * alongside an unrelated user namespace. */
+#define MAX_NS_FDS 16
+    struct ns_entry {
+        char type[16];
+        int fd;
+        int nstype;
+        int joined;
+    };
+    struct ns_entry ns_entries[MAX_NS_FDS];
+    int ns_count = 0;
+    int joined_userns = 0;
+
     char *ns_fds_env = getenv("_TAKOYAKI_NS_FDS");
     if (ns_fds_env && *ns_fds_env) {
         char *copy = strdup(ns_fds_env);
@@ -328,45 +448,95 @@ void takoyaki_bootstrap(void) {
             fprintf(stderr, "[stage-1] strdup ns_fds_env failed\n");
             exit(1);
         }
-        /* Two passes: user first, then everything else. */
-        for (int pass = 0; pass < 2; pass++) {
-            char *saveptr = NULL;
-            char *src = strdup(copy);
-            if (!src) {
-                fprintf(stderr, "[stage-1] strdup failed\n");
-                exit(1);
+        /* Parse the entries. */
+        char *saveptr = NULL;
+        char *token = strtok_r(copy, ",", &saveptr);
+        while (token && ns_count < MAX_NS_FDS) {
+            char *colon = strchr(token, ':');
+            if (colon) {
+                *colon = '\0';
+                struct ns_entry *e = &ns_entries[ns_count];
+                snprintf(e->type, sizeof(e->type), "%s", token);
+                e->fd = atoi(colon + 1);
+                e->joined = 0;
+                if      (strcmp(e->type, "user")    == 0) e->nstype = CLONE_NEWUSER;
+                else if (strcmp(e->type, "ipc")     == 0) e->nstype = CLONE_NEWIPC;
+                else if (strcmp(e->type, "uts")     == 0) e->nstype = CLONE_NEWUTS;
+                else if (strcmp(e->type, "network") == 0) e->nstype = CLONE_NEWNET;
+                else if (strcmp(e->type, "pid")     == 0) e->nstype = CLONE_NEWPID;
+                else if (strcmp(e->type, "mount")   == 0) e->nstype = CLONE_NEWNS;
+                else if (strcmp(e->type, "cgroup")  == 0) e->nstype = CLONE_NEWCGROUP;
+                else if (strcmp(e->type, "time")    == 0) e->nstype = CLONE_NEWTIME;
+                else e->nstype = 0;
+                ns_count++;
             }
-            char *token = strtok_r(src, ",", &saveptr);
-            while (token) {
-                char *colon = strchr(token, ':');
-                if (colon) {
-                    *colon = '\0';
-                    const char *type = token;
-                    int fd = atoi(colon + 1);
-                    int is_user = strcmp(type, "user") == 0;
-                    if ((pass == 0 && is_user) || (pass == 1 && !is_user)) {
-                        int nstype = 0;
-                        if      (strcmp(type, "user")    == 0) nstype = CLONE_NEWUSER;
-                        else if (strcmp(type, "ipc")     == 0) nstype = CLONE_NEWIPC;
-                        else if (strcmp(type, "uts")     == 0) nstype = CLONE_NEWUTS;
-                        else if (strcmp(type, "network") == 0) nstype = CLONE_NEWNET;
-                        else if (strcmp(type, "pid")     == 0) nstype = CLONE_NEWPID;
-                        else if (strcmp(type, "mount")   == 0) nstype = CLONE_NEWNS;
-                        else if (strcmp(type, "cgroup")  == 0) nstype = CLONE_NEWCGROUP;
-                        else if (strcmp(type, "time")    == 0) nstype = CLONE_NEWTIME;
-                        DBG("[stage-1] setns(fd=%d, %s)\n", fd, type);
-                        if (setns(fd, nstype) < 0) {
-                            fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
-                                    type, fd, strerror(errno));
-                            exit(1);
-                        }
-                    }
-                }
-                token = strtok_r(NULL, ",", &saveptr);
-            }
-            free(src);
+            token = strtok_r(NULL, ",", &saveptr);
         }
         free(copy);
+
+        /* Pass 1: join non-user namespaces (EPERM silently skipped). */
+        for (int i = 0; i < ns_count; i++) {
+            struct ns_entry *e = &ns_entries[i];
+            if (e->nstype == CLONE_NEWUSER) continue;
+            DBG("[stage-1] setns(fd=%d, %s) [pass 1]\n", e->fd, e->type);
+            if (setns(e->fd, e->nstype) < 0) {
+                if (errno == EPERM) {
+                    DBG("[stage-1] setns(%s) EPERM, will retry after userns join\n", e->type);
+                    continue;
+                }
+                fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
+                        e->type, e->fd, strerror(errno));
+                exit(1);
+            }
+            e->joined = 1;
+            close(e->fd);
+            e->fd = -1;
+        }
+
+        /* Pass 2: join user namespace. */
+        for (int i = 0; i < ns_count; i++) {
+            struct ns_entry *e = &ns_entries[i];
+            if (e->nstype != CLONE_NEWUSER) continue;
+            DBG("[stage-1] setns(fd=%d, %s) [pass 2]\n", e->fd, e->type);
+            if (setns(e->fd, e->nstype) < 0) {
+                fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
+                        e->type, e->fd, strerror(errno));
+                exit(1);
+            }
+            e->joined = 1;
+            joined_userns = 1;
+            close(e->fd);
+            e->fd = -1;
+            /* setns(CLONE_NEWUSER) clears effective capabilities.
+             * Become root in the joined userns to restore them (matching
+             * runc's setresuid(0,0,0) after user namespace join). */
+            if (setresuid(0, 0, 0) < 0) {
+                fprintf(stderr, "[stage-1] setresuid(0,0,0) after userns join failed: %s\n",
+                        strerror(errno));
+                exit(1);
+            }
+            if (setresgid(0, 0, 0) < 0) {
+                fprintf(stderr, "[stage-1] setresgid(0,0,0) after userns join failed: %s\n",
+                        strerror(errno));
+                exit(1);
+            }
+            DBG("[stage-1] now root in joined user namespace\n");
+        }
+
+        /* Pass 3: retry non-user namespaces skipped with EPERM. */
+        for (int i = 0; i < ns_count; i++) {
+            struct ns_entry *e = &ns_entries[i];
+            if (e->joined || e->nstype == CLONE_NEWUSER) continue;
+            DBG("[stage-1] setns(fd=%d, %s) [pass 3]\n", e->fd, e->type);
+            if (setns(e->fd, e->nstype) < 0) {
+                fprintf(stderr, "[stage-1] setns(%s, fd=%d) failed: %s\n",
+                        e->type, e->fd, strerror(errno));
+                exit(1);
+            }
+            e->joined = 1;
+            close(e->fd);
+            e->fd = -1;
+        }
     }
 
     if (clone_flags & CLONE_NEWUSER) {
@@ -412,15 +582,10 @@ void takoyaki_bootstrap(void) {
         DBG("[stage-1] now root in user namespace\n");
     }
 
-    /* cgroup namespace must be unshared BEFORE mount namespace so that the new mount
-     * namespace observes the cgroup namespace's view of /sys/fs/cgroup. */
-    if (clone_flags & CLONE_NEWCGROUP) {
-        DBG("[stage-1] unshare(CLONE_NEWCGROUP)\n");
-        if (unshare(CLONE_NEWCGROUP) < 0) {
-            fprintf(stderr, "[stage-1] unshare(CLONE_NEWCGROUP) failed: %s\n", strerror(errno));
-            exit(1);
-        }
-    }
+    /* CLONE_NEWCGROUP is NOT unshared here. The cgroup namespace root is
+     * captured at unshare time, and we need the init process to be in the
+     * container's cgroup first (via addPid). Stage-1 waits for the parent's
+     * CGROUP_ACK, then stage-2 calls unshare(CLONE_NEWCGROUP). */
     if (clone_flags & CLONE_NEWNS) {
         DBG("[stage-1] unshare(CLONE_NEWNS)\n");
         if (unshare(CLONE_NEWNS) < 0) {
@@ -478,6 +643,13 @@ void takoyaki_bootstrap(void) {
                 len += snprintf(buf + len, sizeof(buf) - len, "monotonic %s %s\n",
                                 mt_s, mt_n ? mt_n : "0");
             }
+            /* In a user namespace, prctl(PR_SET_DUMPABLE, 0) makes /proc/self
+             * inaccessible (owned by root in the INIT userns). Temporarily
+             * restore dumpability so we can write timens_offsets, then clear
+             * it again. Outside a userns this is harmless. */
+            if (clone_flags & CLONE_NEWUSER) {
+                prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+            }
             int fd = open("/proc/self/timens_offsets", O_WRONLY);
             if (fd < 0) {
                 fprintf(stderr, "[stage-1] open timens_offsets failed: %s\n",
@@ -490,6 +662,9 @@ void takoyaki_bootstrap(void) {
                     DBG("[stage-1] timens_offsets applied: %.*s", len, buf);
                 }
                 close(fd);
+            }
+            if (clone_flags & CLONE_NEWUSER) {
+                prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
             }
         }
     }
@@ -521,6 +696,16 @@ void takoyaki_bootstrap(void) {
             fprintf(stderr, "[stage-2] expected SYNC_GRANDCHILD, got 0x%x\n", s);
             _exit(1);
         }
+        /* Create the cgroup namespace NOW, after the parent has moved us into
+         * the container's cgroup. This ensures the cgroupns root is the
+         * container's cgroup, so /proc/self/cgroup shows "0::/" inside. */
+        if (clone_flags & CLONE_NEWCGROUP) {
+            DBG("[stage-2] unshare(CLONE_NEWCGROUP)\n");
+            if (unshare(CLONE_NEWCGROUP) < 0) {
+                fprintf(stderr, "[stage-2] unshare(CLONE_NEWCGROUP) failed: %s\n", strerror(errno));
+                _exit(1);
+            }
+        }
         if (setsid() < 0) {
             fprintf(stderr, "[stage-2] setsid failed: %s\n", strerror(errno));
             _exit(1);
@@ -531,12 +716,49 @@ void takoyaki_bootstrap(void) {
             _exit(1);
         }
         close(sync_pipe[0]);
+        DBG("child process in init()\n");
 
         /* Unset bootstrap-related env so the new process runs Java runtime fresh
          * as the init process (detected via args[0] == "__init__"). */
         unsetenv(ENV_IS_BOOTSTRAP);
         unsetenv(ENV_SYNCPIPE);
         unsetenv(ENV_CLONE_FLAGS);
+
+        /* Close all fds >= 3 (except those the Java init needs, which are
+         * passed via env vars). Mark them CLOEXEC first, then clear the flag
+         * on the fds that must survive execve. This prevents stray fds
+         * (e.g. bats output) from leaking into the container process. */
+#ifndef SYS_close_range
+#define SYS_close_range 436
+#endif
+#ifndef CLOSE_RANGE_CLOEXEC
+#define CLOSE_RANGE_CLOEXEC (1U << 2)
+#endif
+        if (syscall(SYS_close_range, 3, ~0U, CLOSE_RANGE_CLOEXEC) == 0) {
+            /* Clear CLOEXEC on fds that the Java init reads from env vars. */
+            char *env_val;
+            int keep_fd;
+            const char *keep_vars[] = {
+                "_TAKOYAKI_MAIN_SENDER_FD",
+                "_TAKOYAKI_NOTIFY_LISTENER_FD",
+                "_TAKOYAKI_SECCOMP_LISTENER_FD",
+                "_TAKOYAKI_CONSOLE_SOCKET_FD",
+                NULL
+            };
+            for (int i = 0; keep_vars[i]; i++) {
+                env_val = getenv(keep_vars[i]);
+                if (env_val) {
+                    keep_fd = atoi(env_val);
+                    if (keep_fd >= 3) {
+                        int fl = fcntl(keep_fd, F_GETFD, 0);
+                        if (fl != -1) fcntl(keep_fd, F_SETFD, fl & ~FD_CLOEXEC);
+                    }
+                }
+            }
+            DBG("[stage-2] CLOEXEC set on fds >= 3 (kept needed fds)\n");
+        } else {
+            DBG("[stage-2] close_range CLOEXEC not available: %s\n", strerror(errno));
+        }
 
         DBG("[stage-2] execve(/proc/self/exe __init__) to start fresh runtime\n");
         char *argv[] = { "takoyaki", "__init__", NULL };
@@ -551,6 +773,21 @@ void takoyaki_bootstrap(void) {
     if (write(sync_fd, &stage2_pid, sizeof(stage2_pid)) != sizeof(stage2_pid)) {
         fprintf(stderr, "[stage-1] write stage-2 pid failed: %s\n", strerror(errno));
         exit(1);
+    }
+
+    /* Wait for the parent to move the init process into the container's
+     * cgroup (addPid). Stage-2 will unshare CLONE_NEWCGROUP after this
+     * so the cgroupns root is the container's cgroup, not the parent's. */
+    if (clone_flags & CLONE_NEWCGROUP) {
+        if (read(sync_fd, &s, sizeof(s)) != sizeof(s)) {
+            fprintf(stderr, "[stage-1] read SYNC_CGROUP_ACK failed: %s\n", strerror(errno));
+            exit(1);
+        }
+        if (s != SYNC_CGROUP_ACK) {
+            fprintf(stderr, "[stage-1] expected SYNC_CGROUP_ACK, got 0x%x\n", s);
+            exit(1);
+        }
+        DBG("[stage-1] received CGROUP_ACK from parent\n");
     }
 
     s = SYNC_GRANDCHILD;

@@ -55,8 +55,10 @@ public final class Capability {
     }
 
     public static void applyBoundingSet(Spec.LinuxCapabilities caps) {
-        if (caps == null || caps.bounding == null) return;
-        Set<Integer> keep = parseSet(caps.bounding);
+        if (caps == null) return;
+        // When caps is non-null but bounding is null (empty capabilities object),
+        // treat as empty set: drop everything from the bounding set.
+        Set<Integer> keep = caps.bounding != null ? parseSet(caps.bounding) : Set.of();
         for (int i = 0; i <= LAST_CAP; i++) {
             if (!keep.contains(i)) {
                 Libc.prctl(Constants.PR_CAPBSET_DROP, i, 0, 0, 0);
@@ -84,14 +86,13 @@ public final class Capability {
             for (String name : caps.ambient) {
                 int id = idOf(name);
                 if (id < 0) continue;
-                long bit = 1L << id;
-                if ((per & bit) == 0 || (inh & bit) == 0) {
-                    Logger.warn("cap " + name + " requested in ambient but"
-                            + " not in permitted+inheritable; kernel would"
-                            + " reject the raise, skipping");
-                    continue;
+                if (Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_RAISE, id, 0, 0) != 0) {
+                    // runc compat: print the same warning logrus emits.
+                    String rawErr = Libc.strerror(Libc.errno());
+                    String errMsg = rawErr.isEmpty() ? rawErr
+                            : Character.toLowerCase(rawErr.charAt(0)) + rawErr.substring(1);
+                    System.err.println("can't raise ambient capability " + name + ": " + errMsg);
                 }
-                Libc.prctl(Constants.PR_CAP_AMBIENT, Constants.PR_CAP_AMBIENT_RAISE, id, 0, 0);
             }
         }
     }

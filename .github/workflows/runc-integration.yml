@@ -1,0 +1,59 @@
+name: runc integration tests
+
+# Runs runc's bats integration test suite against the takoyaki binary.
+# Scheduled daily and on manual dispatch so it does not block PRs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+
+jobs:
+  runc-bats:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev jq golang-go
+
+      - name: Install jextract
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          echo "sdkman_auto_answer=true" >> "$HOME/.sdkman/etc/config"
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install jextract
+          echo "$HOME/.sdkman/candidates/jextract/current/bin" >> "$GITHUB_PATH"
+
+      - name: Install GraalVM 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'gradle'
+
+      - name: Setup bats
+        uses: bats-core/bats-action@3.0.1
+        with:
+          bats-version: 1.9.0
+          support-install: false
+          assert-install: false
+          detik-install: false
+          file-install: false
+
+      - name: Build native takoyaki
+        run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
+
+      - name: Run runc integration tests
+        run: |
+          ./tests/runc/runc_integration_test.sh \
+            build/native/nativeCompile/takoyaki

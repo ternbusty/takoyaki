@@ -11,14 +11,15 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
 public final class Logger {
-    public enum Level { DEBUG, INFO, WARN, ERROR }
+    public enum Level { DEBUG, INFO, WARN, ERROR, OFF }
 
     public enum Format { TEXT, JSON }
 
-    private static volatile Level level = Level.INFO;
+    private static volatile Level level = Level.OFF;
     private static volatile String context = "main";
     private static volatile PrintStream out = System.err;
     private static volatile Format format = Format.TEXT;
+    private static volatile String logFilePath = null;
 
     private Logger() {}
 
@@ -26,10 +27,19 @@ public final class Logger {
     public static void setContext(String c) { context = c; }
     public static void setFormat(Format f) { format = f; }
 
+    /** Return the configured log file path, or null when writing to stderr. */
+    public static String getLogFilePath() { return logFilePath; }
+
+    /** Return the format name ("json" or "text"), or null for the default. */
+    public static String getFormatName() {
+        return format == Format.JSON ? "json" : null;
+    }
+
     public static void setLogFile(String path) {
         try {
             out = new PrintStream(Files.newOutputStream(Path.of(path),
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND));
+            logFilePath = path;
         } catch (IOException e) {
             System.err.println("[logger] failed to open log file " + path + ": " + e.getMessage());
         }
@@ -51,8 +61,12 @@ public final class Logger {
                     + "\",\"msg\":\"" + escape(msg)
                     + "\",\"time\":\"" + ts + "\"}");
         } else {
-            String ts = LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-            out.println("[" + ts + "] [" + l + "] [" + context + "] " + msg);
+            // logrus-compatible text format so runc bats tests can match
+            // "level=debug" and similar substrings.
+            String ts = OffsetDateTime.now(ZoneOffset.UTC)
+                    .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+            out.println("time=\"" + ts + "\" level=" + l.name().toLowerCase()
+                    + " msg=\"" + msg + "\"");
         }
         out.flush();
     }

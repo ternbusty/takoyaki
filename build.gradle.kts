@@ -198,10 +198,10 @@ val jextractLibc by tasks.registering(Exec::class) {
     inputs.property("multiarch", multiarch)
     outputs.dir(jextractDir)
     val functions = listOf(
-        "unshare", "setns", "mount", "umount2", "chdir", "sethostname",
+        "unshare", "setns", "mount", "umount2", "chdir", "sethostname", "setdomainname",
         "kill", "prctl", "umask", "getpid", "getppid", "__errno_location", "strerror",
         "execvp", "clearenv", "setenv", "setgroups", "prlimit64", "syscall", "geteuid",
-        "getegid", "setresuid", "setresgid", "mknod", "ioctl", "waitpid",
+        "getegid", "setresuid", "setresgid", "mknod", "ioctl", "waitpid", "chown",
     )
     commandLine(buildList {
         add(jextractBin.get())
@@ -222,6 +222,7 @@ val jextractConsts by tasks.registering(Exec::class) {
     val constants = listOf(
         // syscall numbers
         "SYS_capset", "SYS_close_range", "SYS_pivot_root", "SYS_keyctl", "SYS_bpf",
+        "SYS_ioprio_set", "SYS_sched_setattr", "SYS_sched_setaffinity",
         // namespaces
         "CLONE_NEWNS", "CLONE_NEWUTS", "CLONE_NEWIPC", "CLONE_NEWUSER",
         "CLONE_NEWPID", "CLONE_NEWNET", "CLONE_NEWCGROUP", "CLONE_NEWTIME",

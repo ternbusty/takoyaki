@@ -23,23 +23,53 @@ public final class DeleteCommand {
     public static int run(String rootPath, String containerId, boolean force) {
         if (!State.exists(rootPath, containerId)) {
             if (force) {
-                Logger.info("container " + containerId + " does not exist (force)");
+                // runc compat: --force on non-existent container succeeds
                 return 0;
             }
-            Logger.error("container " + containerId + " does not exist");
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         State state;
         try {
             state = State.load(rootPath, containerId).refreshStatus();
         } catch (Exception e) {
-            Logger.error("failed to load state: " + e.getMessage());
+            System.err.println("container " + containerId + " does not exist");
             return 1;
         }
         if (!state.statusEnum().canDelete()) {
             if (!force) {
-                Logger.error("cannot delete container in '" + state.status + "' state (use --force)");
+                System.err.println("cannot delete container " + containerId
+                        + " that is not stopped: " + state.status);
                 return 1;
+            }
+            // Unfreeze first if the container is paused, then kill all
+            // processes via cgroup (covers host pidns and exec'd workers).
+            try {
+                KontainerConfig kc = KontainerConfig.load(rootPath, containerId);
+                if (kc.cgroupPath != null) {
+                    // Unfreeze if frozen (paused containers cannot be killed while frozen)
+                    Path freeze = Cgroup.dir(kc.cgroupPath).resolve("cgroup.freeze");
+                    if (Files.exists(freeze) && "1".equals(Files.readString(freeze).trim())) {
+                        Files.writeString(freeze, "0");
+                    }
+                    // Kill all processes in cgroup
+                    Path procs = Cgroup.dir(kc.cgroupPath).resolve("cgroup.procs");
+                    if (Files.exists(procs)) {
+                        for (int attempt = 0; attempt < 10; attempt++) {
+                            String content = Files.readString(procs).trim();
+                            if (content.isEmpty()) break;
+                            for (String line : content.split("\n")) {
+                                try {
+                                    int pid = Integer.parseInt(line.trim());
+                                    Libc.kill(pid, Constants.SIGKILL);
+                                } catch (NumberFormatException ignored) {}
+                            }
+                            Thread.sleep(50);
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                Logger.debug("cgroup kill during force delete: " + e.getMessage());
             }
             if (state.pid != null) {
                 Libc.kill(state.pid, Constants.SIGKILL);

@@ -64,7 +64,7 @@ class HooksTest {
                 """.formatted(output));
         script.toFile().setExecutable(true);
 
-        Spec.Hook h = hook(script.toString(), List.of("hook.sh"), 5L);
+        Spec.Hook h = hook(script.toString(), List.of(script.toString()), 5L);
         Hooks.run(List.of(h), sampleState(), "prestart");
 
         assertTrue(Files.exists(output), "hook should have written its stdin");

@@ -40,33 +40,44 @@ public final class ExecCommand {
     private static final String[] NS_ORDER =
             {"user", "cgroup", "ipc", "uts", "net", "time", "pid", "mnt"};
 
+    /** runc-compatible exit code for runtime-level exec errors. */
+    private static final int EXIT_RUNTIME_ERROR = 255;
+
     public static int run(String rootPath, String containerId, String processJsonPath,
                           String user, String cwd, List<String> envs, List<String> command,
-                          boolean detach, String pidFile) {
+                          boolean detach, String pidFile, boolean tty, String consoleSocket,
+                          List<String> additionalGids, List<String> caps, int preserveFds,
+                          String subCgroupPath, Spec.Box consoleSize) {
         String exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command);
         if (exclusivity != null) {
-            Logger.error(exclusivity);
-            return 1;
+            System.err.println(exclusivity);
+            return EXIT_RUNTIME_ERROR;
         }
 
         State state;
         try {
             state = State.load(rootPath, containerId).refreshStatus();
         } catch (Exception e) {
-            Logger.error("failed to load state: " + e.getMessage());
-            return 1;
+            System.err.println("container " + containerId + " does not exist");
+            return EXIT_RUNTIME_ERROR;
         }
-        if (state.statusEnum() != ContainerStatus.RUNNING || state.pid == null) {
-            Logger.error("container " + containerId + " is not running");
-            return 1;
+        if (state.statusEnum() == ContainerStatus.PAUSED) {
+            System.err.println("cannot exec in a paused container");
+            return EXIT_RUNTIME_ERROR;
+        }
+        if ((state.statusEnum() != ContainerStatus.RUNNING
+                && state.statusEnum() != ContainerStatus.CREATED)
+                || state.pid == null) {
+            System.err.println("container " + containerId + " is not running");
+            return EXIT_RUNTIME_ERROR;
         }
 
         Spec spec;
         try {
             spec = Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson);
         } catch (Exception e) {
-            Logger.error("failed to load config.json: " + e.getMessage());
-            return 1;
+            System.err.println("failed to load config.json: " + e.getMessage());
+            return EXIT_RUNTIME_ERROR;
         }
 
         // Effective process document: `-p FILE` verbatim (runc semantics), or
@@ -76,15 +87,27 @@ public final class ExecCommand {
             if (processJsonPath != null) {
                 process = Json.readFile(Path.of(processJsonPath), Spec.Process::fromJson);
                 if (process == null || process.args == null || process.args.isEmpty()) {
-                    Logger.error("process.json has no args");
-                    return 1;
+                    System.err.println("process.json has no args");
+                    return EXIT_RUNTIME_ERROR;
                 }
             } else {
-                process = buildEffectiveProcess(spec.process, user, cwd, envs, command);
+                process = buildEffectiveProcess(spec.process, user, cwd, envs, command,
+                        tty, additionalGids, caps);
             }
         } catch (Exception e) {
-            Logger.error("failed to build process document: " + e.getMessage());
-            return 1;
+            System.err.println("failed to build process document: " + e.getMessage());
+            return EXIT_RUNTIME_ERROR;
+        }
+
+        // Apply --console-size if provided by the CLI.
+        if (consoleSize != null) {
+            process.consoleSize = consoleSize;
+        }
+
+        // Resolve effective execCPUAffinity: process.json overrides config.json.
+        Spec.ExecCPUAffinity effectiveAffinity = process.execCPUAffinity;
+        if (effectiveAffinity == null && spec.process != null) {
+            effectiveAffinity = spec.process.execCPUAffinity;
         }
 
         ExecPayload payload = new ExecPayload();
@@ -93,6 +116,7 @@ public final class ExecCommand {
         payload.ociVersion = state.ociVersion;
         payload.process = process;
         payload.seccomp = spec.linux != null ? spec.linux.seccomp : null;
+        payload.preserveFds = preserveFds;
         // A missing runtime config just means a container created before cgroup
         // support (skip); any other load failure must NOT silently exec the
         // process outside the container's resource limits.
@@ -102,12 +126,35 @@ public final class ExecCommand {
         } catch (java.nio.file.NoSuchFileException e) {
             Logger.debug("no cgroup config for " + containerId);
         } catch (Exception e) {
-            Logger.error("failed to load cgroup config: " + e.getMessage());
-            return 1;
+            System.err.println("failed to load cgroup config: " + e.getMessage());
+            return EXIT_RUNTIME_ERROR;
+        }
+
+        // runc compat: --cgroup PATH resolves to a subcgroup under the
+        // container's cgroup. "/" means the container root cgroup (default).
+        // A non-existing subcgroup is an error.
+        String effectiveCgroupPath = cgroupPath;
+        boolean cgroupExplicitRoot = false;
+        if (subCgroupPath != null && !"/".equals(subCgroupPath)) {
+            if (cgroupPath == null) {
+                System.err.println("--cgroup specified but container has no cgroup");
+                return EXIT_RUNTIME_ERROR;
+            }
+            String resolved = cgroupPath + "/" + subCgroupPath;
+            if (!java.nio.file.Files.isDirectory(Cgroup.dir(resolved))) {
+                System.err.println("exec cgroup " + resolved + ": no such file or directory");
+                return EXIT_RUNTIME_ERROR;
+            }
+            effectiveCgroupPath = resolved;
+        }
+        if ("/".equals(subCgroupPath)) {
+            cgroupExplicitRoot = true;
         }
 
         try (Arena arena = Arena.ofConfined()) {
-            return spawn(arena, state.pid, payload, cgroupPath, detach, pidFile);
+            return spawn(arena, state.pid, payload, effectiveCgroupPath, detach,
+                    pidFile, effectiveAffinity, cgroupExplicitRoot, cgroupPath,
+                    consoleSocket);
         }
     }
 
@@ -136,7 +183,9 @@ public final class ExecCommand {
      * Package-visible for unit tests.
      */
     static Spec.Process buildEffectiveProcess(Spec.Process base, String user, String cwd,
-                                              List<String> envs, List<String> command) {
+                                              List<String> envs, List<String> command,
+                                              boolean tty, List<String> additionalGids,
+                                              List<String> caps) {
         if (base == null) {
             throw new IllegalArgumentException("container config has no process section");
         }
@@ -148,6 +197,11 @@ public final class ExecCommand {
         if (p.args == null || p.args.isEmpty()) {
             throw new IllegalArgumentException("no command specified");
         }
+        // runc compat: exec defaults to terminal=false unless -t is
+        // explicitly passed. Without this, exec inherits terminal=true from
+        // the container spec and allocates a PTY for every exec, breaking
+        // output comparison in bats tests.
+        p.terminal = tty;
         if (user != null) {
             String[] uv = user.split(":");
             Spec.User u = new Spec.User();
@@ -157,6 +211,24 @@ public final class ExecCommand {
             u.additionalGids = p.user != null ? p.user.additionalGids : null;
             p.user = u;
         }
+        if (additionalGids != null && !additionalGids.isEmpty()) {
+            if (p.user == null) p.user = new Spec.User();
+            List<Integer> gids = p.user.additionalGids != null
+                    ? new ArrayList<>(p.user.additionalGids)
+                    : new ArrayList<>();
+            for (String g : additionalGids) {
+                gids.add(Integer.parseInt(g));
+            }
+            p.user.additionalGids = gids;
+        }
+        if (caps != null && !caps.isEmpty()) {
+            // --cap adds capabilities to all sets. Initialise from spec or empty.
+            if (p.capabilities == null) p.capabilities = new Spec.LinuxCapabilities();
+            for (String cap : caps) {
+                String c = cap.startsWith("CAP_") ? cap : "CAP_" + cap;
+                addCap(p.capabilities, c);
+            }
+        }
         if (cwd != null) {
             p.cwd = cwd;
         }
@@ -165,13 +237,31 @@ public final class ExecCommand {
             merged.addAll(envs);
             p.env = merged;
         }
-        if (p.env == null || p.env.isEmpty()) {
-            // No env anywhere in the spec: give the process a sane default PATH.
-            p.env = List.of(
-                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                    "HOME=/root");
+        if (p.env == null) {
+            // No env anywhere in the spec. ExecProcess will add HOME from
+            // /etc/passwd; no need to hardcode HOME here.
+            p.env = List.of();
         }
         return p;
+    }
+
+    /**
+     * runc's exec --cap adds the capability to bounding, effective, and
+     * permitted. It does NOT add to inheritable. It adds to ambient only
+     * if the capability is already present in inheritable (from the spec).
+     */
+    private static void addCap(Spec.LinuxCapabilities c, String cap) {
+        if (c.bounding == null) c.bounding = new ArrayList<>();
+        if (!c.bounding.contains(cap)) c.bounding.add(cap);
+        if (c.effective == null) c.effective = new ArrayList<>();
+        if (!c.effective.contains(cap)) c.effective.add(cap);
+        if (c.permitted == null) c.permitted = new ArrayList<>();
+        if (!c.permitted.contains(cap)) c.permitted.add(cap);
+        // Ambient: only if already in inheritable.
+        if (c.inheritable != null && c.inheritable.contains(cap)) {
+            if (c.ambient == null) c.ambient = new ArrayList<>();
+            if (!c.ambient.contains(cap)) c.ambient.add(cap);
+        }
     }
 
     /**
@@ -180,11 +270,14 @@ public final class ExecCommand {
      * payload socket because none of them carry CLOEXEC.
      */
     private static int spawn(Arena arena, int initPid, ExecPayload payload,
-                             String cgroupPath, boolean detach, String pidFile) {
+                             String cgroupPath, boolean detach, String pidFile,
+                             Spec.ExecCPUAffinity affinity,
+                             boolean cgroupExplicitRoot, String containerCgroupPath,
+                             String consoleSocket) {
         String exePath = PosixIO.readlink(arena, "/proc/self/exe");
         if (exePath == null) {
-            Logger.error("readlink /proc/self/exe failed");
-            return 1;
+            System.err.println("readlink /proc/self/exe failed");
+            return EXIT_RUNTIME_ERROR;
         }
 
         // Seccomp notify listener: the socket path only resolves on the host,
@@ -208,6 +301,7 @@ public final class ExecCommand {
         // helper threads), in the order given here; any failure there is fatal.
         List<Integer> nsFds = new ArrayList<>();
         StringJoiner nsFdList = new StringJoiner(",");
+        int cgroupNsFd = -1;
         for (String type : NS_ORDER) {
             String path = "/proc/" + initPid + "/ns/" + type;
             if (!java.nio.file.Files.exists(Path.of(path))) continue;
@@ -220,16 +314,58 @@ public final class ExecCommand {
                 continue;
             }
             nsFds.add(fd);
-            nsFdList.add(type + ":" + fd);
+            // Cgroup namespace must NOT be entered in bootstrap.c: the exec
+            // process is moved to the container's cgroup by the CLI AFTER the
+            // clone, so entering cgroupns before that makes /proc/self/cgroup
+            // show a host-relative path instead of "0::/". We pass the fd
+            // separately and do setns(cgroup) in ExecProcess after reading
+            // the payload (which is the sync point for cgroup membership).
+            if ("cgroup".equals(type)) {
+                cgroupNsFd = fd;
+            } else {
+                nsFdList.add(type + ":" + fd);
+            }
         }
 
         int[] payloadFds = new int[2];
         if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, payloadFds) < 0) {
-            Logger.error("socketpair failed: " + Libc.strerror(Libc.errno()));
-            return 1;
+            System.err.println("socketpair failed: " + Libc.strerror(Libc.errno()));
+            return EXIT_RUNTIME_ERROR;
         }
         int readFd = payloadFds[0];
         int writeFd = payloadFds[1];
+
+        // "Exec ready" sync socketpair: ExecProcess writes a byte after all
+        // process restrictions are applied; ExecCommand reads it before
+        // writing the pid file. This ensures scheduler, capabilities, seccomp
+        // etc. are in place by the time external observers inspect the pid.
+        int[] execSyncFds = new int[2];
+        int execSyncReadFd = -1; // ExecCommand reads from this
+        int execSyncWriteFd = -1; // ExecProcess writes to this
+        if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, execSyncFds) < 0) {
+            Logger.warn("exec sync socketpair failed, pid file may race with restrictions");
+        } else {
+            execSyncReadFd = execSyncFds[0];
+            execSyncWriteFd = execSyncFds[1];
+        }
+
+        // Console socketpair for exec -t: one end goes to ExecProcess so it
+        // can send back the PTY master fd via SCM_RIGHTS after opening a pty
+        // in the container's devpts.
+        boolean wantTerminal = payload.process != null
+                && Boolean.TRUE.equals(payload.process.terminal);
+        int consoleReadFd = -1; // ExecCommand's end: receives master
+        int consoleWriteFd = -1; // ExecProcess's end: sends master
+        if (wantTerminal) {
+            int[] consoleFds = new int[2];
+            if (PosixIO.socketpair(arena, Constants.AF_UNIX,
+                    Constants.SOCK_STREAM, 0, consoleFds) < 0) {
+                Logger.warn("console socketpair failed, PTY will be skipped");
+            } else {
+                consoleReadFd = consoleFds[0];
+                consoleWriteFd = consoleFds[1];
+            }
+        }
 
         List<String> envList = HostEnv.inherited();
         envList.add("_TAKOYAKI_EXEC_PAYLOAD_FD=" + readFd);
@@ -239,8 +375,33 @@ public final class ExecCommand {
         if (seccompListenerFd >= 0) {
             envList.add("_TAKOYAKI_SECCOMP_LISTENER_FD=" + seccompListenerFd);
         }
+        if (consoleWriteFd >= 0) {
+            envList.add("_TAKOYAKI_EXEC_CONSOLE_FD=" + consoleWriteFd);
+        }
+        if (cgroupNsFd >= 0) {
+            envList.add("_TAKOYAKI_EXEC_CGROUPNS_FD=" + cgroupNsFd);
+        }
+        if (execSyncWriteFd >= 0) {
+            envList.add("_TAKOYAKI_EXEC_SYNC_FD=" + execSyncWriteFd);
+        }
         if (Logger.isDebugEnabled()) {
             envList.add("_TAKOYAKI_EXEC_DEBUG=1");
+        }
+        // Propagate log file/format so bootstrap.c and ExecProcess can write
+        // debug output to the same place the CLI's --log flag specified.
+        String logFilePath = Logger.getLogFilePath();
+        if (logFilePath != null) {
+            envList.add("_TAKOYAKI_LOG_FILE=" + logFilePath);
+        }
+        String logFmt = Logger.getFormatName();
+        if (logFmt != null) {
+            envList.add("_TAKOYAKI_LOG_FORMAT=" + logFmt);
+        }
+        // Pass initial CPU affinity to bootstrap.c so it can set the affinity
+        // on the parent thread before fork, letting the child inherit it.
+        if (affinity != null && affinity.initial != null && !affinity.initial.isEmpty()) {
+            long mask = Spec.ExecCPUAffinity.parseCpuList(affinity.initial);
+            envList.add("_TAKOYAKI_EXEC_CPU_INITIAL=0x" + Long.toHexString(mask));
         }
 
         String[] argv = {exePath, "__exec__"};
@@ -254,19 +415,21 @@ public final class ExecCommand {
 
         int childPid = PosixIO.fork();
         if (childPid < 0) {
-            Logger.error("fork failed: " + Libc.strerror(Libc.errno()));
-            return 1;
+            System.err.println("fork failed: " + Libc.strerror(Libc.errno()));
+            return EXIT_RUNTIME_ERROR;
         }
         if (childPid == 0) {
             // Close the write side so the payload read sees EOF once the
             // parent is done; everything else is meant to be inherited.
             PosixIO.close(writeFd);
+            if (execSyncReadFd >= 0) PosixIO.close(execSyncReadFd);
             PosixIO.invokeExecve(execve);
             PosixIO._exit(1);
             return 1;
         }
 
         PosixIO.close(readFd);
+        if (execSyncWriteFd >= 0) PosixIO.close(execSyncWriteFd);
         for (int fd : nsFds) PosixIO.close(fd);
         if (seccompListenerFd >= 0) PosixIO.close(seccompListenerFd);
 
@@ -277,10 +440,10 @@ public final class ExecCommand {
         try {
             workloadPid = SyncChannel.readInt32(writeFd);
         } catch (RuntimeException e) {
-            Logger.error("no pid report from exec bootstrap: " + e.getMessage());
+            System.err.println("no pid report from exec bootstrap: " + e.getMessage());
             PosixIO.close(writeFd);
             Wait.waitForChild(childPid);
-            return 1;
+            return EXIT_RUNTIME_ERROR;
         }
 
         // Reap the intermediate, which exits right after the pid report. The
@@ -291,25 +454,97 @@ public final class ExecCommand {
         // Container cgroup membership BEFORE sending the payload: the workload
         // proceeds past its payload read only after we finish writing, so it
         // cannot reach user code outside the cgroup.
-        Cgroup.addPid(cgroupPath, workloadPid);
+        // runc compat: when domain controllers are enabled and no explicit
+        // --cgroup was given, joining the container root cgroup fails (EBUSY).
+        // Fall back to the init process's current cgroup.
+        boolean cgroupOk = Cgroup.addPid(cgroupPath, workloadPid);
+        if (!cgroupOk && cgroupExplicitRoot) {
+            // runc compat: --cgroup / explicitly requests the container root
+            // cgroup. If the root cgroup has domain controllers enabled,
+            // writing to cgroup.procs returns EBUSY. Report this as an error
+            // rather than silently falling through.
+            System.err.println("error adding pid " + workloadPid
+                    + " to cgroups: write " + Cgroup.dir(cgroupPath)
+                    + "/cgroup.procs: device or resource busy");
+            // Kill the workload and return an error.
+            Libc.kill(workloadPid, 9);
+            Wait.waitForChild(workloadPid);
+            PosixIO.close(writeFd);
+            if (consoleWriteFd >= 0) PosixIO.close(consoleWriteFd);
+            if (consoleReadFd >= 0) PosixIO.close(consoleReadFd);
+            return EXIT_RUNTIME_ERROR;
+        }
+        if (!cgroupOk && containerCgroupPath != null) {
+            String initCgroup = Cgroup.readProcessCgroup(initPid);
+            if (initCgroup != null) {
+                // readProcessCgroup returns the absolute v2 path from the host
+                // cgroup namespace (e.g. "/container-cg/foobar" or "/runc-tst-123").
+                // Use it directly because init may have moved outside the
+                // container's original cgroup entirely.
+                Logger.debug("exec cgroup fallback to init's cgroup: " + initCgroup);
+                Cgroup.addPid(initCgroup, workloadPid);
+            }
+        }
+
+        // runc compat: set final CPU affinity after cgroup assignment.
+        // If affinity.final is set, apply that specific mask.
+        // If no affinity is configured at all, reset to all CPUs (kernel
+        // clamps to cpuset). If only initial was set, do nothing (initial
+        // persists through the exec).
+        if (affinity != null && affinity.fin != null && !affinity.fin.isEmpty()) {
+            setCpuAffinity(workloadPid, affinity.fin);
+        } else if (affinity == null || affinity.initial == null || affinity.initial.isEmpty()) {
+            resetCpuAffinity(workloadPid);
+        }
 
         // Stream the payload; the workload drains concurrently, so there is no
         // socket-buffer deadlock however large the profile is. Closing our end
         // gives the workload's read its EOF.
         boolean written = PosixIO.writeAll(arena, writeFd, payloadBytes);
         if (!written) {
-            Logger.error("payload write failed: " + Libc.strerror(Libc.errno()));
+            System.err.println("payload write failed: " + Libc.strerror(Libc.errno()));
             // Fall through: the workload sees a truncated payload, fails its
             // JSON parse and exits; reap it instead of leaving a zombie.
         }
         PosixIO.close(writeFd);
+        if (consoleWriteFd >= 0) PosixIO.close(consoleWriteFd);
+
+        // Receive the PTY master fd from ExecProcess. The workload opens a
+        // pty in the container's devpts and sends the master back via
+        // SCM_RIGHTS on the console socketpair.
+        int masterFd = -1;
+        Thread ioThread = null;
+        if (consoleReadFd >= 0) {
+            masterFd = com.ternbusty.takoyaki.console.InternalConsole
+                    .receiveMasterFromSocket(consoleReadFd);
+            PosixIO.close(consoleReadFd);
+            if (masterFd >= 0 && consoleSocket != null) {
+                // runc compat: forward the master fd to the external console
+                // socket (e.g. recvtty) so the caller manages the PTY. This
+                // is required for detached exec with --console-socket.
+                com.ternbusty.takoyaki.console.ConsoleSocket
+                        .sendMasterTo(consoleSocket, masterFd);
+            } else if (masterFd >= 0 && !detach) {
+                ioThread = com.ternbusty.takoyaki.console.InternalConsole
+                        .startIOCopyForFd(masterFd);
+            }
+        }
+
+        // Wait for the "exec ready" sync byte before writing the pid file.
+        // ExecProcess sends this after applying all process restrictions
+        // (scheduler, capabilities, seccomp) so the pid file only appears
+        // once the workload is fully configured.
+        if (execSyncReadFd >= 0 && written) {
+            SyncChannel.readByte(execSyncReadFd);
+            PosixIO.close(execSyncReadFd);
+        }
 
         if (pidFile != null && written) {
             try {
                 java.nio.file.Files.writeString(Path.of(pidFile), Integer.toString(workloadPid));
             } catch (java.io.IOException e) {
-                Logger.error("write pid file failed: " + e.getMessage());
-                return 1;
+                System.err.println("write pid file failed: " + e.getMessage());
+                return EXIT_RUNTIME_ERROR;
             }
         }
 
@@ -317,9 +552,51 @@ public final class ExecCommand {
             // Deliberately no wait: with no live ancestors the workload
             // reparents to the caller's subreaper — containerd's shim relies
             // on that to reap a detached exec and observe its exit.
+            if (masterFd >= 0) PosixIO.close(masterFd);
             return 0;
         }
         int code = Wait.waitForChild(workloadPid);
-        return written ? code : 1;
+        // Join the ioThread BEFORE closing masterFd so it can drain remaining
+        // PTY output. Once the container exits the slave side closes, causing
+        // read on the master to return EOF; closing the master prematurely
+        // races with the reader and can lose the last chunk of output.
+        if (ioThread != null) {
+            try { ioThread.join(5_000); } catch (InterruptedException ignored) {}
+        }
+        if (masterFd >= 0) PosixIO.close(masterFd);
+        return written ? code : EXIT_RUNTIME_ERROR;
+    }
+
+    /** Set CPU affinity from a Linux CPU list string (e.g. "0-3,5"). */
+    private static void setCpuAffinity(int pid, String cpuList) {
+        long mask = Spec.ExecCPUAffinity.parseCpuList(cpuList);
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            int size = 128;
+            java.lang.foreign.MemorySegment seg = arena.allocate(size);
+            seg.fill((byte) 0);
+            // Write the mask in little-endian long order.
+            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0, mask);
+            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                    pid, size, seg.address(), 0L, 0L);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): "
+                        + Libc.strerror(Libc.errno()));
+            }
+        }
+    }
+
+    /** Reset CPU affinity of pid to all CPUs. See MainProcess.resetCpuAffinity. */
+    private static void resetCpuAffinity(int pid) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            int size = 128; // cpu_set_t: 1024 bits
+            java.lang.foreign.MemorySegment mask = arena.allocate(size);
+            mask.fill((byte) 0xFF);
+            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                    pid, size, mask.address(), 0L, 0L);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity(" + pid + "): "
+                        + Libc.strerror(Libc.errno()));
+            }
+        }
     }
 }

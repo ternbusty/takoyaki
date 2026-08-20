@@ -18,6 +18,7 @@ public final class ExecPayload {
     public String ociVersion;
     public Spec.Process process;
     public Spec.LinuxSeccomp seccomp;
+    public int preserveFds;
 
     public static ExecPayload fromJson(Object node) {
         if (node == null) return null;
@@ -28,6 +29,7 @@ public final class ExecPayload {
         p.ociVersion = JsonMap.str(o, "ociVersion");
         p.process = Spec.Process.fromJson(o.get("process"));
         p.seccomp = Spec.LinuxSeccomp.fromJson(o.get("seccomp"));
+        p.preserveFds = JsonMap.intOr(o, "preserveFds", 0);
         return p;
     }
 
@@ -38,6 +40,7 @@ public final class ExecPayload {
         JsonMap.put(o, "ociVersion", ociVersion);
         JsonMap.put(o, "process", process == null ? null : process.toJson());
         JsonMap.put(o, "seccomp", seccomp == null ? null : seccomp.toJson());
+        if (preserveFds > 0) JsonMap.put(o, "preserveFds", preserveFds);
         return o;
     }
 }

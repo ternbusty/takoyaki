@@ -11,6 +11,7 @@ import com.ternbusty.takoyaki.syscall.hdr.Consts;
 public final class Constants {
     private Constants() {}
 
+
     public static final int CLONE_NEWNS = Consts.CLONE_NEWNS();
     public static final int CLONE_NEWUTS = Consts.CLONE_NEWUTS();
     public static final int CLONE_NEWIPC = Consts.CLONE_NEWIPC();
@@ -30,11 +31,13 @@ public final class Constants {
     public static final long MS_NOATIME = Consts.MS_NOATIME();
     public static final long MS_RELATIME = Consts.MS_RELATIME();
     public static final long MS_STRICTATIME = Consts.MS_STRICTATIME();
+    public static final long MS_NODIRATIME = 2048L;   // 0x800, stable across architectures
     public static final long MS_NOSYMFOLLOW = Consts.MS_NOSYMFOLLOW();
     public static final long MS_PRIVATE = Consts.MS_PRIVATE();
     public static final long MS_SLAVE = Consts.MS_SLAVE();
     public static final long MS_SHARED = Consts.MS_SHARED();
     public static final long MS_UNBINDABLE = Consts.MS_UNBINDABLE();
+    public static final long MS_MOVE = 8192L;         // 0x2000, stable across architectures
 
     public static final int MNT_DETACH = Consts.MNT_DETACH();
 
@@ -120,6 +123,9 @@ public final class Constants {
     public static final long NR_close_range = Consts.SYS_close_range();
     // glibc ships no pivot_root wrapper (man 2 pivot_root says to use syscall(2)).
     public static final long NR_pivot_root = Consts.SYS_pivot_root();
+    // chroot(2): glibc has a wrapper, but it's not in our jextract headers.
+    // Syscall 51 on aarch64, 161 on x86_64; we only run on aarch64.
+    public static final long NR_chroot = 51L;
     public static final long NR_keyctl = Consts.SYS_keyctl();
     public static final long NR_bpf = Consts.SYS_bpf();
     public static final int CLOSE_RANGE_CLOEXEC = Consts.CLOSE_RANGE_CLOEXEC();
@@ -128,6 +134,15 @@ public final class Constants {
     public static final long SIOCGIFFLAGS = Consts.SIOCGIFFLAGS();
     public static final long SIOCSIFFLAGS = Consts.SIOCSIFFLAGS();
     public static final int IFF_UP = Consts.IFF_UP();
+    // TTY ioctl codes (not in jextract headers, stable across Linux architectures)
+    public static final long TIOCSCTTY  = 0x540EL;
+    public static final long TIOCSWINSZ = 0x5414L;
+    public static final long TIOCGWINSZ = 0x5413L;
+    // termios ioctl codes (asm-generic, same on x86_64 and aarch64)
+    public static final long TCGETS = 0x5401L;
+    public static final long TCSETS = 0x5402L;
+    // termios c_oflag bits
+    public static final int ONLCR = 0x4;
 
     // mknod / stat mode bits
     public static final int S_IFCHR = Consts.S_IFCHR();
@@ -135,4 +150,27 @@ public final class Constants {
     public static final int S_IFIFO = Consts.S_IFIFO();
 
     public static final int KEYCTL_JOIN_SESSION_KEYRING = Consts.KEYCTL_JOIN_SESSION_KEYRING();
+
+    // ioprio / scheduler / affinity syscall numbers
+    public static final long NR_ioprio_set = Consts.SYS_ioprio_set();
+    public static final long NR_sched_setattr = Consts.SYS_sched_setattr();
+    public static final long NR_sched_setaffinity = Consts.SYS_sched_setaffinity();
+
+    // ioprio constants (from linux/ioprio.h)
+    public static final int IOPRIO_WHO_PROCESS = 1;
+
+    // mount_setattr(2) constants (linux/mount.h, since kernel 5.12)
+    // Syscall 442 on both aarch64 and x86_64 (added in 5.12, same ABI number).
+    public static final long NR_mount_setattr = 442L;
+    public static final long MOUNT_ATTR_RDONLY       = 0x1L;
+    public static final long MOUNT_ATTR_NOSUID       = 0x2L;
+    public static final long MOUNT_ATTR_NODEV        = 0x4L;
+    public static final long MOUNT_ATTR_NOEXEC       = 0x8L;
+    public static final long MOUNT_ATTR_NOATIME      = 0x10L;
+    public static final long MOUNT_ATTR_STRICTATIME  = 0x20L;
+    public static final long MOUNT_ATTR_NODIRATIME   = 0x80L;
+    public static final long MOUNT_ATTR_RELATIME     = 0x0L;
+    public static final long MOUNT_ATTR_NOSYMFOLLOW  = 0x200000L;
+    public static final long MOUNT_ATTR__ATIME       = 0x70L;
+    public static final int  AT_RECURSIVE            = 0x8000;
 }

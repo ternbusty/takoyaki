@@ -24,6 +24,19 @@ public final class Cgroup {
     private static final Set<String> KNOWN_CONTROLLERS =
             Set.of("cpu", "cpuset", "memory", "pids", "io", "hugetlb");
 
+    /**
+     * Control files whose write failures should propagate as exceptions during
+     * container setup (strict mode). These are the core resource files; an
+     * invalid value (e.g. too-small period) should abort create rather than
+     * silently succeed.
+     */
+    private static final Set<String> STRICT_FILES = Set.of(
+            "cpu.max", "cpu.weight", "cpu.idle",
+            "cpuset.cpus", "cpuset.mems",
+            "memory.max", "memory.min", "memory.high", "memory.low",
+            "memory.swap.max",
+            "pids.max");
+
     private Cgroup() {}
 
     /**
@@ -45,19 +58,47 @@ public final class Cgroup {
             return;
         }
 
+        // Reject if the cgroup already has processes (runc compat: error for
+        // a non-empty cgroup to avoid resource conflicts).
+        try {
+            String procs = Files.readString(full.resolve("cgroup.procs")).trim();
+            if (!procs.isEmpty()) {
+                throw new RuntimeException(
+                        "container's cgroup is not empty: " + full);
+            }
+        } catch (IOException ignored) {
+            // cgroup.procs not readable yet (newly created directory)
+        }
+
+        // Reject if the cgroup is already frozen (runc compat).
+        try {
+            String freeze = Files.readString(full.resolve("cgroup.freeze")).trim();
+            if ("1".equals(freeze)) {
+                throw new RuntimeException(
+                        "container's cgroup unexpectedly frozen");
+            }
+        } catch (IOException ignored) {
+            // cgroup.freeze not available (newly created or no freezer)
+        }
+
         // Ensure controllers are enabled in the parent's subtree_control so this cgroup
         // can use them. Walk from root downward.
         enableControllers(full, linux != null ? linux.resources : null);
 
-        applyLimits(full, linux != null ? linux.resources : null);
+        // Skip pids.max here; it's applied after INIT_READY by
+        // MainProcess.applyDeferredPids so the Java init process can create
+        // threads needed for GraalVM startup without hitting a low pids limit.
+        applyLimits(full, linux != null ? linux.resources : null, true, true);
 
         addPid(cgroupPath, pid);
 
-        // eBPF device cgroup for resources.devices (cgroup v2 only path).
-        if (linux != null && linux.resources != null && linux.resources.devices != null
-                && !linux.resources.devices.isEmpty()) {
-            DeviceCgroup.apply(cgroupPath, linux.resources.devices);
-        }
+        // The eBPF device program is NOT attached here. It is deferred to
+        // applyDeferredDevices() which MainProcess calls after INIT_READY.
+        // The init process needs to create device nodes (mknod) during
+        // rootfs setup, and attaching the BPF program before that would
+        // block mknod for devices not in the allow list. This matches
+        // runc's ordering: cgroupManager.Set (which includes devices) runs
+        // after SYNC_READY, not during Apply.
     }
 
     /**
@@ -65,23 +106,48 @@ public final class Cgroup {
      * directory creation, controller enablement, limits, and the device BPF
      * program are all left untouched (see setup for the full path).
      */
-    public static void addPid(String cgroupPath, long pid) {
-        if (cgroupPath == null) return;
+    /**
+     * Write pid to cgroup.procs. Returns true on success, false on failure.
+     */
+    public static boolean addPid(String cgroupPath, long pid) {
+        if (cgroupPath == null) return true;
         Path full = dir(cgroupPath);
         try {
             Files.writeString(full.resolve("cgroup.procs"), Long.toString(pid));
             Logger.debug("added pid " + pid + " to cgroup " + full);
+            return true;
         } catch (IOException e) {
-            Logger.warn("add pid to cgroup failed: " + e.getMessage());
+            Logger.warn("adding pid " + pid + " to cgroups " + full
+                    + " failed: " + e.getMessage());
+            return false;
         }
     }
 
+    /**
+     * Read /proc/pid/cgroup and return the v2 cgroup path (the part after
+     * "0::"). Returns null if unreadable.
+     */
+    public static String readProcessCgroup(int pid) {
+        try {
+            String content = Files.readString(Path.of("/proc/" + pid + "/cgroup"));
+            for (String line : content.split("\n")) {
+                if (line.startsWith("0::")) {
+                    return line.substring(3);
+                }
+            }
+        } catch (IOException e) {
+            Logger.debug("read /proc/" + pid + "/cgroup failed: " + e.getMessage());
+        }
+        return null;
+    }
+
     private static void enableControllers(Path full, Spec.LinuxResources r) {
-        // Derive the needed controller set from the control files applyLimits
-        // is about to write: the prefix before the first '.' names the
-        // controller ("memory.max" -> memory). This handles the strongly
-        // typed fields and resources.unified keys uniformly.
+        // runc compat: enable ALL available controllers in the parent's
+        // subtree_control, not just the ones we plan to write. The container
+        // might use controllers internally (e.g. creating subcgroups and
+        // enabling controllers for them).
         Set<String> needed = new LinkedHashSet<>();
+        // First, collect controllers from planned writes.
         for (Map.Entry<String, String> e : plannedWrites(r)) {
             String file = e.getKey();
             int dot = file.indexOf('.');
@@ -89,6 +155,23 @@ public final class Cgroup {
                 String ctrl = file.substring(0, dot);
                 if (KNOWN_CONTROLLERS.contains(ctrl)) needed.add(ctrl);
             }
+        }
+        // Also enable any controllers that are available in the parent but
+        // not yet in subtree_control. This matches runc's behaviour of
+        // propagating all available controllers to the container's cgroup.
+        try {
+            Path parentCtrl = full.getParent() != null
+                    ? full.getParent().resolve("cgroup.controllers") : null;
+            if (parentCtrl != null && Files.exists(parentCtrl)) {
+                String available = Files.readString(parentCtrl).trim();
+                for (String ctrl : available.split("\\s+")) {
+                    if (!ctrl.isEmpty() && KNOWN_CONTROLLERS.contains(ctrl)) {
+                        needed.add(ctrl);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Logger.debug("read parent cgroup.controllers: " + e.getMessage());
         }
         if (needed.isEmpty()) return;
         // Walk up from full to CGROUP_ROOT to enable controllers in subtree_control
@@ -110,12 +193,30 @@ public final class Cgroup {
         }
     }
 
-    /** Re-apply resource limits to an existing cgroup (e.g. via `update`). */
+    /** Re-apply resource limits to an existing cgroup (e.g. via `update`).
+     *  Also enables any new controllers required by the update. */
     public static void applyLimitsOnly(String cgroupPath, Spec.LinuxResources r) {
-        applyLimits(dir(cgroupPath), r);
+        Path full = dir(cgroupPath);
+        enableControllers(full, r);
+        applyLimits(full, r);
+        // Update the eBPF device cgroup program when the update payload
+        // includes device rules. Without this, "runc update" with a new
+        // device policy would silently leave the old BPF program in place.
+        if (r != null && r.devices != null && !r.devices.isEmpty()) {
+            DeviceCgroup.apply(cgroupPath, r.devices);
+        }
     }
 
     private static void applyLimits(Path full, Spec.LinuxResources r) {
+        applyLimits(full, r, false);
+    }
+
+    private static void applyLimits(Path full, Spec.LinuxResources r, boolean strict) {
+        applyLimits(full, r, strict, false);
+    }
+
+    private static void applyLimits(Path full, Spec.LinuxResources r, boolean strict,
+                                     boolean skipPids) {
         if (r == null) return;
         // Realtime scheduling limits are a cgroup v1 concept — v2 removed
         // cpu.rt_period_us / cpu.rt_runtime_us entirely. Silently ignoring
@@ -126,8 +227,44 @@ public final class Cgroup {
                     + " on cgroup v2; ignoring");
         }
         for (Map.Entry<String, String> e : plannedWrites(r)) {
-            writeIfPossible(full.resolve(e.getKey()), e.getValue());
+            if (skipPids && e.getKey().equals("pids.max")) continue;
+            if (strict && STRICT_FILES.contains(e.getKey())) {
+                writeRequired(full.resolve(e.getKey()), e.getValue());
+            } else {
+                writeIfPossible(full.resolve(e.getKey()), e.getValue());
+            }
         }
+    }
+
+    /**
+     * Apply deferred pids.max to an already-configured cgroup. Called from
+     * MainProcess after INIT_READY so the Java init process (which needs
+     * multiple threads for GraalVM's internal machinery) has already
+     * finished initialization. Without this deferral, a low pids.max value
+     * (e.g. 1 from pids.limit=0) would prevent the init from starting.
+     */
+    public static void applyDeferredPids(String cgroupPath, Spec.LinuxResources r) {
+        if (cgroupPath == null || r == null) return;
+        Path full = dir(cgroupPath);
+        for (Map.Entry<String, String> e : plannedWrites(r)) {
+            if (e.getKey().equals("pids.max")) {
+                writeIfPossible(full.resolve("pids.max"), e.getValue());
+                Logger.debug("deferred pids.max=" + e.getValue());
+            }
+        }
+    }
+
+    /**
+     * Attach the eBPF device cgroup program after the init process has
+     * finished rootfs setup. Called from MainProcess after INIT_READY.
+     * The init must create device nodes (mknod) during rootfs setup, and
+     * an early BPF attachment would block mknod for devices not in the
+     * allow list. This mirrors runc's ordering where cgroupManager.Set
+     * (including device BPF) runs after SYNC_READY.
+     */
+    public static void applyDeferredDevices(String cgroupPath, Spec.LinuxResources r) {
+        if (cgroupPath == null || r == null || r.devices == null || r.devices.isEmpty()) return;
+        DeviceCgroup.apply(cgroupPath, r.devices);
     }
 
     /**
@@ -160,8 +297,7 @@ public final class Cgroup {
                 writes.add(Map.entry("cpuset.mems", r.cpu.mems));
             }
             if (r.cpu.shares != null && r.cpu.shares > 0) {
-                long w = 1 + ((r.cpu.shares - 2L) * 9999L / 262142L);
-                if (w > 10000L) w = 10000L;
+                long w = convertSharesToWeight(r.cpu.shares);
                 writes.add(Map.entry("cpu.weight", Long.toString(w)));
             }
             if (r.cpu.quota != null || r.cpu.period != null) {
@@ -180,8 +316,16 @@ public final class Cgroup {
                 writes.add(Map.entry("cpu.idle", Long.toString(r.cpu.idle)));
             }
         }
-        if (r.pids != null && r.pids.limit > 0) {
-            writes.add(Map.entry("pids.max", Long.toString(r.pids.limit)));
+        if (r.pids != null) {
+            if (r.pids.limit == -1L) {
+                // runc: -1 means unlimited ("max")
+                writes.add(Map.entry("pids.max", "max"));
+            } else if (r.pids.limit == 0L) {
+                // runc: 0 is silently remapped to 1 (TasksMax=0 is invalid)
+                writes.add(Map.entry("pids.max", "1"));
+            } else if (r.pids.limit > 0) {
+                writes.add(Map.entry("pids.max", Long.toString(r.pids.limit)));
+            }
         }
         // hugepageLimits: each entry lands in its own hugetlb.<size>.max file.
         // Runc uses the same pageSize→filename mapping.
@@ -195,10 +339,23 @@ public final class Cgroup {
             appendBlockIO(writes, r.blockIO);
         }
         // Unified pass-through: any arbitrary control-file the spec author
-        // named gets written verbatim.
+        // named gets written verbatim. Multi-line values (e.g. "io.max" with
+        // multiple per-device entries separated by newlines) are split into
+        // one write per line, since the kernel cgroup interface only processes
+        // one line per write() call for most files.
         if (r.unified != null) {
             for (Map.Entry<String, String> e : r.unified.entrySet()) {
-                writes.add(Map.entry(e.getKey(), e.getValue()));
+                String val = e.getValue();
+                if (val.contains("\n")) {
+                    for (String line : val.split("\n")) {
+                        String trimmed = line.trim();
+                        if (!trimmed.isEmpty()) {
+                            writes.add(Map.entry(e.getKey(), trimmed));
+                        }
+                    }
+                } else {
+                    writes.add(Map.entry(e.getKey(), val));
+                }
             }
         }
         return writes;
@@ -241,6 +398,16 @@ public final class Cgroup {
         }
     }
 
+    private static void writeRequired(Path p, String v) {
+        try {
+            Files.writeString(p, v);
+            Logger.debug("set " + p.getFileName() + "=" + v);
+        } catch (IOException e) {
+            throw new RuntimeException(
+                    "unable to set " + p.getFileName() + " to \"" + v + "\": " + e.getMessage());
+        }
+    }
+
     private static void writeIfPossible(Path p, String v) {
         try {
             Files.writeString(p, v);
@@ -255,24 +422,121 @@ public final class Cgroup {
         Path full = dir(cgroupPath);
         if (!Files.exists(full)) return;
 
-        // cgroup v2: writing "1" to cgroup.kill sends SIGKILL to every process
-        // in this cgroup (Linux 5.14+). Best-effort — older kernels don't have
-        // the file and the parent's SIGKILL on state.pid handles that path.
+        // Kill all processes in this cgroup tree (including subcgroups).
+        killCgroupTree(full);
+
+        // Wait for all processes to actually exit from the cgroup. The kernel
+        // needs time to reap killed processes, and they must disappear from
+        // cgroup.procs before rmdir can succeed.
+        waitForEmpty(full);
+
+        // Remove subcgroup directories bottom-up, then the main directory.
+        // Subcgroups must be removed before the parent (kernel requirement).
         try {
-            Files.writeString(full.resolve("cgroup.kill"), "1");
-        } catch (IOException ignored) {}
+            removeSubcgroups(full);
+        } catch (IOException e) {
+            Logger.debug("subcgroup cleanup: " + e.getMessage());
+        }
 
         // rmdir(2) on a cgroup v2 directory returns EBUSY ("Device or resource
         // busy") even briefly after the cgroup empties — the kernel runs an
         // async tear-down (cgroup_destroy_locked schedules work). Polling
         // cgroup.procs isn't enough to gate rmdir; we need to retry rmdir
         // itself. runc does the same in libcontainer/cgroups/fs2.
+        retryRmdir(full);
+    }
+
+    /**
+     * Send SIGKILL to every process in the cgroup tree rooted at {@code dir}.
+     * Uses cgroup.kill (Linux 5.14+) where available, falling back to reading
+     * cgroup.procs.
+     */
+    private static void killCgroupTree(Path dir) {
+        // Try cgroup.kill first (applies to subtree)
+        try {
+            Files.writeString(dir.resolve("cgroup.kill"), "1");
+            return;
+        } catch (IOException ignored) {}
+
+        // Fallback: iterate subcgroups and kill manually
+        try (java.util.stream.Stream<Path> children = Files.list(dir)) {
+            children.filter(Files::isDirectory).forEach(Cgroup::killCgroupTree);
+        } catch (IOException ignored) {}
+        try {
+            String procs = Files.readString(dir.resolve("cgroup.procs")).trim();
+            if (!procs.isEmpty()) {
+                for (String line : procs.split("\n")) {
+                    try {
+                        int pid = Integer.parseInt(line.trim());
+                        com.ternbusty.takoyaki.syscall.Libc.kill(pid,
+                                com.ternbusty.takoyaki.syscall.Constants.SIGKILL);
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+        } catch (IOException ignored) {}
+    }
+
+    /**
+     * Recursively remove subcgroup directories (depth-first). Each subcgroup is
+     * removed with retryRmdir to handle the async kernel teardown. Leaves the
+     * top-level {@code dir} in place for the caller to remove.
+     */
+    private static void removeSubcgroups(Path dir) throws IOException {
+        try (java.util.stream.Stream<Path> children = Files.list(dir)) {
+            for (Path child : children.toList()) {
+                if (Files.isDirectory(child) && !Files.isSymbolicLink(child)) {
+                    removeSubcgroups(child);
+                    retryRmdir(child);
+                }
+            }
+        }
+    }
+
+    /**
+     * Wait for cgroup.procs (and children's) to become empty after a kill.
+     * Gives the kernel up to 5 seconds for processes to be reaped.
+     */
+    private static void waitForEmpty(Path dir) {
+        long deadlineNs = System.nanoTime() + 5_000_000_000L;
+        while (System.nanoTime() < deadlineNs) {
+            if (isTreeEmpty(dir)) return;
+            try { Thread.sleep(10); }
+            catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
+        Logger.debug("cgroup tree not fully empty after 5s: " + dir);
+    }
+
+    /** Check if cgroup.procs is empty in this dir and all subdirectories. */
+    private static boolean isTreeEmpty(Path dir) {
+        try {
+            String procs = Files.readString(dir.resolve("cgroup.procs")).trim();
+            if (!procs.isEmpty()) return false;
+        } catch (IOException e) {
+            return true; // can't read → treat as empty
+        }
+        try (java.util.stream.Stream<Path> children = Files.list(dir)) {
+            for (Path child : children.toList()) {
+                if (Files.isDirectory(child) && !Files.isSymbolicLink(child)) {
+                    if (!isTreeEmpty(child)) return false;
+                }
+            }
+        } catch (IOException e) {
+            // can't list children → ok
+        }
+        return true;
+    }
+
+    /** Retry rmdir with back-off for up to 5 seconds. */
+    private static void retryRmdir(Path dir) {
         IOException last = null;
         long deadlineNs = System.nanoTime() + 5_000_000_000L;
         while (System.nanoTime() < deadlineNs) {
             try {
-                Files.delete(full);
-                Logger.debug("cgroup dir removed: " + full);
+                Files.delete(dir);
+                Logger.debug("cgroup dir removed: " + dir);
                 return;
             } catch (java.nio.file.NoSuchFileException e) {
                 return;
@@ -285,7 +549,24 @@ public final class Cgroup {
                 }
             }
         }
-        Logger.warn("cgroup cleanup failed (" + full + "): "
+        Logger.warn("cgroup cleanup failed (" + dir + "): "
                 + (last != null ? last.getMessage() : "deadline elapsed"));
+    }
+
+    /**
+     * Convert cgroup v1 CPU shares to cgroup v2 weight using the same
+     * logarithmic formula as runc's {@code ConvertCPUSharesToCgroupV2Value}.
+     * cgroup v1 shares (2..262144) are on an exponential scale, while v2
+     * weights (1..10000) are linear.  A naive linear interpolation would
+     * compress the low end; this log-based conversion preserves proportional
+     * relationships.
+     */
+    static long convertSharesToWeight(long shares) {
+        if (shares == 0) return 0;
+        if (shares <= 2) return 1;
+        if (shares >= 262144) return 10000;
+        double l = Math.log(shares) / Math.log(2);
+        double exponent = (l * l + 125.0 * l) / 612.0 - 7.0 / 34.0;
+        return (long) (Math.pow(10, exponent) + 0.99);
     }
 }

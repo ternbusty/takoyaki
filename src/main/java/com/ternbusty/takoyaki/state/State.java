@@ -60,7 +60,9 @@ public final class State {
     public static State load(String rootPath, String containerId) throws IOException {
         Path p = statePath(rootPath, containerId);
         Logger.debug("loading state from " + p);
-        return Json.readFile(p, State::fromJson);
+        State s = Json.readFile(p, State::fromJson);
+        s.loadedRootPath = rootPath;
+        return s;
     }
 
     public void save(String rootPath) throws IOException {
@@ -79,9 +81,34 @@ public final class State {
     }
 
     public State refreshStatus() {
-        if (pid != null && isProcessAlive(pid)) return this;
+        if (pid != null && isProcessAlive(pid)) {
+            // Check if the container is frozen (paused) via cgroup v2 freezer.
+            if (isFrozen()) return withStatus(ContainerStatus.PAUSED);
+            return this;
+        }
         return statusEnum() == ContainerStatus.STOPPED ? this : withStatus(ContainerStatus.STOPPED);
     }
+
+    /**
+     * Detect whether this container's cgroup is frozen. Reads the kontainer
+     * config to find the cgroup path and then checks cgroup.freeze.
+     */
+    private boolean isFrozen() {
+        try {
+            if (loadedRootPath == null) return false;
+            var kc = com.ternbusty.takoyaki.config.KontainerConfig.load(loadedRootPath, id);
+            if (kc.cgroupPath == null) return false;
+            Path freeze = com.ternbusty.takoyaki.cgroup.Cgroup.dir(kc.cgroupPath)
+                    .resolve("cgroup.freeze");
+            if (!Files.exists(freeze)) return false;
+            return "1".equals(Files.readString(freeze).trim());
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Internal transient field set by load() for frozen-state detection. */
+    private transient String loadedRootPath;
 
     private static boolean isProcessAlive(int pid) {
         Path stat = Path.of("/proc", String.valueOf(pid), "stat");
@@ -114,8 +141,8 @@ public final class State {
         Map<String, Object> o = JsonMap.obj();
         JsonMap.put(o, "ociVersion", ociVersion);
         JsonMap.put(o, "id", id);
-        JsonMap.put(o, "status", status);
         JsonMap.put(o, "pid", pid);
+        JsonMap.put(o, "status", status);
         JsonMap.put(o, "bundle", bundle);
         JsonMap.put(o, "annotations", annotations);
         JsonMap.put(o, "created", created);

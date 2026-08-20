@@ -1,7 +1,12 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.console.InternalConsole;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
+import com.ternbusty.takoyaki.util.Json;
+
+import java.nio.file.Path;
 
 /**
  * runc-compatible foreground lifecycle in one process: create + start + wait + delete.
@@ -26,12 +31,44 @@ public final class RunCommand {
                           String bundleIn, String pidFile, String consoleSocket,
                           boolean noPivot, boolean noNewKeyring, int preserveFds,
                           boolean detach) {
+
+        // For foreground runs with terminal=true and no --console-socket, create
+        // an internal PTY proxy so the container's stdio flows through a real
+        // pseudoterminal (matching runc behaviour).
+        InternalConsole internalConsole = null;
+        String effectiveConsoleSocket = consoleSocket;
+        if (!detach && consoleSocket == null) {
+            try {
+                String bundle = Path.of(bundleIn).toAbsolutePath().normalize().toString();
+                Spec spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson);
+                if (spec.process != null && Boolean.TRUE.equals(spec.process.terminal)) {
+                    internalConsole = InternalConsole.createForRun(bundle);
+                    internalConsole.startListening();
+                    effectiveConsoleSocket = internalConsole.socketPath();
+                    Logger.debug("internal console socket at " + effectiveConsoleSocket);
+                }
+            } catch (Exception e) {
+                // Config parse will be retried by CreateCommand; just skip internal console.
+                Logger.debug("skipping internal console: " + e.getMessage());
+            }
+        }
+
         int rc = CreateCommand.run(rootPath, debug, containerId, bundleIn,
-                pidFile, consoleSocket, noPivot, noNewKeyring, preserveFds);
-        if (rc != 0) return rc;
+                pidFile, effectiveConsoleSocket, noPivot, noNewKeyring, preserveFds);
+        if (rc != 0) {
+            if (internalConsole != null) internalConsole.stop();
+            return rc;
+        }
 
         if (detach) {
+            if (internalConsole != null) internalConsole.stop();
             return StartCommand.run(rootPath, containerId);
+        }
+
+        // Wait for the listener thread to receive the master fd from init.
+        if (internalConsole != null) {
+            internalConsole.awaitMaster(10_000);
+            internalConsole.startIOCopy();
         }
 
         // Foreground path. Snapshot the init pid BEFORE start because the
@@ -42,7 +79,8 @@ public final class RunCommand {
             State st = State.load(rootPath, containerId);
             initPid = st.pid != null ? st.pid : 0;
         } catch (Exception e) {
-            Logger.error("failed to load state after create: " + e.getMessage());
+            System.err.println("failed to load state after create: " + e.getMessage());
+            if (internalConsole != null) internalConsole.stop();
             DeleteCommand.run(rootPath, containerId, true);
             return 1;
         }
@@ -51,6 +89,7 @@ public final class RunCommand {
         if (rc != 0) {
             // Best-effort cleanup. Force because the container may be in a
             // partial state that canDelete rejects.
+            if (internalConsole != null) internalConsole.stop();
             DeleteCommand.run(rootPath, containerId, true);
             return rc;
         }
@@ -63,6 +102,8 @@ public final class RunCommand {
             // signal termination).
             exitCode = Wait.waitForChild(initPid);
         }
+
+        if (internalConsole != null) internalConsole.stop();
 
         // Force delete: the container is now stopped (we just waited), so the
         // non-force path would also work, but force is safer if waitpid raced

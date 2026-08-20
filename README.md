@@ -7,25 +7,8 @@ A GraalVM Native Image OCI container runtime, written in Java + Panama FFM. Impl
 
 ## Install
 
-Prebuilt static binaries are published on the [GitHub Releases](https://github.com/ternbusty/takoyaki/releases) page for each tag. Pick the asset that matches your host architecture.
-
 ```sh
-# aarch64 / arm64
-sudo curl -sSL -o /usr/local/bin/takoyaki \
-    https://github.com/ternbusty/takoyaki/releases/latest/download/takoyaki-linux-aarch64
-sudo chmod +x /usr/local/bin/takoyaki
-
-# x86_64 / amd64
-sudo curl -sSL -o /usr/local/bin/takoyaki \
-    https://github.com/ternbusty/takoyaki/releases/latest/download/takoyaki-linux-x86_64
-sudo chmod +x /usr/local/bin/takoyaki
-```
-
-A sha256 checksum is shipped alongside each binary as `<binary-name>.sha256`. Verify with:
-
-```sh
-curl -sSL https://github.com/ternbusty/takoyaki/releases/latest/download/takoyaki-linux-aarch64.sha256 \
-    | sha256sum -c
+curl -sSL https://raw.githubusercontent.com/ternbusty/takoyaki/main/install.sh | sudo bash
 ```
 
 ### Runtime requirements

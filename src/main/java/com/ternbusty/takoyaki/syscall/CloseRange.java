@@ -30,6 +30,30 @@ public final class CloseRange {
         }
     }
 
+    /**
+     * Actually close all fds >= 3 except the specified one. Unlike
+     * {@link #closeAllAbove(int)} which only sets CLOEXEC, this really closes
+     * fds so they are not visible in /proc/self/fd during the "created" wait.
+     */
+    public static void closeAllExcept(int keepFd) {
+        List<Integer> fds = new ArrayList<>();
+        try (DirectoryStream<Path> ds = Files.newDirectoryStream(Path.of("/proc/self/fd"))) {
+            for (Path p : ds) {
+                try {
+                    int fd = Integer.parseInt(p.getFileName().toString());
+                    if (fd >= 3 && fd != keepFd) fds.add(fd);
+                } catch (NumberFormatException ignored) {}
+            }
+        } catch (IOException e) {
+            Logger.warn("closeAllExcept: failed to enumerate fds: " + e.getMessage());
+            return;
+        }
+        for (int fd : fds) {
+            PosixIO.close(fd);
+        }
+        Logger.debug("closed " + fds.size() + " fds (kept fd " + keepFd + ")");
+    }
+
     private static void fallbackCloexec(int minFd) {
         List<Integer> fds = new ArrayList<>();
         try (DirectoryStream<Path> ds = Files.newDirectoryStream(Path.of("/proc/self/fd"))) {

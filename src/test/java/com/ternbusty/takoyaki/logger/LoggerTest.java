@@ -22,6 +22,9 @@ class LoggerTest {
         f.setAccessible(true);
         originalOut = (PrintStream) f.get(null);
         f.set(null, new PrintStream(captured, true));
+        // The production default is OFF. Most tests expect INFO or higher,
+        // so set it here for deterministic ordering.
+        Logger.setLevel(Logger.Level.INFO);
     }
 
     @AfterEach
@@ -72,8 +75,8 @@ class LoggerTest {
     // ---- level filter -------------------------------------------------------
 
     @Test
-    void infoIsTheDefaultLevelAndDebugIsDropped() {
-        // Default is INFO. debug() must emit NOTHING.
+    void debugIsDroppedAtInfoLevel() {
+        // Level is INFO (set by @BeforeEach). debug() must emit NOTHING.
         Logger.debug("not-shown");
         assertEquals("", captured.toString(),
                 "DEBUG must be suppressed when level=INFO");
@@ -109,15 +112,17 @@ class LoggerTest {
     }
 
     @Test
-    void textFormatContainsContextAndLevelTag() {
+    void textFormatContainsLogrusStyleLevelAndMessage() {
         Logger.setFormat(Logger.Format.TEXT);
-        Logger.setContext("init");
         Logger.info("hi");
         String out = captured.toString();
-        // We don't pin the timestamp, but level tag and context must show up.
-        assertTrue(out.contains("[INFO]"),  () -> "missing level tag, got: " + out);
-        assertTrue(out.contains("[init]"),  () -> "missing context tag, got: " + out);
-        assertTrue(out.contains("hi"));
+        // logrus-compatible format: time="..." level=info msg="hi"
+        assertTrue(out.contains("level=info"),
+                () -> "missing logrus level tag, got: " + out);
+        assertTrue(out.contains("msg=\"hi\""),
+                () -> "missing logrus msg field, got: " + out);
+        assertTrue(out.contains("time=\""),
+                () -> "missing logrus time field, got: " + out);
     }
 
     @Test

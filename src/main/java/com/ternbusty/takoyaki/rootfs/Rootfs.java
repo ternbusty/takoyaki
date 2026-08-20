@@ -10,6 +10,8 @@ import com.ternbusty.takoyaki.syscall.Syscalls;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -49,24 +51,27 @@ public final class Rootfs {
                     Constants.MS_BIND | Constants.MS_REC, null) != 0) {
                 throw new RuntimeException("bind mount rootfs failed: " + Libc.strerror(Libc.errno()));
             }
-            // pivot_root requires the new root and its parent to not have MS_SHARED
-            // propagation. Force the rootfs mount to private so it satisfies the rule
-            // regardless of what the host had.
-            if (Libc.mount(arena, null, rootfsPath, null,
-                    Constants.MS_PRIVATE, null) != 0) {
-                Logger.debug("set rootfs private failed: " + Libc.strerror(Libc.errno()));
-            }
-            // Remount rootfs with MS_NOSUID so setuid binaries inside the container
-            // can't gain extra privileges through the host's mount layer.
-            if (Libc.mount(arena, null, rootfsPath, null,
-                    Constants.MS_BIND | Constants.MS_REMOUNT | Constants.MS_NOSUID, null) != 0) {
-                Logger.debug("rootfs MS_NOSUID remount failed: " + Libc.strerror(Libc.errno()));
-            } else {
-                Logger.debug("rootfs marked MS_NOSUID");
-            }
+            // Do NOT set the rootfs mount to MS_PRIVATE here. The bind mount
+            // inherits MS_SLAVE propagation from "/", and that satisfies
+            // pivot_root's requirement (new root must not be MS_SHARED).
+            // Setting MS_PRIVATE would sever the peer group, making
+            // rootfsPropagation "slave" impossible after pivot_root because
+            // there would be no peer to slave to.
 
             mountProc(arena, rootfsPath);
-            mountDev(arena, rootfsPath);
+            // runc compat: pass the spec's /dev mount options (if any) so that
+            // "ro" in the spec actually makes /dev read-only.
+            long devExtraFlags = 0;
+            if (spec.mounts != null) {
+                for (Spec.Mount sm : spec.mounts) {
+                    if ("/dev".equals(sm.destination)) {
+                        MountOptions.Parsed dp = MountOptions.parse(sm.options);
+                        devExtraFlags = dp.flags;
+                        break;
+                    }
+                }
+            }
+            mountDev(arena, rootfsPath, devExtraFlags);
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
@@ -77,6 +82,10 @@ public final class Rootfs {
 
     private static void mountProc(Arena arena, String rootfsPath) {
         String p = rootfsPath + "/proc";
+        // runc compat: /proc must be a real directory, not a symlink.
+        if (Files.isSymbolicLink(Path.of(p))) {
+            throw new RuntimeException("/proc must be mounted on ordinary directory");
+        }
         if (PosixIO.access(arena, p, Constants.F_OK) != 0) {
             try { Files.createDirectories(Path.of(p)); }
             catch (IOException e) { Logger.warn("mkdir proc: " + e.getMessage()); return; }
@@ -89,14 +98,15 @@ public final class Rootfs {
         }
     }
 
-    private static void mountDev(Arena arena, String rootfsPath) {
+    private static void mountDev(Arena arena, String rootfsPath, long extraFlags) {
         String dev = rootfsPath + "/dev";
         if (PosixIO.access(arena, dev, Constants.F_OK) != 0) {
             try { Files.createDirectories(Path.of(dev)); }
             catch (IOException e) { Logger.warn("mkdir dev: " + e.getMessage()); return; }
         }
+        long devFlags = Constants.MS_NOSUID | Constants.MS_NOEXEC | extraFlags;
         if (Libc.mount(arena, "tmpfs", dev, "tmpfs",
-                Constants.MS_NOSUID | Constants.MS_NOEXEC, "mode=755") != 0) {
+                devFlags, "mode=755") != 0) {
             Logger.warn("mount /dev tmpfs: " + Libc.strerror(Libc.errno()));
             return;
         }
@@ -109,7 +119,7 @@ public final class Rootfs {
         String pts = dev + "/pts";
         try { Files.createDirectories(Path.of(pts)); } catch (IOException ignored) {}
         if (Libc.mount(arena, "devpts", pts, "devpts",
-                Constants.MS_NOSUID | Constants.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620") != 0) {
+                Constants.MS_NOSUID | Constants.MS_NOEXEC, "newinstance,ptmxmode=0666,mode=0620,gid=5") != 0) {
             Logger.debug("mount /dev/pts: " + Libc.strerror(Libc.errno()));
         }
 
@@ -175,6 +185,10 @@ public final class Rootfs {
 
     private static void mountSys(Arena arena, String rootfsPath, Spec spec) {
         String sys = rootfsPath + "/sys";
+        // runc compat: /sys must be a real directory, not a symlink.
+        if (Files.isSymbolicLink(Path.of(sys))) {
+            throw new RuntimeException("/sys must be mounted on ordinary directory");
+        }
         if (PosixIO.access(arena, sys, Constants.F_OK) != 0) {
             try { Files.createDirectories(Path.of(sys)); }
             catch (IOException e) { Logger.warn("mkdir sys: " + e.getMessage()); return; }
@@ -202,22 +216,71 @@ public final class Rootfs {
                 ? (spec.linux.cgroupsPath.startsWith("/") ? spec.linux.cgroupsPath
                                                           : "/" + spec.linux.cgroupsPath)
                 : readContainerCgroupPath();
-        if (containerCgPath != null) {
-            String src = "/sys/fs/cgroup" + containerCgPath;
-            if (PosixIO.access(arena, src, Constants.F_OK) == 0) {
-                if (Libc.mount(arena, src, cg, null,
-                        Constants.MS_BIND | Constants.MS_REC, null) == 0) {
-                    Libc.mount(arena, null, cg, null,
-                            Constants.MS_BIND | Constants.MS_REMOUNT | Constants.MS_RDONLY
-                                    | Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC,
-                            null);
-                    Logger.debug("bound /sys/fs/cgroup from " + src);
-                } else {
-                    Logger.warn("bind /sys/fs/cgroup from " + src + ": " + Libc.strerror(Libc.errno()));
+        // Check if the spec's cgroup mount should be read-only. By default
+        // it is ro, but set_cgroup_mount_writable removes "ro".
+        boolean cgroupRo = true;
+        if (spec != null && spec.mounts != null) {
+            for (Spec.Mount m : spec.mounts) {
+                if ("cgroup".equals(m.type) || "/sys/fs/cgroup".equals(m.destination)) {
+                    if (m.options != null && !m.options.contains("ro")) {
+                        cgroupRo = false;
+                    }
+                    break;
                 }
-            } else {
-                Logger.debug("cgroup source " + src + " does not exist (yet)");
             }
+        }
+        // When the spec creates a cgroup namespace, bind-mount only the
+        // container's cgroup subtree so the namespace root matches. When
+        // there is no cgroup namespace (the spec removes it or joins an
+        // existing one via .path), the container must see the full host
+        // cgroup tree, so bind-mount the cgroup root instead.
+        boolean hasCgroupNs = spec != null && spec.hasNamespace("cgroup");
+        if (hasCgroupNs && containerCgPath != null) {
+            mountCgroupBind(arena, cg, containerCgPath, cgroupRo);
+        } else {
+            mountCgroupRoot(arena, cg, cgroupRo);
+        }
+    }
+
+    /**
+     * Mount the full host cgroup tree at the container's /sys/fs/cgroup.
+     * Used when no cgroup namespace is configured so the container can see
+     * all cgroups on the host (matching runc behaviour).
+     */
+    private static void mountCgroupRoot(Arena arena, String cg, boolean cgroupRo) {
+        if (Libc.mount(arena, "/sys/fs/cgroup", cg, null,
+                Constants.MS_BIND | Constants.MS_REC, null) == 0) {
+            long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                    | Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC;
+            if (cgroupRo) remountFlags |= Constants.MS_RDONLY;
+            Libc.mount(arena, null, cg, null, remountFlags, null);
+            Logger.debug("bound /sys/fs/cgroup from host root"
+                    + (cgroupRo ? " (ro)" : " (rw)"));
+        } else {
+            Logger.warn("bind /sys/fs/cgroup from host root: "
+                    + Libc.strerror(Libc.errno()));
+        }
+    }
+
+    private static void mountCgroupBind(Arena arena, String cg,
+                                          String containerCgPath, boolean cgroupRo) {
+        if (containerCgPath == null) return;
+        String src = "/sys/fs/cgroup" + containerCgPath;
+        if (PosixIO.access(arena, src, Constants.F_OK) == 0) {
+            if (Libc.mount(arena, src, cg, null,
+                    Constants.MS_BIND | Constants.MS_REC, null) == 0) {
+                long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
+                        | Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC;
+                if (cgroupRo) remountFlags |= Constants.MS_RDONLY;
+                Libc.mount(arena, null, cg, null, remountFlags, null);
+                Logger.debug("bound /sys/fs/cgroup from " + src
+                        + (cgroupRo ? " (ro)" : " (rw)"));
+            } else {
+                Logger.warn("bind /sys/fs/cgroup from " + src + ": "
+                        + Libc.strerror(Libc.errno()));
+            }
+        } else {
+            Logger.debug("cgroup source " + src + " does not exist (yet)");
         }
     }
 
@@ -244,19 +307,40 @@ public final class Rootfs {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
             if (m.destination == null) continue;
+            // Strip rootfs prefix from destination if present.  The OCI spec
+            // says destination is a container-absolute path ("/mnt/x"), but
+            // some callers (e.g. runc integration tests) pass host-absolute
+            // paths like "$rootfs/mnt/x" where $rootfs is the host rootfs
+            // directory.  This matches runc's LexicallyStripRoot behaviour.
+            String dest = m.destination;
+            if (dest.startsWith(rootfsPath + "/")) {
+                dest = dest.substring(rootfsPath.length());
+            } else if (dest.equals(rootfsPath)) {
+                dest = "/";
+            }
             // skip already-handled paths
-            if (m.destination.equals("/proc") || m.destination.equals("/dev")
-                || m.destination.equals("/sys") || m.destination.equals("/dev/shm")
-                || m.destination.equals("/dev/pts") || m.destination.equals("/dev/mqueue")
-                || m.destination.equals("/sys/fs/cgroup")) continue;
-            String target = rootfsPath + m.destination;
+            if (dest.equals("/proc") || dest.equals("/dev")
+                || dest.equals("/sys") || dest.equals("/dev/shm")
+                || dest.equals("/dev/pts") || dest.equals("/dev/mqueue")
+                || dest.equals("/sys/fs/cgroup")) continue;
+            // Resolve symlinks in the destination path within the rootfs
+            // scope, so bind mounts through dangling symlinks end up at the
+            // correct host-side path. The resolved target is used for both
+            // mkdir and mount(2); the original destination stays for logging.
+            String resolved = resolveInRootfs(rootfsPath, dest);
+            String target = resolved;
             String type = m.type != null ? m.type : "none";
             MountOptions.Parsed parsed = MountOptions.parse(m.options);
             long flags = parsed.flags;
             long propagation = parsed.propagation;
             String data = parsed.data;
             boolean isBind = parsed.isBind;
-            try { Files.createDirectories(Path.of(target)); } catch (IOException ignored) {}
+            // Create the target mount point. For bind mounts where the source
+            // is a regular file, create a file (not a directory). runc follows
+            // symlinks in the destination path within the rootfs and creates
+            // intermediate directories as needed.
+            boolean targetExisted = Files.isDirectory(Path.of(target));
+            createMountTarget(rootfsPath, m, target, isBind);
 
             // Id-mapped mounts: if uidMappings/gidMappings are present we route the
             // bind through open_tree + mount_setattr(MOUNT_ATTR_IDMAP) + move_mount.
@@ -280,24 +364,62 @@ public final class Rootfs {
                 Logger.warn("idmap mount failed for " + m.destination + ", falling back to plain bind");
             }
 
-            int rc = sc.mount(m.source, target, isBind ? null : type, flags, data);
+            // runc compat: for tmpfs mounts without an explicit "mode=" option,
+            // inherit the permission bits from the existing target directory.
+            // This makes "mount tmpfs on /tmp" keep /tmp's chmod'd mode.
+            // Only inherit when the target directory existed BEFORE createMountTarget
+            // made it; freshly-created directories would just reflect the default
+            // mkdir mode (755) which is not the user's intent.
+            if ("tmpfs".equals(type) && !isBind && targetExisted) {
+                data = inheritTmpfsMode(target, data);
+            }
+
+            // tmpcopyup: snapshot directory contents before tmpfs hides them.
+            java.util.List<Object[]> tmpcopyupSnapshot = null;
+            if (parsed.tmpcopyup && "tmpfs".equals(type) && !isBind
+                    && Files.isDirectory(Path.of(target))) {
+                tmpcopyupSnapshot = snapshotDirectory(Path.of(target));
+            }
+
+            // Container bind-mount source: when the source path does not
+            // exist on the host but DOES exist under the rootfs, it refers
+            // to a location created by an earlier mount in the same spec
+            // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
+            // so the mount sees the right content.  This matches runc.
+            String mountSource = m.source;
+            if (isBind && mountSource != null
+                    && !new java.io.File(mountSource).exists()
+                    && new java.io.File(rootfsPath + mountSource).exists()) {
+                mountSource = rootfsPath + mountSource;
+                Logger.debug("resolved container bind source " + m.source
+                        + " -> " + mountSource);
+            }
+            int rc = sc.mount(mountSource, target, isBind ? null : type, flags, data);
             if (rc != 0) {
                 Logger.debug("optional mount " + m.destination + " failed: "
                         + sc.strerror(sc.errno()));
                 continue;
             }
             Logger.debug("mounted " + m.destination + " (type=" + type + ")");
+
+            // tmpcopyup: restore pre-existing contents into the fresh tmpfs.
+            if (tmpcopyupSnapshot != null && !tmpcopyupSnapshot.isEmpty()) {
+                restoreDirectory(Path.of(target), tmpcopyupSnapshot);
+                Logger.debug("tmpcopyup restored contents into " + m.destination);
+            }
             // bind mounts ignore MS_RDONLY (and other access flags) on the initial
             // mount; the kernel just bind-attaches the source as-is. A second
             // MS_BIND|MS_REMOUNT with the desired flags is required to actually
-            // enforce read-only / nosuid / nodev / noexec on the bind.
-            if (isBind && (flags & (Constants.MS_RDONLY | Constants.MS_NOSUID
-                    | Constants.MS_NODEV | Constants.MS_NOEXEC)) != 0) {
+            // enforce them. This also handles "clearing" flags: e.g. "bind,dev"
+            // means clear MS_NODEV by not including it in the remount.
+            long vfsFlags = Constants.MS_RDONLY | Constants.MS_NOSUID
+                    | Constants.MS_NODEV | Constants.MS_NOEXEC
+                    | Constants.MS_NOATIME | Constants.MS_RELATIME
+                    | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW
+                    | Constants.MS_NODIRATIME;
+            if (isBind && ((flags & vfsFlags) != 0 || parsed.clearedFlags != 0)) {
                 long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
-                        | (flags & (Constants.MS_RDONLY | Constants.MS_NOSUID
-                                  | Constants.MS_NODEV | Constants.MS_NOEXEC
-                                  | Constants.MS_NOATIME | Constants.MS_RELATIME
-                                  | Constants.MS_STRICTATIME | Constants.MS_NOSYMFOLLOW));
+                        | (flags & vfsFlags);
                 if (sc.mount(null, target, null, remountFlags, null) != 0) {
                     Logger.debug("bind remount with access flags on " + m.destination
                             + " failed: " + sc.strerror(sc.errno()));
@@ -310,6 +432,13 @@ public final class Rootfs {
                     Logger.debug("propagation set on " + m.destination + " failed: "
                             + sc.strerror(sc.errno()));
                 }
+            }
+            // Recursive mount attributes (rro, rnoatime, etc.) require the
+            // mount_setattr(2) syscall with AT_RECURSIVE, applied after the
+            // regular mount(2). This makes the attribute change propagate to
+            // all submounts recursively.
+            if (parsed.hasRecAttr()) {
+                mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
             }
         }
     }
@@ -326,15 +455,19 @@ public final class Rootfs {
                 if (Libc.pivotRoot(arena, newRoot, newRoot) != 0) {
                     throw new RuntimeException("pivot_root: " + Libc.strerror(Libc.errno()));
                 }
-                if (Libc.mount(arena, null, "/", null,
-                        Constants.MS_SLAVE | Constants.MS_REC, null) != 0) {
-                    Logger.warn("remount / as slave failed: " + Libc.strerror(Libc.errno()));
-                }
-                if (Libc.umount2(arena, "/", Constants.MNT_DETACH) != 0) {
-                    Logger.warn("umount2 / failed: " + Libc.strerror(Libc.errno()));
-                }
+                // runc compat: after pivot_root(new, new), the old root is
+                // stacked on top of the new root. We need to make the old root
+                // (and all mounts under it) slaves before detaching. Using "."
+                // targets the old root mount rather than the new root underneath.
                 if (PosixIO.fchdir(newrootFd) != 0) {
                     throw new RuntimeException("fchdir: " + Libc.strerror(Libc.errno()));
+                }
+                if (Libc.mount(arena, null, ".", null,
+                        Constants.MS_SLAVE | Constants.MS_REC, null) != 0) {
+                    Logger.warn("remount . as slave failed: " + Libc.strerror(Libc.errno()));
+                }
+                if (Libc.umount2(arena, ".", Constants.MNT_DETACH) != 0) {
+                    Logger.warn("umount2 . failed: " + Libc.strerror(Libc.errno()));
                 }
             } finally {
                 PosixIO.close(newrootFd);
@@ -349,6 +482,20 @@ public final class Rootfs {
             if (rootfsPropagation != null) {
                 long prop = MountOptions.propagationFlag(rootfsPropagation);
                 if (prop != 0) {
+                    // runc compat: rootfsPropagation is always applied
+                    // recursively, regardless of whether the config value
+                    // uses the "r" prefix or not.
+                    prop |= Constants.MS_REC;
+                    // The kernel's MS_SHARED does NOT clear an existing slave
+                    // relationship, resulting in shared+slave instead of pure
+                    // shared. Clear any slave state with MS_PRIVATE first so
+                    // the final propagation is exactly what the spec requests.
+                    // Only needed for MS_SHARED; the kernel's MS_PRIVATE and
+                    // MS_SLAVE already handle existing relationships correctly.
+                    if ((prop & Constants.MS_SHARED) != 0) {
+                        Libc.mount(arena, null, "/", null,
+                                Constants.MS_PRIVATE | Constants.MS_REC, null);
+                    }
                     if (Libc.mount(arena, null, "/", null, prop, null) != 0) {
                         Logger.warn("set / to " + rootfsPropagation + " failed: "
                                 + Libc.strerror(Libc.errno()));
@@ -358,6 +505,109 @@ public final class Rootfs {
                 }
             }
             Logger.debug("pivot_root completed");
+        }
+    }
+
+    /**
+     * Alternative to {@link #pivot} when {@code --no-pivot} is requested.
+     * Moves the rootfs mount to "/" via {@code mount(MS_MOVE)} and then
+     * calls {@code chroot(".")} + {@code chdir("/")}. This is the same
+     * approach runc uses in its {@code msMoveRoot} function.
+     *
+     * Unlike pivot_root, this does NOT detach the old root. The old root's
+     * mounts remain in the mount namespace (but are inaccessible from
+     * userspace because they're hidden under the new root).
+     */
+    public static void msMoveRoot(String newRoot, String rootfsPropagation) {
+        try (Arena arena = Arena.ofConfined()) {
+            Logger.debug("msMoveRoot (no-pivot) to " + newRoot);
+
+            // Before MS_MOVE, mask host procfs and sysfs mounts.  runc
+            // lazy-unmounts them so the container cannot re-mount procfs
+            // writable (which would expose bare /proc).  Collect targets
+            // first because /proc/self/mountinfo disappears after unmount.
+            java.util.List<String> toUnmount = new java.util.ArrayList<>();
+            try {
+                for (String line : Files.readAllLines(Path.of("/proc/self/mountinfo"))) {
+                    String[] parts = line.split(" ");
+                    if (parts.length < 9) continue;
+                    String root = parts[3];
+                    String mountPoint = parts[4];
+                    int dashIdx = -1;
+                    for (int i = 6; i < parts.length; i++) {
+                        if ("-".equals(parts[i])) { dashIdx = i; break; }
+                    }
+                    if (dashIdx < 0 || dashIdx + 1 >= parts.length) continue;
+                    String fstype = parts[dashIdx + 1];
+                    if (!"/".equals(root)) continue;
+                    if (!"proc".equals(fstype) && !"sysfs".equals(fstype)) continue;
+                    if (mountPoint.startsWith(newRoot)) continue;
+                    toUnmount.add(mountPoint);
+                }
+            } catch (IOException e) {
+                Logger.warn("msMoveRoot: failed to read mountinfo: " + e.getMessage());
+            }
+            for (String mp : toUnmount) {
+                Libc.mount(arena, null, mp, null,
+                        Constants.MS_SLAVE | Constants.MS_REC, null);
+                if (Libc.umount2(arena, mp, Constants.MNT_DETACH) != 0) {
+                    Libc.mount(arena, "tmpfs", mp, "tmpfs", 0, null);
+                    Logger.debug("covered " + mp + " with tmpfs");
+                } else {
+                    Logger.debug("lazy-unmounted host mount at " + mp);
+                }
+            }
+
+            // Grab an fd to the rootfs BEFORE MS_MOVE. After the move, the
+            // process cwd/root still reference the ORIGINAL root mount (now
+            // covered by the rootfs mount). Path-based chdir("/") would stay
+            // on the original root because "/" resolves to the process root
+            // without mount traversal. Using fchdir(fd) sidesteps this: the
+            // fd follows the mount wherever it goes.
+            int rootFd = PosixIO.open(arena, newRoot,
+                    Constants.O_DIRECTORY | Constants.O_RDONLY, 0);
+            if (rootFd < 0) {
+                throw new RuntimeException("open " + newRoot + ": "
+                        + Libc.strerror(Libc.errno()));
+            }
+
+            if (Libc.mount(arena, newRoot, "/", null, Constants.MS_MOVE, null) != 0) {
+                PosixIO.close(rootFd);
+                throw new RuntimeException("mount MS_MOVE " + newRoot + " to /: "
+                        + Libc.strerror(Libc.errno()));
+            }
+
+            // fchdir to the rootfs mount (fd follows the MS_MOVE), then
+            // chroot(".") to lock the root. Finally chdir("/") for sanity.
+            if (PosixIO.fchdir(rootFd) != 0) {
+                PosixIO.close(rootFd);
+                throw new RuntimeException("fchdir: " + Libc.strerror(Libc.errno()));
+            }
+            PosixIO.close(rootFd);
+            if (Libc.chroot(arena, ".") != 0) {
+                throw new RuntimeException("chroot: " + Libc.strerror(Libc.errno()));
+            }
+            if (Libc.chdir(arena, "/") != 0) {
+                throw new RuntimeException("chdir /: " + Libc.strerror(Libc.errno()));
+            }
+            // Apply rootfsPropagation the same way as pivot().
+            if (rootfsPropagation != null) {
+                long prop = MountOptions.propagationFlag(rootfsPropagation);
+                if (prop != 0) {
+                    prop |= Constants.MS_REC;
+                    if ((prop & Constants.MS_SHARED) != 0) {
+                        Libc.mount(arena, null, "/", null,
+                                Constants.MS_PRIVATE | Constants.MS_REC, null);
+                    }
+                    if (Libc.mount(arena, null, "/", null, prop, null) != 0) {
+                        Logger.warn("set / to " + rootfsPropagation + " failed: "
+                                + Libc.strerror(Libc.errno()));
+                    } else {
+                        Logger.debug("/ propagation set to " + rootfsPropagation);
+                    }
+                }
+            }
+            Logger.debug("msMoveRoot completed");
         }
     }
 
@@ -382,7 +632,12 @@ public final class Rootfs {
     public static void maskPaths(List<String> paths) {
         if (paths == null) return;
         Syscalls sc = SyscallHost.current();
-        for (String p : paths) {
+        // runc compat: deduplicate paths so each is masked exactly once.
+        java.util.LinkedHashSet<String> deduped = new java.util.LinkedHashSet<>(paths);
+        // runc mounts a single tmpfs for all directory masks and bind-mounts
+        // it onto each target, so all share the same device number.
+        String tmpfsSource = null;
+        for (String p : deduped) {
             int rc = sc.mount("/dev/null", p, null, Constants.MS_BIND, null);
             if (rc == 0) {
                 Logger.debug("masked " + p + " with /dev/null");
@@ -390,12 +645,25 @@ public final class Rootfs {
             }
             int err = sc.errno();
             if (err == Constants.ENOENT) continue; // skip nonexistent
-            // Likely a directory — mask with tmpfs.
-            rc = sc.mount("tmpfs", p, "tmpfs", Constants.MS_RDONLY, null);
-            if (rc != 0) {
-                Logger.debug("mask " + p + " failed: " + sc.strerror(sc.errno()));
+            // Likely a directory. Mount a single shared tmpfs on the first
+            // directory, then bind-mount it onto subsequent directories so
+            // all directory masks share the same device number (runc compat).
+            if (tmpfsSource == null) {
+                rc = sc.mount("tmpfs", p, "tmpfs", Constants.MS_RDONLY, null);
+                if (rc != 0) {
+                    Logger.debug("mask " + p + " failed: " + sc.strerror(sc.errno()));
+                } else {
+                    tmpfsSource = p;
+                    Logger.debug("masked " + p + " with tmpfs");
+                }
             } else {
-                Logger.debug("masked " + p + " with tmpfs");
+                rc = sc.mount(tmpfsSource, p, null,
+                        Constants.MS_BIND | Constants.MS_RDONLY, null);
+                if (rc != 0) {
+                    Logger.debug("mask bind " + p + " failed: " + sc.strerror(sc.errno()));
+                } else {
+                    Logger.debug("masked " + p + " via bind from " + tmpfsSource);
+                }
             }
         }
     }
@@ -418,6 +686,249 @@ public final class Rootfs {
                 Logger.debug("readonly remount " + p + ": " + sc.strerror(sc.errno()));
             } else {
                 Logger.debug("readonly " + p);
+            }
+        }
+    }
+
+    /**
+     * Create the target mount point for an OCI mount. For bind mounts where the
+     * source is a regular file (not a directory), create a file; otherwise
+     * create a directory. Also resolves symlinks in the destination path within
+     * the rootfs scope, creating intermediate directories as needed.
+     */
+    /**
+     * Create the mount target directory or file at the already-resolved host
+     * path {@code target}. For bind mounts where the source is a regular file,
+     * create a file (not a directory).
+     */
+    private static void createMountTarget(String rootfsPath, Spec.Mount m,
+                                          String target, boolean isBind) {
+        try {
+            boolean isFile = false;
+            if (isBind && m.source != null) {
+                Path srcPath = Path.of(m.source);
+                if (!srcPath.isAbsolute()) {
+                    srcPath = Path.of(System.getProperty("user.dir", ".")).resolve(srcPath);
+                }
+                if (Files.isRegularFile(srcPath)) {
+                    isFile = true;
+                }
+            }
+            Path targetPath = Path.of(target);
+            if (isFile) {
+                Files.createDirectories(targetPath.getParent());
+                if (!Files.exists(targetPath)) {
+                    Files.createFile(targetPath);
+                }
+            } else {
+                Files.createDirectories(targetPath);
+            }
+        } catch (IOException e) {
+            try { Files.createDirectories(Path.of(target)); }
+            catch (IOException ignored) {}
+        }
+    }
+
+    /**
+     * Resolve a container-relative path within rootfsPath, following symlinks
+     * component by component but keeping the result under rootfsPath.
+     * Returns the fully resolved host-side path.
+     *
+     * <p>When a symlink target is itself an absolute path (e.g. /tmp/foo), it
+     * is re-rooted under rootfsPath. Its components are then resolved
+     * recursively so multi-hop chains (A -> /B -> /C/D) work.
+     */
+    private static String resolveInRootfs(String rootfsPath, String destination) {
+        Path rootfs = Path.of(rootfsPath);
+        return resolveComponents(rootfs, destination.split("/"), 0, rootfs, 0).toString();
+    }
+
+    private static Path resolveComponents(Path rootfs, String[] components,
+                                           int startIdx, Path current, int depth) {
+        if (depth > 255) return current; // symlink loop guard
+        for (int i = startIdx; i < components.length; i++) {
+            String comp = components[i];
+            if (comp.isEmpty()) continue;
+            Path next = current.resolve(comp);
+            if (Files.isSymbolicLink(next)) {
+                try {
+                    Path linkTarget = Files.readSymbolicLink(next);
+                    Path base;
+                    if (linkTarget.isAbsolute()) {
+                        base = rootfs;
+                    } else {
+                        base = current;
+                    }
+                    // Resolve the symlink target's components recursively so
+                    // multi-hop chains are followed correctly.
+                    String linkStr = linkTarget.toString();
+                    if (linkTarget.isAbsolute()) linkStr = linkStr.substring(1);
+                    String[] linkParts = linkStr.split("/");
+                    // Concatenate remaining original components after the link parts.
+                    int remaining = components.length - i - 1;
+                    String[] merged = new String[linkParts.length + remaining];
+                    System.arraycopy(linkParts, 0, merged, 0, linkParts.length);
+                    System.arraycopy(components, i + 1, merged, linkParts.length, remaining);
+                    Path resolved = resolveComponents(rootfs, merged, 0, base, depth + 1);
+                    // Security: ensure we're still under rootfs.
+                    if (!resolved.normalize().startsWith(rootfs)) return rootfs;
+                    return resolved;
+                } catch (IOException e) {
+                    current = next;
+                }
+            } else {
+                current = next;
+            }
+        }
+        return current;
+    }
+
+    /**
+     * runc compat: for tmpfs mounts, if no explicit "mode=" is in the data
+     * string, read the existing target directory's permission bits and inject
+     * "mode=<octal>" so the tmpfs inherits them. Without this, tmpfs defaults
+     * to mode 1777, losing any chmod the user applied to the directory before
+     * mounting.
+     */
+    private static String inheritTmpfsMode(String target, String data) {
+        if (data != null && data.contains("mode=")) return data;
+        try {
+            int unixMode = (int) Files.getAttribute(Path.of(target), "unix:mode",
+                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            int mode = unixMode & 07777;
+            String modeStr = "mode=0" + Integer.toOctalString(mode);
+            Logger.debug("tmpfs inheriting " + modeStr + " from " + target);
+            if (data == null || data.isEmpty()) return modeStr;
+            return data + "," + modeStr;
+        } catch (Exception e) {
+            Logger.debug("could not read target mode for tmpfs: " + e.getMessage());
+            return data;
+        }
+    }
+
+    /**
+     * Snapshot a directory tree into a list of entries, each represented as
+     * {@code {type, relativePath, payload, mode}}. Types are "dir", "file",
+     * or "symlink". Payload is {@code byte[]} for files, a symlink-target
+     * string for symlinks, and null for directories. Mode is the Unix
+     * permission bits (int), preserved so tmpcopyup restores chmod'd modes.
+     */
+    private static java.util.List<Object[]> snapshotDirectory(Path dir) {
+        java.util.List<Object[]> entries = new java.util.ArrayList<>();
+        if (!Files.isDirectory(dir)) return entries;
+        try (java.util.stream.Stream<Path> walk = Files.walk(dir)) {
+            walk.forEach(p -> {
+                if (p.equals(dir)) return;
+                String rel = dir.relativize(p).toString();
+                try {
+                    int mode = -1;
+                    try {
+                        mode = ((int) Files.getAttribute(p, "unix:mode",
+                                java.nio.file.LinkOption.NOFOLLOW_LINKS)) & 07777;
+                    } catch (Exception ignored) {}
+                    if (Files.isSymbolicLink(p)) {
+                        entries.add(new Object[]{
+                                "symlink", rel, Files.readSymbolicLink(p).toString(), mode});
+                    } else if (Files.isDirectory(p)) {
+                        entries.add(new Object[]{"dir", rel, null, mode});
+                    } else if (Files.isRegularFile(p)) {
+                        entries.add(new Object[]{
+                                "file", rel, Files.readAllBytes(p), mode});
+                    }
+                } catch (IOException ignored) {}
+            });
+        } catch (IOException ignored) {}
+        return entries;
+    }
+
+    /**
+     * Restore a snapshot produced by {@link #snapshotDirectory} into the
+     * given target directory (typically a freshly-mounted tmpfs), preserving
+     * Unix permission bits.
+     */
+    private static void restoreDirectory(Path dir, java.util.List<Object[]> entries) {
+        for (Object[] e : entries) {
+            String type = (String) e[0];
+            Path target = dir.resolve((String) e[1]);
+            int mode = (int) e[3];
+            try {
+                switch (type) {
+                    case "dir":
+                        Files.createDirectories(target);
+                        if (mode >= 0) {
+                            Files.setPosixFilePermissions(target,
+                                    java.nio.file.attribute.PosixFilePermissions.fromString(
+                                            modeToPerms(mode)));
+                        }
+                        break;
+                    case "file":
+                        Files.createDirectories(target.getParent());
+                        Files.write(target, (byte[]) e[2]);
+                        if (mode >= 0) {
+                            Files.setPosixFilePermissions(target,
+                                    java.nio.file.attribute.PosixFilePermissions.fromString(
+                                            modeToPerms(mode)));
+                        }
+                        break;
+                    case "symlink":
+                        Files.createDirectories(target.getParent());
+                        if (!Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                            Files.createSymbolicLink(target, Path.of((String) e[2]));
+                        }
+                        break;
+                }
+            } catch (IOException ex) {
+                Logger.debug("tmpcopyup restore " + e[1] + ": " + ex.getMessage());
+            }
+        }
+    }
+
+    /** Convert a Unix permission mode (0777, etc.) to a PosixFilePermissions string. */
+    private static String modeToPerms(int mode) {
+        char[] p = new char[9];
+        p[0] = (mode & 0400) != 0 ? 'r' : '-';
+        p[1] = (mode & 0200) != 0 ? 'w' : '-';
+        p[2] = (mode & 0100) != 0 ? 'x' : '-';
+        p[3] = (mode & 040) != 0 ? 'r' : '-';
+        p[4] = (mode & 020) != 0 ? 'w' : '-';
+        p[5] = (mode & 010) != 0 ? 'x' : '-';
+        p[6] = (mode & 04) != 0 ? 'r' : '-';
+        p[7] = (mode & 02) != 0 ? 'w' : '-';
+        p[8] = (mode & 01) != 0 ? 'x' : '-';
+        return new String(p);
+    }
+
+    /**
+     * Call mount_setattr(2) with AT_RECURSIVE on the given path.
+     *
+     * struct mount_attr (size = MOUNT_ATTR_SIZE_VER0 = 32 bytes)
+     *   u64 attr_set      (offset  0)
+     *   u64 attr_clr      (offset  8)
+     *   u64 propagation   (offset 16)
+     *   u64 userns_fd     (offset 24)
+     *
+     * runc pattern (rootfs_linux.go setRecAttr): opens the target via
+     * /proc/self/fd to avoid TOCTOU, then calls mount_setattr(-1, procfd,
+     * AT_RECURSIVE, &attr). We simplify by passing the path directly since
+     * we are in a private mount namespace and there is no TOCTOU window.
+     */
+    private static void mountSetattr(String target, long attrSet, long attrClr) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment attr = arena.allocate(32);
+            attr.set(ValueLayout.JAVA_LONG, 0, attrSet);
+            attr.set(ValueLayout.JAVA_LONG, 8, attrClr);
+            attr.set(ValueLayout.JAVA_LONG, 16, 0L); // propagation
+            attr.set(ValueLayout.JAVA_LONG, 24, 0L); // userns_fd
+            MemorySegment path = arena.allocateFrom(target);
+            long rc = Libc.syscall(Constants.NR_mount_setattr,
+                    -1, path.address(), Constants.AT_RECURSIVE, attr.address(), 32);
+            if (rc != 0) {
+                Logger.debug("mount_setattr(AT_RECURSIVE) on " + target + " failed: "
+                        + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("mount_setattr(AT_RECURSIVE) applied on " + target
+                        + " set=0x" + Long.toHexString(attrSet)
+                        + " clr=0x" + Long.toHexString(attrClr));
             }
         }
     }

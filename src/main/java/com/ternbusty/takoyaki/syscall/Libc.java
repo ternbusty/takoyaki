@@ -57,8 +57,17 @@ public final class Libc {
         return LibcH.chdir(arena.allocateFrom(path));
     }
 
+    public static int chroot(Arena arena, String path) {
+        MemorySegment p = arena.allocateFrom(path);
+        return (int) syscall(Constants.NR_chroot, p.address(), 0, 0, 0, 0);
+    }
+
     public static int sethostname(Arena arena, String name) {
         return LibcH.sethostname(arena.allocateFrom(name), name.getBytes().length);
+    }
+
+    public static int setdomainname(Arena arena, String name) {
+        return LibcH.setdomainname(arena.allocateFrom(name), name.getBytes().length);
     }
 
     public static int kill(int pid, int signal) {
@@ -136,6 +145,10 @@ public final class Libc {
 
     public static int mknod(Arena arena, String path, int mode, long dev) {
         return LibcH.mknod(arena.allocateFrom(path), mode, dev);
+    }
+
+    public static int chown(Arena arena, String path, int owner, int group) {
+        return LibcH.chown(arena.allocateFrom(path), owner, group);
     }
 
     public static int ioctl(int fd, long request, MemorySegment arg) {

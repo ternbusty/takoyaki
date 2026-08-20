@@ -32,10 +32,24 @@ public final class MainProcess {
             } catch (Exception e) {}
         }
 
+        // runc compat: assign a default cgroup path when none is specified.
+        // Many bats tests (pause, events, update, cpu_affinity) rely on the
+        // container having a cgroup without explicitly setting cgroupsPath.
+        String effectiveCgroupsPath = spec.linux != null ? spec.linux.cgroupsPath : null;
+        if (effectiveCgroupsPath == null) {
+            effectiveCgroupsPath = "takoyaki/" + containerId;
+            Logger.debug("no cgroupsPath in spec, defaulting to " + effectiveCgroupsPath);
+        }
+
+        int stage2Pid = -1;
+        // Track whether the cgroup existed before we tried to create it.
+        // On failure we must NOT clean up a pre-existing cgroup: doing so
+        // would kill another container's processes (e.g. ct1 in the runc
+        // "non-empty cgroup" test) and remove a frozen cgroup the test set up.
+        boolean cgroupPreExisted = Files.exists(
+                Cgroup.dir(effectiveCgroupsPath).resolve("cgroup.procs"));
         try {
-            if (spec.linux != null && spec.linux.cgroupsPath != null) {
-                Cgroup.setup(stage1Pid, spec.linux.cgroupsPath, spec.linux);
-            }
+            Cgroup.setup(stage1Pid, effectiveCgroupsPath, spec.linux);
             // rlimits are NOT applied to the bootstrap pid from here — doing so
             // forces them on the freshly-spawned Java init, and a low RLIMIT_AS
             // (e.g. the OCI runtime-tools process_rlimits test sets 1 GiB soft)
@@ -43,8 +57,12 @@ public final class MainProcess {
             // inside InitProcess, AFTER the JVM has come up, so only the user
             // process inherits the spec's resource caps.
 
-            boolean hasUserNs = spec.hasNamespace("user");
-            if (hasUserNs) {
+            // The uid/gid map handshake only happens when the user namespace
+            // is being *created* (no .path on the namespace entry). When the
+            // config specifies a .path the bootstrap joins that existing userns
+            // via setns(2) and never sends SYNC_USERMAP_PLS.
+            boolean creatingUserNs = spec.isCreatingNamespace("user");
+            if (creatingUserNs) {
                 int req = SyncChannel.readInt32(syncFd);
                 if (req != SyncChannel.MSG_USERMAP_PLS) {
                     throw new RuntimeException("expected USERMAP_PLS, got 0x" + Integer.toHexString(req));
@@ -90,19 +108,35 @@ public final class MainProcess {
                 Logger.debug("user map written");
             }
 
-            int stage2Pid = SyncChannel.readInt32(syncFd);
+            stage2Pid = SyncChannel.readInt32(syncFd);
             Logger.debug("received stage-2 pid=" + stage2Pid);
-            PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
 
-            if (spec.linux != null && spec.linux.cgroupsPath != null) {
-                // The first Cgroup.setup (for stage1Pid) already created the
-                // directory, enabled controllers, applied limits, and attached
-                // the device BPF program for this same cgroupPath. Re-running
-                // setup would stack a second identical device filter, so only
-                // move the final init pid into the cgroup here.
-                Cgroup.addPid(spec.linux.cgroupsPath, stage2Pid);
+            // The first Cgroup.setup (for stage1Pid) already created the
+            // directory, enabled controllers, applied limits, and attached
+            // the device BPF program for this same cgroupPath. Re-running
+            // setup would stack a second identical device filter, so only
+            // move the final init pid into the cgroup here.
+            Cgroup.addPid(effectiveCgroupsPath, stage2Pid);
+            // runc compat: reset CPU affinity to all CPUs after cgroup
+            // assignment, so the container inherits the cpuset mask rather
+            // than the parent's (potentially restricted) affinity.
+            resetCpuAffinity(stage2Pid);
+
+            // Notify stage-1 that the init process has been moved to the
+            // container's cgroup. Stage-1 forwards this to stage-2, which
+            // then calls unshare(CLONE_NEWCGROUP) so the cgroupns root is
+            // the container's cgroup (not the parent's).
+            // Only send CGROUP_ACK when the spec creates a new cgroup
+            // namespace. bootstrap.c's stage-1 reads CGROUP_ACK only when
+            // CLONE_NEWCGROUP is in the clone flags. Writing it
+            // unconditionally causes EPIPE when stage-1 has already exited
+            // (it doesn't wait for CGROUP_ACK when there's no cgroup ns).
+            boolean creatingCgroupNs = spec.isCreatingNamespace("cgroup");
+            if (creatingCgroupNs) {
+                SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
             }
+            PosixIO.close(syncFd);
 
             int initReady = SyncChannel.readInt32(mainSenderFd);
             if (initReady != SyncChannel.MSG_INIT_READY) {
@@ -111,11 +145,25 @@ public final class MainProcess {
             PosixIO.close(mainSenderFd);
             Logger.debug("init ready");
 
+            // Apply pids.max now that the init process has fully initialized.
+            // This is deferred from Cgroup.setup because the Java init
+            // process needs multiple threads (for GraalVM internals) during
+            // startup. A low pids.max (e.g. 1 from pids.limit=0) would
+            // prevent the init from starting if applied before INIT_READY.
+            Cgroup.applyDeferredPids(effectiveCgroupsPath,
+                    spec.linux != null ? spec.linux.resources : null);
+            // Attach the eBPF device cgroup program now that the init has
+            // finished creating device nodes (mknod) during rootfs setup.
+            // Attaching earlier would block mknod for spec.linux.devices
+            // entries that are not in the allow list.
+            Cgroup.applyDeferredDevices(effectiveCgroupsPath,
+                    spec.linux != null ? spec.linux.resources : null);
+
             State state = State.create(spec.ociVersion, containerId,
                     ContainerStatus.CREATED, stage2Pid, bundlePath, spec.annotations);
             state.save(rootPath);
 
-            new KontainerConfig(spec.linux != null ? spec.linux.cgroupsPath : null)
+            new KontainerConfig(effectiveCgroupsPath)
                     .save(rootPath, containerId);
 
             // prestart (deprecated, but still emitted by some tools) and createRuntime hooks
@@ -130,7 +178,12 @@ public final class MainProcess {
             }
 
             if (pidFile != null) {
-                Files.writeString(Path.of(pidFile), Integer.toString(stage2Pid));
+                try {
+                    Files.writeString(Path.of(pidFile), Integer.toString(stage2Pid));
+                } catch (java.nio.file.NoSuchFileException nsf) {
+                    throw new RuntimeException(
+                            "open " + pidFile + ": no such file or directory");
+                }
             }
 
             Logger.info("container " + containerId + " created with init pid " + stage2Pid);
@@ -140,11 +193,66 @@ public final class MainProcess {
             // caller decide whether to exit (CreateCommand top-level) or
             // continue (RunCommand foreground path).
         } catch (Exception e) {
-            Logger.error("main proc failed: " + e.getMessage());
-            e.printStackTrace(System.err);
+            // Print runc-compatible error message to stderr. Java stack traces
+            // confuse bats tests that assert on specific error patterns.
+            String msg = e.getMessage();
+            if (msg != null) {
+                System.err.println(msg);
+            }
+            Logger.error("main proc failed: " + msg);
+            // Clean up container state on failure so the container name is
+            // not left in a zombie "exists" state. runc does the same when
+            // hooks fail or any create-time error occurs.
+            try {
+                Path stateDir = State.containerDir(rootPath, containerId);
+                if (Files.exists(stateDir)) {
+                    try (java.util.stream.Stream<Path> walk = Files.walk(stateDir)) {
+                        walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                            try { Files.deleteIfExists(p); } catch (IOException ignored2) {}
+                        });
+                    }
+                }
+            } catch (Exception ignored) {}
+            // Kill the init process so it doesn't linger.
+            if (stage2Pid > 0) {
+                try { Libc.kill(stage2Pid, 9); } catch (Exception ignored) {}
+            }
+            // Clean up the cgroup directory only if it did not pre-exist.
+            // A pre-existing cgroup belongs to another container; cleaning it
+            // would kill that container's processes and break tests like
+            // "should error for a non-empty cgroup" and "refuse frozen cgroup".
+            if (!cgroupPreExisted) {
+                try {
+                    Cgroup.cleanup(effectiveCgroupsPath);
+                } catch (Exception ignored) {}
+            }
             PosixIO.close(syncFd);
             PosixIO.close(notifyListenerFd);
             PosixIO._exit(1);
+        }
+    }
+
+    /**
+     * Reset the CPU affinity of pid to include all possible CPUs. The kernel
+     * clamps the mask to the cpuset of the target's cgroup, so the effective
+     * affinity becomes the cgroup cpuset. This matches runc's
+     * tryResetCPUAffinity. Errors are non-fatal (logged at debug).
+     */
+    private static void resetCpuAffinity(int pid) {
+        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            // cpu_set_t on Linux is 1024 bits = 128 bytes. Fill it with all-ones.
+            int size = 128;
+            java.lang.foreign.MemorySegment mask = arena.allocate(size);
+            mask.fill((byte) 0xFF);
+            long rc = Libc.syscall(
+                    com.ternbusty.takoyaki.syscall.Constants.NR_sched_setaffinity,
+                    pid, size, mask.address(), 0L, 0L);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity(" + pid + ") failed: "
+                        + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("reset CPU affinity for pid " + pid);
+            }
         }
     }
 

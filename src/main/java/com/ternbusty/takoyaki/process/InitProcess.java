@@ -23,6 +23,8 @@ import com.ternbusty.takoyaki.util.Json;
 import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 public final class InitProcess {
     private InitProcess() {}
@@ -77,6 +79,17 @@ public final class InitProcess {
 
     public static void run() {
         Logger.setContext("init");
+        // Inherit log configuration from the main process so that debug/warn
+        // output goes to the log file instead of leaking to stderr. Must be
+        // configured BEFORE any Logger call.
+        String initLogFile = System.getenv("_TAKOYAKI_LOG_FILE");
+        if (initLogFile != null) {
+            Logger.setLogFile(initLogFile);
+        }
+        String initLogFormat = System.getenv("_TAKOYAKI_LOG_FORMAT");
+        if ("json".equalsIgnoreCase(initLogFormat)) {
+            Logger.setFormat(Logger.Format.JSON);
+        }
         Logger.debug("init started, pid=" + Libc.getpid() + " ppid=" + Libc.getppid());
         if (Logger.isDebugEnabled()) {
             try {
@@ -150,6 +163,28 @@ public final class InitProcess {
 
             String containerId = System.getenv("_TAKOYAKI_CONTAINER_ID");
 
+            // Console socket: prefer the pre-connected fd from CreateCommand
+            // (which connects on the host side, before entering any userns).
+            // Fall back to connecting via path for the non-userns case or when
+            // the CLI couldn't pre-connect.
+            boolean wantTerminal = spec.process != null && Boolean.TRUE.equals(spec.process.terminal);
+            int consoleSocketFd = -1;
+            if (wantTerminal) {
+                String preConnectedFd = System.getenv("_TAKOYAKI_CONSOLE_SOCKET_FD");
+                if (preConnectedFd != null) {
+                    consoleSocketFd = Integer.parseInt(preConnectedFd);
+                    Logger.debug("using pre-connected console socket fd " + consoleSocketFd);
+                } else {
+                    String consoleSocketPath = System.getenv("_TAKOYAKI_CONSOLE_SOCKET");
+                    if (consoleSocketPath != null) {
+                        consoleSocketFd = ConsoleSocket.connectTo(consoleSocketPath);
+                        if (consoleSocketFd < 0) {
+                            Logger.warn("failed to connect to console socket " + consoleSocketPath);
+                        }
+                    }
+                }
+            }
+
             if (spec.hasNamespace("mount")) {
                 Rootfs.prepare(rootfsPath, spec, idmapFds);
                 // Additional devices declared in spec.linux.devices, before pivot_root.
@@ -168,8 +203,14 @@ public final class InitProcess {
                                     ContainerStatus.CREATING),
                             "createContainer");
                 }
-                Rootfs.pivot(rootfsPath,
-                        spec.linux != null ? spec.linux.rootfsPropagation : null);
+                boolean noPivot = "1".equals(System.getenv("_TAKOYAKI_NO_PIVOT"));
+                if (noPivot) {
+                    Rootfs.msMoveRoot(rootfsPath,
+                            spec.linux != null ? spec.linux.rootfsPropagation : null);
+                } else {
+                    Rootfs.pivot(rootfsPath,
+                            spec.linux != null ? spec.linux.rootfsPropagation : null);
+                }
             } else {
                 Logger.debug("no mount namespace, skipping rootfs prep");
             }
@@ -197,6 +238,14 @@ public final class InitProcess {
                 }
             }
 
+            if (spec.domainname != null && !spec.domainname.isEmpty()) {
+                if (Libc.setdomainname(arena, spec.domainname) != 0) {
+                    Logger.warn("setdomainname failed: " + Libc.strerror(Libc.errno()));
+                } else {
+                    Logger.debug("domainname set to " + spec.domainname);
+                }
+            }
+
             // Mask sensitive paths and remount others read-only BEFORE the root is made RO,
             // so the bind / remount itself can still succeed.
             if (spec.linux != null) {
@@ -220,39 +269,68 @@ public final class InitProcess {
                 Keyring.joinNewSession("takoyaki-" + Libc.getpid());
             }
 
+            // Default umask 0022 for the init path (runc compat). The
+            // restriction sequence may override it from the spec.
+            Libc.umask(0022);
+
+            // I/O priority and scheduler must be applied while still
+            // fully privileged, before the restriction sequence drops caps.
+            if (spec.process != null) {
+                ProcessRestrictions.applyIOPriority(spec.process.ioPriority);
+                ProcessRestrictions.applyScheduler(spec.process.scheduler);
+            }
+
+            // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).
+            // Setting RLIMIT_NOFILE above fs.nr_open requires CAP_SYS_RESOURCE,
+            // which is gone after cap drop. RLIMIT_AS is deferred to just before
+            // execve to avoid OOMing the JVM's heap.
+            if (spec.process != null && spec.process.rlimits != null) {
+                com.ternbusty.takoyaki.syscall.Rlimit.applyExcept(
+                        Libc.getpid(), spec.process.rlimits, "RLIMIT_AS");
+            }
+
             ProcessRestrictions.apply(spec.process,
                     spec.linux != null ? spec.linux.seccomp : null,
                     buildState(spec, containerId, bundlePath, ContainerStatus.CREATED),
                     seccompListenerFd);
 
-            // PTY setup: if process.terminal is true and a console socket was passed,
-            // open a pty, ship the master to the console socket, and wire stdio to
-            // the slave. The new session leadership has to happen before wiring so the
-            // slave can become the controlling terminal of this process.
-            String consoleSocketPath = System.getenv("_TAKOYAKI_CONSOLE_SOCKET");
-            boolean wantTerminal = spec.process != null && Boolean.TRUE.equals(spec.process.terminal);
+            // PTY setup: if process.terminal is true and the console socket was
+            // pre-connected (before pivot_root), open a pty from the container's
+            // devpts, ship the master to the console socket, and wire stdio to
+            // the slave. The new session leadership has to happen before wiring so
+            // the slave can become the controlling terminal of this process.
             int ptySlave = -1;
-            if (wantTerminal && consoleSocketPath != null) {
+            if (consoleSocketFd >= 0) {
                 ConsoleSocket.PtyPair pty = ConsoleSocket.openPty();
                 if (pty != null) {
-                    if (!ConsoleSocket.sendMasterTo(consoleSocketPath, pty.master)) {
+                    if (!ConsoleSocket.sendMasterVia(consoleSocketFd, pty.master)) {
                         Logger.warn("failed to ship pty master, falling back to no-tty");
                     } else {
-                        Logger.debug("pty master sent to " + consoleSocketPath);
                         ptySlave = pty.slave;
                     }
                     PosixIO.close(pty.master);
                 }
+                PosixIO.close(consoleSocketFd);
             }
 
+            Logger.debug("init: closing the pipe to signal completion");
             SyncChannel.writeInt32(mainSenderFd, SyncChannel.MSG_INIT_READY);
             PosixIO.close(mainSenderFd);
 
             if (ptySlave >= 0) {
+                if (spec.process != null && spec.process.consoleSize != null) {
+                    ConsoleSocket.setWinsize(ptySlave,
+                            spec.process.consoleSize.height,
+                            spec.process.consoleSize.width);
+                }
                 ConsoleSocket.wireStdio(ptySlave);
             }
 
-            CloseRange.closeAllAbove(0);
+            // Close all fds >= 3 except notifyListenerFd. Using actual close
+            // (not just CLOEXEC) so the fd leak test does not see stray fds
+            // during the "created" wait. After this, only stdio and the
+            // notify socket remain open.
+            CloseRange.closeAllExcept(notifyListenerFd);
 
             Logger.debug("waiting for start signal on notify fd " + notifyListenerFd);
             NotifySocket.waitForStart(notifyListenerFd);
@@ -264,44 +342,105 @@ public final class InitProcess {
                 return;
             }
 
-            Libc.clearenv();
+            // Prepare the environment: dedup (last wins), inject HOME if empty.
+            java.util.LinkedHashMap<String, String> envMap = new java.util.LinkedHashMap<>();
             if (spec.process.env != null) {
                 for (String entry : spec.process.env) {
                     int eq = entry.indexOf('=');
                     if (eq > 0) {
-                        Libc.setenv(arena, entry.substring(0, eq), entry.substring(eq + 1), true);
+                        envMap.put(entry.substring(0, eq), entry.substring(eq + 1));
                     }
                 }
+            }
+            // runc behaviour (env.go prepareEnv): if HOME is empty or absent
+            // after dedup, look up the user's home in /etc/passwd and set it.
+            // Non-empty HOME is kept as-is.
+            String homeVal = envMap.get("HOME");
+            if (homeVal == null || homeVal.isEmpty()) {
+                int uid = spec.process.user != null ? spec.process.user.uid : 0;
+                String passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid);
+                if (passwdHome != null && !passwdHome.isEmpty()) {
+                    envMap.put("HOME", passwdHome);
+                } else {
+                    // /etc/passwd has no entry: default to "/" (runc's getUserHome default).
+                    envMap.put("HOME", "/");
+                }
+            }
+
+            Libc.clearenv();
+            for (var envEntry : envMap.entrySet()) {
+                Libc.setenv(arena, envEntry.getKey(), envEntry.getValue(), true);
             }
 
             String[] argv = spec.process.args.toArray(new String[0]);
             Logger.info("executing: " + String.join(" ", argv));
 
-            // Apply process.rlimits LAST — after the JVM has done all its heap
+            // Apply RLIMIT_AS LAST — after the JVM has done all its heap
             // and address-space provisioning. If we did this earlier, a low
             // RLIMIT_AS (e.g. 1 GiB) would push the JVM's already-mapped heap
             // over the limit and the very next allocation would OOM. The
             // about-to-execve user process picks up the new limits.
+            // Other rlimits were already applied above (before cap drop).
             if (spec.process.rlimits != null) {
-                com.ternbusty.takoyaki.syscall.Rlimit.apply(Libc.getpid(), spec.process.rlimits);
+                com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(
+                        Libc.getpid(), spec.process.rlimits, "RLIMIT_AS");
             }
 
             // startContainer hooks: last chance for the runtime to poke around
             // in the fully-set-up container namespace before handing control to
             // the user process. Per OCI, failable — non-zero exit aborts start.
+            // runc's startContainer hooks inherit the process environment when
+            // the hook itself does not specify an env field.
             if (spec.hooks != null && spec.hooks.startContainer != null
                     && containerId != null) {
+                // Build the env list that the process will get (after dedup +
+                // HOME injection) so the hook sees the same environment.
+                List<String> hookEnv = new ArrayList<>();
+                for (var envEntry : envMap.entrySet()) {
+                    hookEnv.add(envEntry.getKey() + "=" + envEntry.getValue());
+                }
                 Hooks.runFailFast(spec.hooks.startContainer,
                         buildState(spec, containerId, bundlePath,
                                 ContainerStatus.CREATED),
-                        "startContainer");
+                        "startContainer", hookEnv);
             }
 
+            // Re-apply CLOEXEC on all FDs >= 3. The first closeAllAbove(0)
+            // ran earlier, but Java code between then and now may have opened
+            // new FDs (e.g. Files.readString for /etc/passwd, FFM library
+            // handles, hook fork/exec). This second pass catches any late
+            // arrivals right before execvp closes them.
+            CloseRange.closeAllAbove(0);
+
             Libc.execvp(arena, argv[0], argv);
-            Logger.error("execvp failed: " + Libc.strerror(Libc.errno()));
-            PosixIO._exit(127);
+            // runc-compatible error message: plain text to stderr regardless
+            // of Logger level, so bats tests can assert on it.
+            // Go's syscall.Errno.Error() returns lowercase; C's strerror
+            // returns uppercase. Lowercase the first char to match runc.
+            String rawErr = Libc.strerror(Libc.errno());
+            String errMsg = rawErr.isEmpty() ? rawErr
+                    : Character.toLowerCase(rawErr.charAt(0)) + rawErr.substring(1);
+            // Distinguish "binary not found" from "exec failed" (e.g. bad
+            // shebang). When the binary itself does not exist, runc wraps it
+            // as a container-process error; when exec itself fails (file
+            // exists but can't be run), it prints the bare exec error.
+            boolean binaryExists = new java.io.File(argv[0]).exists();
+            if (!binaryExists) {
+                System.err.println("exec container process caused: exec "
+                        + argv[0] + ": " + errMsg);
+            } else {
+                System.err.println("exec " + argv[0] + ": " + errMsg);
+            }
+            PosixIO._exit(1);
         } catch (Exception e) {
-            Logger.error("init failed: " + e.getMessage());
+            // Print user-facing error to stderr (runc compat). Logger alone
+            // is silent at the default level, and bats tests assert on the
+            // message in $output.
+            String msg = e.getMessage();
+            if (msg != null) {
+                System.err.println(msg);
+            }
+            Logger.error("init failed: " + msg);
             PosixIO._exit(1);
         }
     }

@@ -49,10 +49,80 @@ public final class ProcessRestrictions {
      *                       listener, if the profile has a listenerPath
      * @param seccompListenerFd pre-connected host-side listener socket, or -1
      */
+    /**
+     * Apply I/O priority from the OCI process.ioPriority field. Called before
+     * the restriction sequence while the process still has full privileges.
+     */
+    public static void applyIOPriority(Spec.IOPriority ioPriority) {
+        if (ioPriority == null) return;
+        // ioprio_set(IOPRIO_WHO_PROCESS, 0, IOPRIO_PRIO_VALUE(class, prio))
+        // IOPRIO_PRIO_VALUE(class, data) = (class << 13) | data
+        int value = (ioPriority.classValue() << 13) | ioPriority.priority;
+        long rc = Libc.syscall(Constants.NR_ioprio_set,
+                Constants.IOPRIO_WHO_PROCESS, 0, value, 0, 0);
+        if (rc != 0) {
+            Logger.warn("ioprio_set failed: " + Libc.strerror(Libc.errno()));
+        } else {
+            Logger.debug("ioprio_set class=" + ioPriority.clazz
+                    + " priority=" + ioPriority.priority);
+        }
+    }
+
+    /**
+     * Apply scheduler attributes from the OCI process.scheduler field. Called
+     * before the restriction sequence while the process still has full privileges.
+     *
+     * Uses the raw {@code sched_setattr(2)} syscall with a manually-laid-out
+     * {@code struct sched_attr} (48 bytes).
+     */
+    public static void applyScheduler(Spec.Scheduler scheduler) {
+        if (scheduler == null) return;
+        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+            // struct sched_attr layout (48 bytes):
+            //   u32 size           offset  0
+            //   u32 sched_policy   offset  4
+            //   u64 sched_flags    offset  8
+            //   s32 sched_nice     offset 16
+            //   u32 sched_priority offset 20
+            //   u64 sched_runtime  offset 24
+            //   u64 sched_deadline offset 32
+            //   u64 sched_period   offset 40
+            var seg = arena.allocate(48);
+            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 0, 48); // size
+            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 4, scheduler.policyValue());
+            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8, scheduler.flagBits());
+            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 16,
+                    scheduler.nice != null ? scheduler.nice : 0);
+            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 20,
+                    scheduler.priority != null ? scheduler.priority : 0);
+            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 24,
+                    scheduler.runtime != null ? scheduler.runtime : 0L);
+            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 32,
+                    scheduler.deadline != null ? scheduler.deadline : 0L);
+            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 40,
+                    scheduler.period != null ? scheduler.period : 0L);
+            long rc = Libc.syscall(Constants.NR_sched_setattr,
+                    0, seg.address(), 0, 0, 0);
+            if (rc != 0) {
+                Logger.warn("sched_setattr failed: " + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("sched_setattr policy=" + scheduler.policy);
+            }
+        }
+    }
+
     public static void apply(Spec.Process process, Spec.LinuxSeccomp seccomp,
                              State listenerState, int seccompListenerFd) {
-        if (process != null && process.umask != null) {
-            Libc.umask(process.umask.intValue());
+        // umask: check process.user.umask first (OCI spec canonical location),
+        // then fall back to process.umask for backward compatibility.
+        Long umaskVal = null;
+        if (process != null && process.user != null && process.user.umask != null) {
+            umaskVal = process.user.umask;
+        } else if (process != null && process.umask != null) {
+            umaskVal = process.umask;
+        }
+        if (umaskVal != null) {
+            Libc.umask(umaskVal.intValue());
         }
 
         // Order rationale (matches runc / youki):
