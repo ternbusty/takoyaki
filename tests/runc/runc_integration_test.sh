@@ -138,7 +138,12 @@ for file in $(printf '%s\n' "${!FILE_FILTER[@]}" | sort); do
     fname=$(basename "$file")
     expected=${FILE_TEST_COUNT[$file]}
 
-    echo "=== [$FILE_INDEX/$FILE_TOTAL] $fname ($expected tests) ==="
+    # Scale timeout by test count (30s per test, floor 180s) so that
+    # heavy files like idmap.bats (25 tests) do not hit a flat ceiling.
+    timeout_secs=$(( expected * 30 ))
+    (( timeout_secs < 180 )) && timeout_secs=180
+
+    echo "=== [$FILE_INDEX/$FILE_TOTAL] $fname ($expected tests, ${timeout_secs}s) ==="
 
     TMPOUT=$(mktemp)
 
@@ -146,12 +151,11 @@ for file in $(printf '%s\n' "${!FILE_FILTER[@]}" | sort); do
     # issues with apostrophes, $, and | in test names and regex.
     run_bats() {
         sudo -E PATH="$PATH" _BATS_FILTER="$filter" \
-            timeout 300 script -q -e -c \
+            timeout "$timeout_secs" script -q -e -c \
             'exec bats -f "$_BATS_FILTER" -t '"$file" /dev/null > "$TMPOUT" 2>&1
     }
 
     # Use script(1) for a PTY (needed for console-socket tests in CI).
-    # Per-file timeout of 300s.
     run_bats
     rc=$?
 
