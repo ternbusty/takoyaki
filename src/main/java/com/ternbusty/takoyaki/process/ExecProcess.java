@@ -1,7 +1,9 @@
 package com.ternbusty.takoyaki.process;
 
 import com.ternbusty.takoyaki.ipc.SyncChannel;
+import com.ternbusty.takoyaki.keyring.Keyring;
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.selinux.SeLinux;
 import com.ternbusty.takoyaki.state.ContainerStatus;
 import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.CloseRange;
@@ -125,6 +127,19 @@ public final class ExecProcess {
             if (payload.process.rlimits != null) {
                 com.ternbusty.takoyaki.syscall.Rlimit.applyExcept(
                         Libc.getpid(), payload.process.rlimits, "RLIMIT_AS");
+            }
+
+            // Join the container's session keyring unless --no-new-keyring was
+            // used at creation time.  The init process created a named session
+            // keyring "_ses.<id>"; exec joins it so child processes share the
+            // same keyring. When a SELinux label is configured, set keycreate
+            // before the join so the kernel stamps the correct label on any
+            // key that gets created (same pattern as InitProcess).
+            if (!payload.noNewKeyring) {
+                String seLabel = payload.process != null ? payload.process.selinuxLabel : null;
+                SeLinux.applyKeyCreate(seLabel);
+                Keyring.joinNewSession("_ses." + payload.containerId);
+                SeLinux.clearKeyCreate();
             }
 
             // getpid() is the pid inside the container's pid ns — the same

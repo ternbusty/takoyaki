@@ -10,11 +10,13 @@ import java.util.Map;
 
 public final class KontainerConfig {
     public String cgroupPath;
+    public boolean noNewKeyring;
 
     public KontainerConfig() {}
 
-    public KontainerConfig(String cgroupPath) {
+    public KontainerConfig(String cgroupPath, boolean noNewKeyring) {
         this.cgroupPath = cgroupPath;
+        this.noNewKeyring = noNewKeyring;
     }
 
     public static Path path(String rootPath, String containerId) {
@@ -36,12 +38,14 @@ public final class KontainerConfig {
         Map<String, Object> o = JsonMap.asObject(node);
         KontainerConfig c = new KontainerConfig();
         c.cgroupPath = JsonMap.str(o, "cgroupPath");
+        c.noNewKeyring = JsonMap.boolOr(o, "noNewKeyring", false);
         return c;
     }
 
     public Object toJson() {
         Map<String, Object> o = JsonMap.obj();
         JsonMap.put(o, "cgroupPath", cgroupPath);
+        if (noNewKeyring) JsonMap.put(o, "noNewKeyring", true);
         return o;
     }
 }

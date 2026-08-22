@@ -173,7 +173,8 @@ public final class MainProcess {
                     ContainerStatus.CREATED, stage2Pid, bundlePath, spec.annotations);
             state.save(rootPath);
 
-            new KontainerConfig(effectiveCgroupsPath)
+            boolean noNewKeyring = "1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"));
+            new KontainerConfig(effectiveCgroupsPath, noNewKeyring)
                     .save(rootPath, containerId);
 
             // prestart (deprecated, but still emitted by some tools) and createRuntime hooks

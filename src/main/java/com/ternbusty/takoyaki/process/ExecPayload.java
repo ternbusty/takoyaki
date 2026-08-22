@@ -20,6 +20,7 @@ public final class ExecPayload {
     public Spec.LinuxSeccomp seccomp;
     public Spec.MemoryPolicy memoryPolicy;
     public int preserveFds;
+    public boolean noNewKeyring;
 
     public static ExecPayload fromJson(Object node) {
         if (node == null) return null;
@@ -32,6 +33,7 @@ public final class ExecPayload {
         p.seccomp = Spec.LinuxSeccomp.fromJson(o.get("seccomp"));
         p.memoryPolicy = Spec.MemoryPolicy.fromJson(o.get("memoryPolicy"));
         p.preserveFds = JsonMap.intOr(o, "preserveFds", 0);
+        p.noNewKeyring = JsonMap.boolOr(o, "noNewKeyring", false);
         return p;
     }
 
@@ -44,6 +46,7 @@ public final class ExecPayload {
         JsonMap.put(o, "seccomp", seccomp == null ? null : seccomp.toJson());
         if (memoryPolicy != null) JsonMap.put(o, "memoryPolicy", memoryPolicy.toJson());
         if (preserveFds > 0) JsonMap.put(o, "preserveFds", preserveFds);
+        if (noNewKeyring) JsonMap.put(o, "noNewKeyring", true);
         return o;
     }
 }

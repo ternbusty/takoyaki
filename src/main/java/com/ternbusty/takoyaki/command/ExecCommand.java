@@ -155,14 +155,19 @@ public final class ExecCommand {
         // support (skip); any other load failure must NOT silently exec the
         // process outside the container's resource limits.
         String cgroupPath = null;
+        boolean noNewKeyring = false;
         try {
-            cgroupPath = KontainerConfig.load(rootPath, containerId).cgroupPath;
+            KontainerConfig kc = KontainerConfig.load(rootPath, containerId);
+            cgroupPath = kc.cgroupPath;
+            noNewKeyring = kc.noNewKeyring;
         } catch (java.nio.file.NoSuchFileException e) {
             Logger.debug("no cgroup config for " + containerId);
         } catch (Exception e) {
             System.err.println("failed to load cgroup config: " + e.getMessage());
             return EXIT_RUNTIME_ERROR;
         }
+
+        payload.noNewKeyring = noNewKeyring;
 
         // runc compat: --cgroup PATH resolves to a subcgroup under the
         // container's cgroup. "/" means the container root cgroup (default).
