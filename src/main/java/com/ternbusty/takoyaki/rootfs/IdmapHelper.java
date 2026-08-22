@@ -49,6 +49,7 @@ public final class IdmapHelper {
         try {
             mh = Linker.nativeLinker().downcallHandle(
                     SymbolLookup.loaderLookup()
+                            .or(Linker.nativeLinker().defaultLookup())
                             .find("takoyaki_idmap_helper_fork")
                             .orElseThrow(() -> new UnsatisfiedLinkError(
                                     "takoyaki_idmap_helper_fork")),
@@ -57,9 +58,12 @@ public final class IdmapHelper {
                             ValueLayout.JAVA_INT,
                             ValueLayout.JAVA_INT));
         } catch (UnsatisfiedLinkError e) {
-            // Should never happen; the symbol is in libbootstrap.a linked
-            // with --whole-archive. Log and fall through so the class still
-            // loads (the MethodHandle stays null and the caller gets -1).
+            // Should never happen: the symbol is in libbootstrap.a linked
+            // with --whole-archive and exported via -rdynamic. The
+            // defaultLookup() fallback uses dlsym(RTLD_DEFAULT) which
+            // searches the main executable. Log and fall through so the
+            // class still loads (the MethodHandle stays null and nativeFork
+            // returns -1).
             System.err.println("WARNING: " + e.getMessage());
             mh = null;
         }
