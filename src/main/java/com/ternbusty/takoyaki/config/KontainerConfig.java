@@ -14,6 +14,10 @@ public final class KontainerConfig {
 
     public KontainerConfig() {}
 
+    public KontainerConfig(String cgroupPath) {
+        this.cgroupPath = cgroupPath;
+    }
+
     public KontainerConfig(String cgroupPath, boolean noNewKeyring) {
         this.cgroupPath = cgroupPath;
         this.noNewKeyring = noNewKeyring;
