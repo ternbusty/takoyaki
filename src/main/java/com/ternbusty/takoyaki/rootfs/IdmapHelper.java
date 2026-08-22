@@ -6,13 +6,10 @@ import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 
+import org.graalvm.nativeimage.c.function.CFunction;
+
 import java.io.IOException;
 import java.lang.foreign.Arena;
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.SymbolLookup;
-import java.lang.foreign.ValueLayout;
-import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -37,47 +34,19 @@ public final class IdmapHelper {
     private IdmapHelper() {}
 
     /**
-     * Downcall handle for the C function {@code takoyaki_idmap_helper_fork}
-     * defined in bootstrap.c.  The function forks a child that unshares
-     * CLONE_NEWUSER and syncs via a socketpair, keeping all work in pure C
-     * so that SubstrateVM's broken post-fork state (missing GC/signal
-     * threads) never causes a safepoint deadlock.
+     * Direct call to the C function {@code takoyaki_idmap_helper_fork}
+     * defined in bootstrap.c (statically linked via {@code --whole-archive}).
+     * The function forks a child that unshares CLONE_NEWUSER and syncs via
+     * a socketpair, keeping all work in pure C so that SubstrateVM's broken
+     * post-fork state (missing GC/signal threads) never causes a safepoint
+     * deadlock.
+     *
+     * {@code @CFunction} binds at native-image link time, so no runtime
+     * symbol lookup is needed (FFM's {@code SymbolLookup} cannot find
+     * symbols in the main executable under SubstrateVM).
      */
-    private static final MethodHandle NATIVE_FORK;
-    static {
-        MethodHandle mh;
-        try {
-            mh = Linker.nativeLinker().downcallHandle(
-                    SymbolLookup.loaderLookup()
-                            .or(Linker.nativeLinker().defaultLookup())
-                            .find("takoyaki_idmap_helper_fork")
-                            .orElseThrow(() -> new UnsatisfiedLinkError(
-                                    "takoyaki_idmap_helper_fork")),
-                    FunctionDescriptor.of(
-                            ValueLayout.JAVA_INT,
-                            ValueLayout.JAVA_INT,
-                            ValueLayout.JAVA_INT));
-        } catch (UnsatisfiedLinkError e) {
-            // Should never happen: the symbol is in libbootstrap.a linked
-            // with --whole-archive and exported via -rdynamic. The
-            // defaultLookup() fallback uses dlsym(RTLD_DEFAULT) which
-            // searches the main executable. Log and fall through so the
-            // class still loads (the MethodHandle stays null and nativeFork
-            // returns -1).
-            System.err.println("WARNING: " + e.getMessage());
-            mh = null;
-        }
-        NATIVE_FORK = mh;
-    }
-
-    private static int nativeFork(int parentFd, int childFd) {
-        if (NATIVE_FORK == null) return -1;
-        try {
-            return (int) NATIVE_FORK.invokeExact(parentFd, childFd);
-        } catch (Throwable t) {
-            return -1;
-        }
-    }
+    @CFunction("takoyaki_idmap_helper_fork")
+    private static native int nativeFork(int parentFd, int childFd);
 
     /** Apply an id-mapped bind mount from {@code source} to {@code destination}. */
     public static boolean apply(Spec.Mount m, String destination) {

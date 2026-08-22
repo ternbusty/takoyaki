@@ -374,7 +374,6 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.libseccomp",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
-                "--initialize-at-run-time=com.ternbusty.takoyaki.rootfs.IdmapHelper",
             )
             if (useMusl) {
                 // --libc=musl plus --static produces a fully static
