@@ -6,6 +6,7 @@ import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.libseccomp.SeccompH;
 import com.ternbusty.takoyaki.syscall.libseccomp.scmp_arg_cmp;
 
+import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 
 import java.lang.foreign.Arena;
@@ -100,7 +101,8 @@ public final class Seccomp {
                                 filterFlagsValue |= 4;
                             }
                             case "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV" -> {
-                                int rc = SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_WAITKILL(), 1);
+                                // SCMP_FLTATR_CTL_WAITKILL = 10 (libseccomp 2.5.4+)
+                                int rc = SeccompH.seccomp_attr_set(ctx, 10, 1);
                                 if (rc != 0) {
                                     Logger.warn("seccomp_attr_set(WAITKILL) failed: " + rc
                                             + " (requires libseccomp >= 2.5.4 and kernel >= 5.19)");
