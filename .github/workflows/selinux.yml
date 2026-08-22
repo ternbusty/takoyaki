@@ -1,0 +1,80 @@
+name: SELinux integration tests (Lima + Fedora)
+
+# Runs takoyaki inside a Fedora Lima VM where SELinux is enforcing.
+# Exercises the SELinux label application path and verifies that basic container
+# lifecycle operations do not trigger AVC denials.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  selinux:
+    timeout-minutes: 90
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: lima-vm/lima-actions/setup@v1
+        id: lima-setup
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/lima
+          key: lima-${{ steps.lima-setup.outputs.version }}-fedora
+
+      - name: Start Fedora VM
+        # --plain disables file sharing and port forwarding for faster boot.
+        # GraalVM native-image needs more RAM than the 4 GiB default.
+        run: limactl start --plain --name=default --memory=8 --cpus=4 template:fedora
+
+      - name: Copy repository to VM
+        run: limactl cp -r . default:/tmp/takoyaki
+
+      - name: Install dependencies
+        run: |
+          lima sudo bash /tmp/takoyaki/tests/selinux/setup_fedora.sh
+
+      - name: Show guest info
+        run: |
+          set -eux -o pipefail
+          lima uname -a
+          lima cat /etc/os-release
+          lima sestatus
+          lima rpm -q container-selinux
+          lima bash -lc 'java -version'
+          lima bash -lc 'jextract --version' || true
+
+      - name: Build native takoyaki
+        run: |
+          ssh -tt lima-default sudo -i bash -c '
+            cd /tmp/takoyaki
+            ./gradlew nativeCompile --no-daemon --no-configuration-cache
+          '
+
+      - name: Run contest tests
+        run: |
+          ssh -tt lima-default sudo -i bash -c '
+            cd /tmp/takoyaki
+            TAKOYAKI_BIN=/tmp/takoyaki/build/native/nativeCompile/takoyaki \
+              ./gradlew contestTest --no-daemon
+          '
+
+      - name: Run runc SELinux bats tests
+        run: |
+          ssh -tt lima-default sudo -i bash -c '
+            cd /tmp/takoyaki
+            ./tests/runc/runc_integration_test.sh \
+              build/native/nativeCompile/takoyaki \
+              tests/runc/runc_test_pattern_selinux
+          '
+
+      - name: Show AVC denials (if any)
+        if: always()
+        run: |
+          lima sudo ausearch -i -m avc,user_avc -ts boot 2>/dev/null || echo "No AVC denials found."

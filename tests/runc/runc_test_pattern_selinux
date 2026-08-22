@@ -1,0 +1,30 @@
+# runc bats integration test pattern for SELinux CI
+#
+# Enables the SELinux-specific tests that are [skip]ed in the default pattern.
+# Also includes a handful of lifecycle tests as a sanity check that the runtime
+# operates correctly under SELinux enforcement.
+
+# --- selinux (selinux.bats) ---
+runc run (no selinux label)
+runc run (custom selinux label)
+runc run (session keyring security label)
+runc exec (session keyring security label)
+runc run (session keyring security label + userns)
+runc exec (session keyring security label + userns)
+
+# --- userns + selinux (userns.bats) ---
+userns join other container userns[selinux enabled]
+
+# --- lifecycle sanity (create.bats / start.bats / run.bats / delete.bats) ---
+runc create
+runc create [terminal=false]
+runc start
+runc run
+runc run [terminal=false]
+runc run detached
+runc delete
+runc delete --force
+
+# --- exec sanity ---
+runc exec
+runc exec ls -la
