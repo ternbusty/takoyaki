@@ -56,7 +56,7 @@ jobs:
       - name: Build native takoyaki
         run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
 
-      # ── diagnose arm slowness: run each idmap test individually with timing ──
+      # ── diagnose arm slowness: per-test timing with 120s timeout each ──
       - name: Per-test idmap timing (takoyaki vs runc)
         if: contains(matrix.runner, 'arm')
         timeout-minutes: 60
@@ -75,71 +75,38 @@ jobs:
 
           BATS=$(command -v bats)
 
-          # Extract all idmap test names
-          grep '@test "' tests/integration/idmap.bats \
-            | sed 's/.*@test "\(.*\)" {.*/\1/' > /tmp/idmap-tests.txt
-          echo "Found $(wc -l < /tmp/idmap-tests.txt) idmap tests"
-          cat /tmp/idmap-tests.txt
+          # Extract all idmap test names into an array (avoids stdin
+          # consumption by script/sudo in the loop body).
+          mapfile -t TESTS < <(grep '@test "' tests/integration/idmap.bats \
+            | sed 's/.*@test "\(.*\)" {.*/\1/')
+          echo "Found ${#TESTS[@]} idmap tests"
+          printf '  %s\n' "${TESTS[@]}"
 
-          echo ""
-          echo "=========================================="
-          echo "=== Per-test timing with TAKOYAKI ==="
-          echo "=========================================="
-          cp ./takoyaki ./runc
-          chmod +x ./runc
-          i=0
-          while IFS= read -r tname; do
-            i=$((i+1))
-            escaped=$(printf '%s' "$tname" | sed 's/[][\\.*^$()|+?{}]/\\&/g')
-            echo "--- [$i] $tname ---"
-            START_SEC=$SECONDS
-            sudo -E PATH="$PATH" script -q -e -c \
-              "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
-              /dev/null 2>&1 || true
-            ELAPSED=$((SECONDS - START_SEC))
-            echo "  -> ${ELAPSED}s"
+          run_tests() {
+            local label="$1" runtime="$2"
+            cp "$runtime" ./runc
+            chmod +x ./runc
             echo ""
-          done < /tmp/idmap-tests.txt
+            echo "=========================================="
+            echo "=== Per-test timing with $label ==="
+            echo "=========================================="
+            local i=0
+            for tname in "${TESTS[@]}"; do
+              i=$((i+1))
+              local escaped
+              escaped=$(printf '%s' "$tname" | sed 's/[][\\.*^$()|+?{}]/\\&/g')
+              echo "--- [$i/${#TESTS[@]}] $tname ---"
+              local start=$SECONDS
+              timeout 120 sudo -E PATH="$PATH" \
+                script -q -e -c \
+                "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
+                /dev/null </dev/null 2>&1 || echo "  (exit $?)"
+              echo "  -> $((SECONDS - start))s"
+            done
+          }
 
-          echo ""
-          echo "=========================================="
-          echo "=== Per-test timing with RUNC (Go) ==="
-          echo "=========================================="
-          cp ./runc-real ./runc
-          chmod +x ./runc
-          i=0
-          while IFS= read -r tname; do
-            i=$((i+1))
-            escaped=$(printf '%s' "$tname" | sed 's/[][\\.*^$()|+?{}]/\\&/g')
-            echo "--- [$i] $tname ---"
-            START_SEC=$SECONDS
-            sudo -E PATH="$PATH" script -q -e -c \
-              "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
-              /dev/null 2>&1 || true
-            ELAPSED=$((SECONDS - START_SEC))
-            echo "  -> ${ELAPSED}s"
-            echo ""
-          done < /tmp/idmap-tests.txt
-
-          echo ""
-          echo "=========================================="
-          echo "=== ALL 25 idmap tests at once: TAKOYAKI ==="
-          echo "=========================================="
-          cp ./takoyaki ./runc
-          chmod +x ./runc
-          time sudo -E PATH="$PATH" script -q -e -c \
-            "$BATS -t tests/integration/idmap.bats" \
-            /dev/null 2>&1 || true
-
-          echo ""
-          echo "=========================================="
-          echo "=== ALL 25 idmap tests at once: RUNC ==="
-          echo "=========================================="
-          cp ./runc-real ./runc
-          chmod +x ./runc
-          time sudo -E PATH="$PATH" script -q -e -c \
-            "$BATS -t tests/integration/idmap.bats" \
-            /dev/null 2>&1 || true
+          run_tests "TAKOYAKI" ./takoyaki
+          run_tests "RUNC" ./runc-real
 
       # Commented out to get diagnostic results faster
       # - name: Run runc integration tests
