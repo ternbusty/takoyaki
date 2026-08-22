@@ -61,7 +61,7 @@ jobs:
         if: contains(matrix.runner, 'arm')
         timeout-minutes: 30
         run: |
-          set -eux
+          set -x
           RUNC_DIR="tests/runc/src/github.com/opencontainers/runc"
           cd "$RUNC_DIR"
 
@@ -74,11 +74,7 @@ jobs:
           go build -o ./runc-real .
 
           # Create a wrapper that enables --debug --log for takoyaki.
-          # Each invocation appends to the same log file.
-          cat > ./takoyaki-debug << 'WRAPPER'
-          #!/bin/bash
-          exec "$(dirname "$0")/takoyaki-real" --debug --log /tmp/takoyaki-debug.log "$@"
-          WRAPPER
+          printf '#!/bin/bash\nexec "$(dirname "$0")/takoyaki-real" --debug --log /tmp/takoyaki-debug.log "$@"\n' > ./takoyaki-debug
           chmod +x ./takoyaki-debug
 
           BATS=$(command -v bats)
@@ -90,25 +86,35 @@ jobs:
             "idmap mount (idmap flag, implied mapping) [userns]"
           )
 
-          # Watchdog: after 30s dump process info to diagnose hangs.
-          watchdog() {
-            sleep 30
-            echo ""
-            echo "====== WATCHDOG: test hung for 30s ======"
-            echo "--- process tree ---"
-            ps auxf 2>/dev/null || ps aux
-            echo "--- runc/takoyaki processes ---"
-            for pid in $(pgrep -f 'takoyaki-real|runc' 2>/dev/null); do
-              echo "PID=$pid cmdline=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"
-              echo "  wchan=$(cat /proc/$pid/wchan 2>/dev/null)"
-              echo "  status: $(grep -E 'State:|Threads:|voluntary' /proc/$pid/status 2>/dev/null | tr '\n' ' ')"
-              echo "  stack (first 10 lines):"
-              head -10 /proc/$pid/stack 2>/dev/null || echo "  (no access)"
-            done
-            echo "--- mount count ---"
-            wc -l /proc/self/mountinfo
-            echo "====== END WATCHDOG ======"
-          }
+          # Watchdog: after 20s dump process info as root to get kernel stacks.
+          # Also strace the child takoyaki process for 5s.
+          cat > /tmp/watchdog.sh << 'WD'
+          #!/bin/bash
+          sleep 20
+          echo ""
+          echo "====== WATCHDOG (20s) ======"
+          echo "--- process tree ---"
+          ps auxf 2>/dev/null || ps aux
+          echo "--- takoyaki/runc processes ---"
+          for pid in $(pgrep -f 'takoyaki-real' 2>/dev/null); do
+            echo "PID=$pid cmdline=$(tr '\0' ' ' < /proc/$pid/cmdline 2>/dev/null)"
+            echo "  wchan=$(cat /proc/$pid/wchan 2>/dev/null)"
+            echo "  status: $(grep -E 'State:|Threads:|voluntary' /proc/$pid/status 2>/dev/null | tr '\n' ' ')"
+            echo "  stack:"
+            cat /proc/$pid/stack 2>/dev/null || echo "  (no access)"
+            echo "  children: $(cat /proc/$pid/task/$pid/children 2>/dev/null)"
+            echo "  fd count: $(ls /proc/$pid/fd 2>/dev/null | wc -l)"
+          done
+          # strace the child (highest-ctxsw) takoyaki process for 5s
+          CHILD=$(pgrep -f 'takoyaki-real' 2>/dev/null | tail -1)
+          if [ -n "$CHILD" ]; then
+            echo "--- strace PID=$CHILD for 5s ---"
+            timeout 5 strace -p "$CHILD" -tt -T -e 'trace=all' 2>&1 | head -200 || true
+            echo "--- end strace ---"
+          fi
+          echo "====== END WATCHDOG ======"
+          WD
+          chmod +x /tmp/watchdog.sh
 
           echo "=========================================="
           echo "=== TAKOYAKI (with debug) ==="
@@ -120,19 +126,20 @@ jobs:
             echo ""
             echo "--- $tname ---"
             rm -f /tmp/takoyaki-debug.log
-            watchdog &
+            sudo /tmp/watchdog.sh &
             WD=$!
             start=$SECONDS
-            timeout 60 sudo -E PATH="$PATH" \
+            timeout 45 sudo -E PATH="$PATH" \
               script -q -e -c \
               "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
               /dev/null </dev/null 2>&1 || echo "  (exit $?)"
             elapsed=$((SECONDS - start))
             echo "  -> ${elapsed}s"
-            kill $WD 2>/dev/null; wait $WD 2>/dev/null || true
+            kill $WD 2>/dev/null || true
+            wait $WD 2>/dev/null || true
 
-            echo "--- takoyaki debug log (last 80 lines) ---"
-            tail -80 /tmp/takoyaki-debug.log 2>/dev/null || echo "(no log)"
+            echo "--- takoyaki debug log (last 100 lines) ---"
+            cat /tmp/takoyaki-debug.log 2>/dev/null || echo "(no log)"
             echo "--- end debug log ---"
           done
 
@@ -147,7 +154,7 @@ jobs:
             echo ""
             echo "--- $tname ---"
             start=$SECONDS
-            timeout 60 sudo -E PATH="$PATH" \
+            timeout 45 sudo -E PATH="$PATH" \
               script -q -e -c \
               "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
               /dev/null </dev/null 2>&1 || echo "  (exit $?)"
