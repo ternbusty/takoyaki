@@ -59,6 +59,11 @@ public final class SeccompListener {
      * Forward the notify fd over a pre-connected socket. If preConnectedFd is -1,
      * fall back to connecting from here (only works pre-pivot or when the listener
      * path is somehow reachable from inside the container, which it usually isn't).
+     *
+     * The OCI seccomp notify protocol requires a single {@code sendmsg} carrying
+     * both the {@code ContainerProcessState} JSON as the iov data and the notify
+     * fd as SCM_RIGHTS ancillary data. The receiver ({@code seccompagent}) does
+     * one {@code recvmsg} expecting both payloads atomically.
      */
     public static void forward(String listenerPath,
                                State state,
@@ -84,15 +89,13 @@ public final class SeccompListener {
                 }
             }
             try {
-                String json = Json.encode(state.toJson()) + "\n";
-                if (!writeAll(arena, sock, json.getBytes())) {
-                    Logger.warn("failed to send state to seccomp listener");
-                    return;
-                }
-                if (listenerMetadata != null && !listenerMetadata.isEmpty()) {
-                    writeAll(arena, sock, listenerMetadata.getBytes());
-                }
-                if (!ScmRights.sendFd(sock, notifyFd, (byte) 0)) {
+                // Build ContainerProcessState (OCI runtime spec §linux-seccomp).
+                // The receiver maps fds[] entries by index to the SCM_RIGHTS fds
+                // received in the same recvmsg.
+                String containerProcessState = buildContainerProcessState(
+                        state, listenerMetadata);
+                byte[] payload = containerProcessState.getBytes();
+                if (!ScmRights.sendFdWithData(sock, notifyFd, payload)) {
                     Logger.warn("failed to send seccomp notify fd via SCM_RIGHTS");
                     return;
                 }
@@ -101,6 +104,32 @@ public final class SeccompListener {
                 PosixIO.close(sock);
             }
         }
+    }
+
+    /**
+     * Build a ContainerProcessState JSON string matching the OCI spec.
+     *
+     * Structure expected by seccompagent and other compliant listeners:
+     * <pre>
+     * {
+     *   "ociVersion": "...",
+     *   "fds": ["seccompFd"],
+     *   "pid": <pid>,
+     *   "metadata": "...",
+     *   "state": { <container state> }
+     * }
+     * </pre>
+     */
+    private static String buildContainerProcessState(State state, String metadata) {
+        java.util.Map<String, Object> cps = new java.util.LinkedHashMap<>();
+        cps.put("ociVersion", state.ociVersion != null ? state.ociVersion : "1.0.2");
+        cps.put("fds", java.util.List.of("seccompFd"));
+        cps.put("pid", state.pid != null ? state.pid : 0);
+        if (metadata != null && !metadata.isEmpty()) {
+            cps.put("metadata", metadata);
+        }
+        cps.put("state", state.toJson());
+        return Json.encode(cps);
     }
 
     private static boolean connect(Arena arena, int sock, String path) {
