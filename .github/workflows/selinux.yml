@@ -4,9 +4,8 @@ name: SELinux integration tests (Lima + Fedora)
 # Exercises the SELinux label application path and verifies that basic container
 # lifecycle operations do not trigger AVC denials.
 #
-# lima-vm/lima-actions/setup@v1 does not support aarch64 runners (its QEMU
-# setup step hard-checks uname -m = x86_64), so Lima and QEMU are installed
-# manually.
+# Follows the same pattern as kontainer-runtime's runc-compat SELinux job:
+# build on the runner, copy the binary into a Fedora VM via Lima, run tests.
 
 on:
   push:
@@ -18,47 +17,65 @@ on:
 jobs:
   selinux:
     timeout-minutes: 90
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
 
-      - name: Install QEMU
+      # ── toolchain (runner) ───────────────────────────────────────
+      - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            qemu-system-arm qemu-utils qemu-efi-aarch64
-          sudo modprobe kvm || true
-          if [ -e /dev/kvm ]; then
-            sudo chown "$(whoami)" /dev/kvm
-          fi
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev jq
 
-      - name: Install Lima
+      - name: Install GraalVM 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'gradle'
+
+      - name: Install jextract
         run: |
-          LIMA_VERSION=$(curl -fsSL https://api.github.com/repos/lima-vm/lima/releases/latest | jq -r .tag_name)
-          curl -fsSL \
-            "https://github.com/lima-vm/lima/releases/download/${LIMA_VERSION}/lima-${LIMA_VERSION#v}-Linux-aarch64.tar.gz" \
-            | sudo tar xzC /usr/local
-          limactl --version
-          echo "lima-version=${LIMA_VERSION}" >> "$GITHUB_OUTPUT"
-        id: lima-install
+          curl -s "https://get.sdkman.io" | bash
+          echo "sdkman_auto_answer=true" >> "$HOME/.sdkman/etc/config"
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install jextract
+          echo "$HOME/.sdkman/candidates/jextract/current/bin" >> "$GITHUB_PATH"
+
+      # ── build (runner) ───────────────────────────────────────────
+      - name: Run unit tests
+        run: ./gradlew test --no-daemon
+
+      - name: Build native takoyaki
+        run: |
+          ./gradlew nativeCompile --no-daemon --no-configuration-cache
+          ls -lh build/native/nativeCompile/takoyaki
+
+      # ── Lima VM ──────────────────────────────────────────────────
+      - name: Set up Lima
+        uses: lima-vm/lima-actions/setup@v1
+        id: lima-setup
 
       - uses: actions/cache@v6
         with:
           path: ~/.cache/lima
-          key: lima-${{ steps.lima-install.outputs.lima-version }}-fedora
+          key: lima-${{ steps.lima-setup.outputs.version }}-fedora
 
       - name: Start Fedora VM
-        # --plain disables file sharing and port forwarding for faster boot.
-        # GraalVM native-image needs more RAM than the 4 GiB default.
-        run: limactl start --plain --name=default --memory=8 --cpus=4 template:fedora
+        run: limactl start --plain --name=default template://fedora
 
-      - name: Copy repository to VM
-        run: limactl cp -r . default:/tmp/takoyaki
+      - name: Provision VM
+        run: |
+          set -eux -o pipefail
+          lima sudo dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+            --exclude="kernel,kernel-core" \
+            install bats container-selinux git-core golang jq \
+                    libseccomp-devel make policycoreutils
 
-      - name: Install dependencies
-        run: lima sudo bash /tmp/takoyaki/tests/selinux/setup_fedora.sh
+          # Remount /tmp with suid to avoid SELinux nosuid_transition denials.
+          lima sudo mount -o remount,suid /tmp
 
       - name: Show guest info
         run: |
@@ -67,31 +84,34 @@ jobs:
           lima cat /etc/os-release
           lima sestatus
           lima rpm -q container-selinux
-          lima bash -lc 'java -version'
-          lima bash -lc 'jextract --version' || true
 
-      - name: Build native takoyaki
+      # ── copy binary into VM ─────────────────────────────────────
+      - name: Copy takoyaki binary into VM
         run: |
-          ssh -tt lima-default sudo -i bash -c '
-            cd /tmp/takoyaki
-            ./gradlew nativeCompile --no-daemon --no-configuration-cache
-          '
+          set -eux -o pipefail
+          limactl cp build/native/nativeCompile/takoyaki default:/tmp/takoyaki-bin
+          lima sudo install -m 0755 /tmp/takoyaki-bin /usr/local/bin/takoyaki
 
-      - name: Run contest tests
+      # ── runc SELinux bats tests ──────────────────────────────────
+      - name: Clone runc and build test helpers in VM
         run: |
-          ssh -tt lima-default sudo -i bash -c '
-            cd /tmp/takoyaki
-            TAKOYAKI_BIN=/tmp/takoyaki/build/native/nativeCompile/takoyaki \
-              ./gradlew contestTest --no-daemon
+          lima sudo bash -c '
+            set -eux
+            git clone --depth 1 https://github.com/opencontainers/runc /tmp/runc
+            cd /tmp/runc
+            make test-binaries
+            chmod +x tests/integration/get-images.sh
+            tests/integration/get-images.sh > /dev/null
           '
 
       - name: Run runc SELinux bats tests
         run: |
           ssh -tt lima-default sudo -i bash -c '
-            cd /tmp/takoyaki
-            ./tests/runc/runc_integration_test.sh \
-              build/native/nativeCompile/takoyaki \
-              tests/runc/runc_test_pattern_selinux
+            set -eux
+            cd /tmp/runc
+            cp /usr/local/bin/takoyaki ./runc
+            chmod +x ./runc
+            bats -t tests/integration/selinux.bats
           '
 
       - name: Show AVC denials (if any)
