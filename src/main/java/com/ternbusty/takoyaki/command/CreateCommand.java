@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.exeseal.ExeSeal;
 import com.ternbusty.takoyaki.ipc.NotifySocket;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.process.MainProcess;
@@ -109,14 +110,15 @@ public final class CreateCommand {
         int cloneFlags = NamespaceFlags.fromSpec(spec.linux != null ? spec.linux.namespaces : null);
         Logger.debug("clone flags=0x" + Integer.toHexString(cloneFlags));
 
-        String exePath;
-        try (Arena arena = Arena.ofConfined()) {
-            exePath = PosixIO.readlink(arena, "/proc/self/exe");
-        }
-        if (exePath == null) {
-            System.err.println("readlink /proc/self/exe failed");
+        // CVE-2019-5736 mitigation: seal /proc/self/exe so that a compromised
+        // container cannot overwrite the host binary.  The sealed fd is passed
+        // to the child as /proc/self/fd/N instead of the on-disk path.
+        int sealedExeFd = ExeSeal.cloneSelfExe(rootPath);
+        if (sealedExeFd < 0) {
+            System.err.println("unable to create sealed /proc/self/exe clone (CVE-2019-5736)");
             return 1;
         }
+        String exePath = "/proc/self/fd/" + sealedExeFd;
 
         List<String> envList = HostEnv.inherited();
         envList.add("_TAKOYAKI_IS_BOOTSTRAP=1");
