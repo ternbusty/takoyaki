@@ -8,6 +8,11 @@ import com.ternbusty.takoyaki.syscall.PosixIO;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
+import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -30,6 +35,45 @@ import java.util.List;
  */
 public final class IdmapHelper {
     private IdmapHelper() {}
+
+    /**
+     * Downcall handle for the C function {@code takoyaki_idmap_helper_fork}
+     * defined in bootstrap.c.  The function forks a child that unshares
+     * CLONE_NEWUSER and syncs via a socketpair, keeping all work in pure C
+     * so that SubstrateVM's broken post-fork state (missing GC/signal
+     * threads) never causes a safepoint deadlock.
+     */
+    private static final MethodHandle NATIVE_FORK;
+    static {
+        MethodHandle mh;
+        try {
+            mh = Linker.nativeLinker().downcallHandle(
+                    SymbolLookup.loaderLookup()
+                            .find("takoyaki_idmap_helper_fork")
+                            .orElseThrow(() -> new UnsatisfiedLinkError(
+                                    "takoyaki_idmap_helper_fork")),
+                    FunctionDescriptor.of(
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT,
+                            ValueLayout.JAVA_INT));
+        } catch (UnsatisfiedLinkError e) {
+            // Should never happen; the symbol is in libbootstrap.a linked
+            // with --whole-archive. Log and fall through so the class still
+            // loads (the MethodHandle stays null and the caller gets -1).
+            System.err.println("WARNING: " + e.getMessage());
+            mh = null;
+        }
+        NATIVE_FORK = mh;
+    }
+
+    private static int nativeFork(int parentFd, int childFd) {
+        if (NATIVE_FORK == null) return -1;
+        try {
+            return (int) NATIVE_FORK.invokeExact(parentFd, childFd);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
 
     /** Apply an id-mapped bind mount from {@code source} to {@code destination}. */
     public static boolean apply(Spec.Mount m, String destination) {
@@ -105,44 +149,15 @@ public final class IdmapHelper {
                 Logger.warn("idmap helper socketpair failed: " + Libc.strerror(Libc.errno()));
                 return -1;
             }
-            int pid = PosixIO.fork();
+            // The child-side work (close, unshare, sync write/read, _exit)
+            // is done entirely in C by takoyaki_idmap_helper_fork().  After
+            // fork() from a multi-threaded SubstrateVM process the child has
+            // only 1 thread and the GC/signal threads are gone.  Any Java
+            // allocation would trigger a GC safepoint that waits forever for
+            // those dead threads (the ARM CI 1 ms nanosleep spin).
+            int pid = nativeFork(sync[0], sync[1]);
             if (pid < 0) {
                 Logger.warn("idmap helper fork failed: " + Libc.strerror(Libc.errno()));
-                return -1;
-            }
-            if (pid == 0) {
-                PosixIO.close(sync[0]);
-                int rc = Libc.unshare(Constants.CLONE_NEWUSER);
-                int savedErrno = Libc.errno();
-                if (Logger.isDebugEnabled()) {
-                    int childPid = Libc.getpid();
-                    // Probe what /proc/self/ns/user looks like AFTER unshare.
-                    String childLink = "?", byPidLink = "?";
-                    try {
-                        childLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
-                        byPidLink = Files.readSymbolicLink(Path.of("/proc/" + childPid + "/ns/user")).toString();
-                    } catch (IOException ignored) {}
-                    Logger.debug("[idmap-child] pid=" + childPid + " unshare rc=" + rc
-                            + " errno=" + savedErrno
-                            + " self=" + childLink + " byPid=" + byPidLink);
-                }
-                if (rc != 0) {
-                    // Signal failure to parent by writing 0 instead of 1, then exit.
-                    try (Arena a2 = Arena.ofConfined()) {
-                        byte[] zero = new byte[]{0};
-                        PosixIO.write(a2, sync[1], zero);
-                    }
-                    PosixIO._exit(1);
-                    return -1;
-                }
-                // Tell parent we're in the new userns, then wait for it to finish.
-                try (Arena a2 = Arena.ofConfined()) {
-                    byte[] one = new byte[]{1};
-                    PosixIO.write(a2, sync[1], one);
-                    byte[] go = new byte[1];
-                    PosixIO.read(a2, sync[1], go);
-                }
-                PosixIO._exit(0);
                 return -1;
             }
             PosixIO.close(sync[1]);

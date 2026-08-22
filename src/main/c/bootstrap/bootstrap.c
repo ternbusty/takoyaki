@@ -879,3 +879,46 @@ void takoyaki_bootstrap(void) {
     _exit(0);
 }
 
+/*
+ * Fork a helper child that unshares CLONE_NEWUSER and synchronises with
+ * the parent via a pre-created socketpair.  Returns the child PID to the
+ * parent, or -1 on fork failure.  The child never returns.
+ *
+ * This MUST live in C because PosixIO.fork() leaves the child inside a
+ * SubstrateVM process whose runtime threads (GC, signal handler) did not
+ * survive fork().  Any Java object allocation in the child triggers a GC
+ * safepoint that waits for those dead threads, producing an infinite
+ * 1 ms nanosleep spin (the root cause of the ARM CI idmap hang).  By
+ * keeping the child path in plain C with all signals blocked we sidestep
+ * SubstrateVM entirely.
+ *
+ * @param parent_fd  the socketpair end the PARENT reads from (closed by
+ *                   the child so the parent sees EOF on child death)
+ * @param child_fd   the socketpair end the CHILD uses for sync I/O
+ */
+int takoyaki_idmap_helper_fork(int parent_fd, int child_fd) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;   /* parent: child pid, or -1 on error */
+
+    /* ── child ────────────────────────────────────────────────────── */
+
+    /* Block every deliverable signal.  SubstrateVM installs handlers
+     * (SIGSEGV for safepoints, SIGUSR1, timers) that try to coordinate
+     * with runtime threads which no longer exist after fork(). */
+    sigset_t full;
+    sigfillset(&full);
+    sigprocmask(SIG_BLOCK, &full, NULL);
+
+    close(parent_fd);
+
+    int rc = unshare(CLONE_NEWUSER);
+    char c = (rc == 0) ? 1 : 0;
+    (void)write(child_fd, &c, 1);
+
+    if (rc != 0) _exit(1);
+
+    /* Wait until the parent has written uid_map / gid_map. */
+    (void)read(child_fd, &c, 1);
+    _exit(0);
+}
+
