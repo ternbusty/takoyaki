@@ -18,7 +18,7 @@ jobs:
       matrix:
         runner: [ubuntu-24.04-arm, ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -27,7 +27,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev jq golang-go
+          sudo apt-get install -y libseccomp-dev jq golang-go strace
 
       - name: Install jextract
         run: |
@@ -55,6 +55,77 @@ jobs:
 
       - name: Build native takoyaki
         run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
+
+      # ── strace diagnosis for arm slowness ──
+      - name: Strace idmap test (takoyaki vs runc)
+        if: contains(matrix.runner, 'arm')
+        run: |
+          set -eux
+          cd tests/runc/src/github.com/opencontainers/runc
+
+          # Build runc for comparison
+          sudo make test-binaries
+          sudo chmod +x tests/integration/get-images.sh
+          sudo tests/integration/get-images.sh > /dev/null
+
+          cp "$GITHUB_WORKSPACE/build/native/nativeCompile/takoyaki" ./takoyaki
+          chmod +x ./takoyaki
+
+          # Build real runc for comparison
+          sudo apt-get install -y libseccomp-dev golang-go
+          go build -o ./runc-real .
+
+          echo "=== 1. Baseline: single idmap test with RUNC (Go binary) ==="
+          cp ./runc-real ./runc
+          chmod +x ./runc
+          time sudo script -q -e -c \
+            'bats -f "^simple idmap mount .userns.$" -t tests/integration/idmap.bats' \
+            /dev/null 2>&1 || true
+
+          echo ""
+          echo "=== 2. Same test with TAKOYAKI ==="
+          cp ./takoyaki ./runc
+          chmod +x ./runc
+          time sudo script -q -e -c \
+            'bats -f "^simple idmap mount .userns.$" -t tests/integration/idmap.bats' \
+            /dev/null 2>&1 || true
+
+          echo ""
+          echo "=== 3. strace -c -f: takoyaki create + start ==="
+          # Run runc_spec to get a config.json, then strace create+start
+          mkdir -p /tmp/strace-bundle/rootfs
+          tar --exclude './dev/*' -C /tmp/strace-bundle/rootfs -xf "$(eval $(sudo tests/integration/get-images.sh) && echo $BUSYBOX_IMAGE)" 2>/dev/null || true
+          cd /tmp/strace-bundle
+          "$GITHUB_WORKSPACE/tests/runc/src/github.com/opencontainers/runc/takoyaki" spec
+          # Simple container: just run "true"
+          jq '.process.args = ["true"]' config.json > config2.json && mv config2.json config.json
+
+          echo "--- strace takoyaki create ---"
+          sudo strace -c -f "$GITHUB_WORKSPACE/tests/runc/src/github.com/opencontainers/runc/takoyaki" \
+            create --bundle /tmp/strace-bundle strace-test1 2>&1 || true
+          sudo "$GITHUB_WORKSPACE/tests/runc/src/github.com/opencontainers/runc/takoyaki" \
+            delete -f strace-test1 2>/dev/null || true
+
+          echo ""
+          echo "--- strace runc create ---"
+          sudo strace -c -f "$GITHUB_WORKSPACE/tests/runc/src/github.com/opencontainers/runc/runc-real" \
+            create --bundle /tmp/strace-bundle strace-test2 2>&1 || true
+          sudo "$GITHUB_WORKSPACE/tests/runc/src/github.com/opencontainers/runc/runc-real" \
+            delete -f strace-test2 2>/dev/null || true
+
+          echo ""
+          echo "=== 4. strace -T -e trace=mount,clone3,openat,open_tree,move_mount,mount_setattr: takoyaki on idmap test ==="
+          cd "$GITHUB_WORKSPACE/tests/runc/src/github.com/opencontainers/runc"
+          cp ./takoyaki ./runc
+          sudo strace -f -T -e trace=mount,umount2,clone3,open_tree,move_mount,mount_setattr,pivot_root \
+            -o /tmp/strace-idmap.log \
+            script -q -e -c \
+            'bats -f "^simple idmap mount .userns.$" -t tests/integration/idmap.bats' \
+            /dev/null 2>&1 || true
+          echo "--- top 30 slowest syscalls ---"
+          grep -oP '<\K[0-9.]+' /tmp/strace-idmap.log | sort -rn | head -30
+          echo "--- mount/idmap syscalls with timing ---"
+          grep -E 'mount|open_tree|move_mount|mount_setattr|pivot_root' /tmp/strace-idmap.log | tail -60
 
       - name: Run runc integration tests
         run: |
