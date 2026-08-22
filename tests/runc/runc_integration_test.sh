@@ -185,6 +185,12 @@ for file in $(printf '%s\n' "${!FILE_FILTER[@]}" | sort); do
             file_fail=$((file_fail + 1))
             echo "  FAIL  $tname"
             ERRORS="${ERRORS}\n  - $tname"
+            in_fail=1
+        elif [[ ${in_fail:-0} -eq 1 && "$line" =~ ^#\  ]]; then
+            # TAP diagnostic lines (comments) following a failed test
+            echo "        ${line#\# }"
+        else
+            in_fail=0
         fi
     done < "$TMPOUT"
 

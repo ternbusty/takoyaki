@@ -224,7 +224,11 @@ public final class Seccomp {
                 // known range. Without this stub, unknown/future syscalls hit
                 // the libseccomp default action (typically ERRNO+EPERM) instead
                 // of the expected ENOSYS.
-                installEnosysStub(arena, sec.syscalls, filterFlagsValue);
+                // The BPF stub is a plain ALLOW/ENOSYS filter (no NOTIFY
+                // actions), so strip NEW_LISTENER and WAIT_KILLABLE_RECV
+                // which are only valid when paired with a notify fd.
+                int stubFlags = filterFlagsValue & ~(0x08 | 0x20);
+                installEnosysStub(arena, sec.syscalls, stubFlags);
 
                 // If the spec declared any SCMP_ACT_NOTIFY rules, pull the notify fd
                 // out of the loaded context. We don't manage a listener — that's the
