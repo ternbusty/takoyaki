@@ -106,7 +106,7 @@ jobs:
 
       - name: Run runc SELinux bats tests
         run: |
-          ssh -tt lima-default sudo -i bash -c '
+          lima sudo bash -c '
             set -eux
             cd /tmp/runc
             cp /usr/local/bin/takoyaki ./runc
