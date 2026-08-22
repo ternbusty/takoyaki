@@ -3,6 +3,10 @@ name: SELinux integration tests (Lima + Fedora)
 # Runs takoyaki inside a Fedora Lima VM where SELinux is enforcing.
 # Exercises the SELinux label application path and verifies that basic container
 # lifecycle operations do not trigger AVC denials.
+#
+# lima-vm/lima-actions/setup@v1 does not support aarch64 runners (its QEMU
+# setup step hard-checks uname -m = x86_64), so Lima and QEMU are installed
+# manually.
 
 on:
   push:
@@ -20,13 +24,30 @@ jobs:
         with:
           submodules: recursive
 
-      - uses: lima-vm/lima-actions/setup@v1
-        id: lima-setup
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-arm qemu-utils qemu-efi-aarch64
+          sudo modprobe kvm || true
+          if [ -e /dev/kvm ]; then
+            sudo chown "$(whoami)" /dev/kvm
+          fi
+
+      - name: Install Lima
+        run: |
+          LIMA_VERSION=$(curl -fsSL https://api.github.com/repos/lima-vm/lima/releases/latest | jq -r .tag_name)
+          curl -fsSL \
+            "https://github.com/lima-vm/lima/releases/download/${LIMA_VERSION}/lima-${LIMA_VERSION#v}-Linux-aarch64.tar.gz" \
+            | sudo tar xzC /usr/local
+          limactl --version
+          echo "lima-version=${LIMA_VERSION}" >> "$GITHUB_OUTPUT"
+        id: lima-install
 
       - uses: actions/cache@v6
         with:
           path: ~/.cache/lima
-          key: lima-${{ steps.lima-setup.outputs.version }}-fedora
+          key: lima-${{ steps.lima-install.outputs.lima-version }}-fedora
 
       - name: Start Fedora VM
         # --plain disables file sharing and port forwarding for faster boot.
@@ -37,8 +58,7 @@ jobs:
         run: limactl cp -r . default:/tmp/takoyaki
 
       - name: Install dependencies
-        run: |
-          lima sudo bash /tmp/takoyaki/tests/selinux/setup_fedora.sh
+        run: lima sudo bash /tmp/takoyaki/tests/selinux/setup_fedora.sh
 
       - name: Show guest info
         run: |
@@ -76,5 +96,4 @@ jobs:
 
       - name: Show AVC denials (if any)
         if: always()
-        run: |
-          lima sudo ausearch -i -m avc,user_avc -ts boot 2>/dev/null || echo "No AVC denials found."
+        run: lima sudo ausearch -i -m avc,user_avc -ts boot 2>/dev/null || echo "No AVC denials found."
