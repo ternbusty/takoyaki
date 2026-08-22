@@ -913,12 +913,12 @@ int takoyaki_idmap_helper_fork(int parent_fd, int child_fd) {
 
     int rc = unshare(CLONE_NEWUSER);
     char c = (rc == 0) ? 1 : 0;
-    (void)write(child_fd, &c, 1);
+    ssize_t wr __attribute__((unused)) = write(child_fd, &c, 1);
 
     if (rc != 0) _exit(1);
 
     /* Wait until the parent has written uid_map / gid_map. */
-    (void)read(child_fd, &c, 1);
+    ssize_t rd __attribute__((unused)) = read(child_fd, &c, 1);
     _exit(0);
 }
 
