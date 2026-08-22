@@ -56,97 +56,93 @@ jobs:
       - name: Build native takoyaki
         run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
 
-      # ── diagnose arm slowness ──
-      - name: Time idmap test (takoyaki vs runc)
+      # ── diagnose arm slowness: run each idmap test individually with timing ──
+      - name: Per-test idmap timing (takoyaki vs runc)
         if: contains(matrix.runner, 'arm')
-        timeout-minutes: 30
+        timeout-minutes: 60
         run: |
           set -eux
           RUNC_DIR="tests/runc/src/github.com/opencontainers/runc"
           cd "$RUNC_DIR"
 
-          # Build test helper binaries and fetch images
           sudo make test-binaries
           sudo chmod +x tests/integration/get-images.sh
           sudo tests/integration/get-images.sh > /dev/null
 
           cp "$GITHUB_WORKSPACE/build/native/nativeCompile/takoyaki" ./takoyaki
           chmod +x ./takoyaki
-
-          # Build real runc for comparison
           go build -o ./runc-real .
 
-          # Resolve bats path (installed by bats-action to ~/.local/share/bats/bin)
           BATS=$(command -v bats)
-          echo "bats at: $BATS"
 
-          echo "=== 1. Baseline: single idmap test with RUNC (Go binary) ==="
+          # Extract all idmap test names
+          grep '@test "' tests/integration/idmap.bats \
+            | sed 's/.*@test "\(.*\)" {.*/\1/' > /tmp/idmap-tests.txt
+          echo "Found $(wc -l < /tmp/idmap-tests.txt) idmap tests"
+          cat /tmp/idmap-tests.txt
+
+          echo ""
+          echo "=========================================="
+          echo "=== Per-test timing with TAKOYAKI ==="
+          echo "=========================================="
+          cp ./takoyaki ./runc
+          chmod +x ./runc
+          i=0
+          while IFS= read -r tname; do
+            i=$((i+1))
+            escaped=$(printf '%s' "$tname" | sed 's/[][\\.*^$()|+?{}]/\\&/g')
+            echo "--- [$i] $tname ---"
+            START_SEC=$SECONDS
+            sudo -E PATH="$PATH" script -q -e -c \
+              "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
+              /dev/null 2>&1 || true
+            ELAPSED=$((SECONDS - START_SEC))
+            echo "  -> ${ELAPSED}s"
+            echo ""
+          done < /tmp/idmap-tests.txt
+
+          echo ""
+          echo "=========================================="
+          echo "=== Per-test timing with RUNC (Go) ==="
+          echo "=========================================="
+          cp ./runc-real ./runc
+          chmod +x ./runc
+          i=0
+          while IFS= read -r tname; do
+            i=$((i+1))
+            escaped=$(printf '%s' "$tname" | sed 's/[][\\.*^$()|+?{}]/\\&/g')
+            echo "--- [$i] $tname ---"
+            START_SEC=$SECONDS
+            sudo -E PATH="$PATH" script -q -e -c \
+              "$BATS -f '^${escaped}\$' -t tests/integration/idmap.bats" \
+              /dev/null 2>&1 || true
+            ELAPSED=$((SECONDS - START_SEC))
+            echo "  -> ${ELAPSED}s"
+            echo ""
+          done < /tmp/idmap-tests.txt
+
+          echo ""
+          echo "=========================================="
+          echo "=== ALL 25 idmap tests at once: TAKOYAKI ==="
+          echo "=========================================="
+          cp ./takoyaki ./runc
+          chmod +x ./runc
+          time sudo -E PATH="$PATH" script -q -e -c \
+            "$BATS -t tests/integration/idmap.bats" \
+            /dev/null 2>&1 || true
+
+          echo ""
+          echo "=========================================="
+          echo "=== ALL 25 idmap tests at once: RUNC ==="
+          echo "=========================================="
           cp ./runc-real ./runc
           chmod +x ./runc
           time sudo -E PATH="$PATH" script -q -e -c \
-            "$BATS -f '^simple idmap mount .userns.\$' -t tests/integration/idmap.bats" \
+            "$BATS -t tests/integration/idmap.bats" \
             /dev/null 2>&1 || true
 
-          echo ""
-          echo "=== 2. Same test with TAKOYAKI ==="
-          cp ./takoyaki ./runc
-          chmod +x ./runc
-          time sudo -E PATH="$PATH" script -q -e -c \
-            "$BATS -f '^simple idmap mount .userns.\$' -t tests/integration/idmap.bats" \
-            /dev/null 2>&1 || true
-
-          echo ""
-          echo "=== 3. time takoyaki create vs runc create (simple container) ==="
-          mkdir -p /tmp/strace-bundle/rootfs
-          BUSYBOX=$(eval $(sudo tests/integration/get-images.sh) && echo $BUSYBOX_IMAGE)
-          tar --exclude './dev/*' -C /tmp/strace-bundle/rootfs -xf "$BUSYBOX" 2>/dev/null || true
-          cd /tmp/strace-bundle
-          "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" spec
-          jq '.process.args = ["true"]' config.json > config2.json && mv config2.json config.json
-
-          echo "--- time takoyaki create ---"
-          time sudo "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" \
-            create --bundle /tmp/strace-bundle time-test1 2>&1 || true
-          sudo "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" \
-            delete -f time-test1 2>/dev/null || true
-
-          echo "--- time runc create ---"
-          time sudo "$GITHUB_WORKSPACE/$RUNC_DIR/runc-real" \
-            create --bundle /tmp/strace-bundle time-test2 2>&1 || true
-          sudo "$GITHUB_WORKSPACE/$RUNC_DIR/runc-real" \
-            delete -f time-test2 2>/dev/null || true
-
-          echo ""
-          echo "=== 4. strace -c (no -f) on takoyaki create (60s timeout) ==="
-          timeout 60 sudo strace -c "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" \
-            create --bundle /tmp/strace-bundle strace-test1 2>&1 || true
-          sudo "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" \
-            delete -f strace-test1 2>/dev/null || true
-
-          echo ""
-          echo "=== 5. perf stat on takoyaki create ==="
-          sudo perf stat -e task-clock,context-switches,cpu-migrations,page-faults,cycles,instructions \
-            "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" \
-            create --bundle /tmp/strace-bundle perf-test1 2>&1 || true
-          sudo "$GITHUB_WORKSPACE/$RUNC_DIR/takoyaki" \
-            delete -f perf-test1 2>/dev/null || true
-
-          echo "--- perf stat on runc create ---"
-          sudo perf stat -e task-clock,context-switches,cpu-migrations,page-faults,cycles,instructions \
-            "$GITHUB_WORKSPACE/$RUNC_DIR/runc-real" \
-            create --bundle /tmp/strace-bundle perf-test2 2>&1 || true
-          sudo "$GITHUB_WORKSPACE/$RUNC_DIR/runc-real" \
-            delete -f perf-test2 2>/dev/null || true
-
-          echo ""
-          echo "=== 6. Full mounts.bats timing (3 tests) with takoyaki ==="
-          cd "$GITHUB_WORKSPACE/$RUNC_DIR"
-          cp ./takoyaki ./runc
-          time sudo -E PATH="$PATH" script -q -e -c \
-            "$BATS -f '^runc run with tmpfs' -t tests/integration/mounts.bats" \
-            /dev/null 2>&1 || true
-
-      - name: Run runc integration tests
-        run: |
-          ./tests/runc/runc_integration_test.sh \
-            build/native/nativeCompile/takoyaki
+      # Commented out to get diagnostic results faster
+      # - name: Run runc integration tests
+      #   run: |
+      #     ./tests/runc/runc_integration_test.sh \
+      #       build/native/nativeCompile/takoyaki
