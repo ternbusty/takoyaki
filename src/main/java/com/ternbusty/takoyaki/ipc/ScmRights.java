@@ -76,6 +76,48 @@ public final class ScmRights {
         }
     }
 
+    /**
+     * Send arbitrary data together with {@code fd} via SCM_RIGHTS in a single
+     * {@code sendmsg} call. The seccomp notify protocol requires the
+     * ContainerProcessState JSON and the notify fd to arrive in the same
+     * kernel message so the receiver's {@code recvmsg} picks up both the
+     * data payload and the ancillary fd atomically.
+     */
+    public static boolean sendFdWithData(int sockFd, int fd, byte[] data) {
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment iovBuf = arena.allocateFrom(ValueLayout.JAVA_BYTE, data);
+
+            MemorySegment iov = iovec.allocate(arena);
+            iovec.iov_base(iov, iovBuf);
+            iovec.iov_len(iov, data.length);
+
+            MemorySegment cmsg = arena.allocate(CMSG_SPACE_ONE_FD);
+            cmsghdr.cmsg_len(cmsg, CMSG_LEN_ONE_FD);
+            cmsghdr.cmsg_level(cmsg, PosixH.SOL_SOCKET());
+            cmsghdr.cmsg_type(cmsg, PosixH.SCM_RIGHTS());
+            cmsg.set(ValueLayout.JAVA_INT, CMSG_DATA_OFFSET, fd);
+
+            MemorySegment msg = msghdr.allocate(arena);
+            msghdr.msg_name(msg, MemorySegment.NULL);
+            msghdr.msg_namelen(msg, 0);
+            msghdr.msg_iov(msg, iov);
+            msghdr.msg_iovlen(msg, 1L);
+            msghdr.msg_control(msg, cmsg);
+            msghdr.msg_controllen(msg, CMSG_SPACE_ONE_FD);
+            msghdr.msg_flags(msg, 0);
+
+            long rc = PosixH.sendmsg(sockFd, msg, 0);
+            if (rc < 0) {
+                Logger.warn("sendmsg (with data) failed: " + Libc.strerror(Libc.errno()));
+                return false;
+            }
+            return true;
+        } catch (Throwable t) {
+            Logger.warn("scmrights sendFdWithData error: " + t.getMessage());
+            return false;
+        }
+    }
+
     /** Receive a single fd via SCM_RIGHTS. Returns -1 on failure. */
     public static int recvFd(int sockFd) {
         try (Arena arena = Arena.ofConfined()) {

@@ -12,7 +12,12 @@ on:
 
 jobs:
   runc-bats:
-    runs-on: ubuntu-24.04-arm
+    name: runc bats (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7

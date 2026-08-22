@@ -123,9 +123,7 @@ public final class Constants {
     public static final long NR_close_range = Consts.SYS_close_range();
     // glibc ships no pivot_root wrapper (man 2 pivot_root says to use syscall(2)).
     public static final long NR_pivot_root = Consts.SYS_pivot_root();
-    // chroot(2): glibc has a wrapper, but it's not in our jextract headers.
-    // Syscall 51 on aarch64, 161 on x86_64; we only run on aarch64.
-    public static final long NR_chroot = 51L;
+    public static final long NR_chroot = Consts.SYS_chroot();
     public static final long NR_keyctl = Consts.SYS_keyctl();
     public static final long NR_bpf = Consts.SYS_bpf();
     public static final int CLOSE_RANGE_CLOEXEC = Consts.CLOSE_RANGE_CLOEXEC();
@@ -159,6 +157,8 @@ public final class Constants {
     // ioprio constants (from linux/ioprio.h)
     public static final int IOPRIO_WHO_PROCESS = 1;
 
+    // seccomp(2) (kernel 3.17+, used by patchbpf ENOSYS stub)
+    public static final long NR_seccomp = Consts.SYS_seccomp();
     // pidfd_open(2) (kernel 5.3+)
     public static final long NR_pidfd_open = Consts.SYS_pidfd_open();
     // set_mempolicy(2) for NUMA memory policy

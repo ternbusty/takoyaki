@@ -127,6 +127,10 @@ public final class ForeignFeature implements Feature {
         // Variadic libc functions reached through jextract's makeInvoker
         // factory (Libc.PRCTL/SYSCALL/IOCTL). firstVariadicArg makes these a
         // distinct registration from a plain descriptor of the same shape.
+        // On aarch64 the variadic and non-variadic ABI are identical, so the
+        // plain registrations above already work. On x86_64, the SysV ABI
+        // treats variadic calls differently (AL = number of SSE args), so
+        // these variadic registrations are essential.
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG),
@@ -137,6 +141,14 @@ public final class ForeignFeature implements Feature {
                 Linker.Option.firstVariadicArg(1));
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS),
+                Linker.Option.firstVariadicArg(2));
+        // open(const char *, int flags, ...) with mode_t variadic arg
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT),
+                Linker.Option.firstVariadicArg(2));
+        // fcntl(int fd, int cmd, ...) with int variadic arg
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT),
                 Linker.Option.firstVariadicArg(2));
     }
 

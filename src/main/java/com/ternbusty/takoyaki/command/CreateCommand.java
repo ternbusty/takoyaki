@@ -405,16 +405,24 @@ public final class CreateCommand {
         // socket path actually resolves) and pass the connected fd to the init via
         // env. After the init pivots into the container rootfs the listener path is
         // no longer reachable, so this has to happen here.
-        if (spec.linux != null && spec.linux.seccomp != null
-                && spec.linux.seccomp.listenerPath != null
-                && !spec.linux.seccomp.listenerPath.isEmpty()) {
-            int fd = com.ternbusty.takoyaki.seccomp.SeccompListener.connectHostSide(
-                    spec.linux.seccomp.listenerPath);
-            if (fd >= 0) {
-                envList.add("_TAKOYAKI_SECCOMP_LISTENER_FD=" + fd);
-            } else {
-                Logger.warn("could not connect to seccomp listener " + spec.linux.seccomp.listenerPath
-                        + " from host; SCMP_ACT_NOTIFY rules will block forever");
+        if (spec.linux != null && spec.linux.seccomp != null) {
+            Spec.LinuxSeccomp sec = spec.linux.seccomp;
+            boolean hasNotify = sec.hasNotifyAction();
+            if (hasNotify && (sec.listenerPath == null || sec.listenerPath.isEmpty())) {
+                System.err.println("seccomp listenerPath is not set");
+                return 1;
+            }
+            if (sec.listenerPath != null && !sec.listenerPath.isEmpty()) {
+                int fd = com.ternbusty.takoyaki.seccomp.SeccompListener.connectHostSide(
+                        sec.listenerPath);
+                if (fd >= 0) {
+                    envList.add("_TAKOYAKI_SECCOMP_LISTENER_FD=" + fd);
+                } else {
+                    System.err.println(
+                            "failed to connect with seccomp agent specified in the seccomp profile: "
+                                    + sec.listenerPath);
+                    return 1;
+                }
             }
         }
 

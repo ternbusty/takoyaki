@@ -221,9 +221,12 @@ val jextractConsts by tasks.registering(Exec::class) {
     outputs.dir(jextractDir)
     val constants = listOf(
         // syscall numbers
-        "SYS_capset", "SYS_close_range", "SYS_pivot_root", "SYS_keyctl", "SYS_bpf",
+        "SYS_capset", "SYS_chroot", "SYS_close_range", "SYS_pivot_root", "SYS_keyctl", "SYS_bpf",
         "SYS_ioprio_set", "SYS_sched_setattr", "SYS_sched_setaffinity",
-        "SYS_pidfd_open", "SYS_set_mempolicy",
+        "SYS_pidfd_open", "SYS_set_mempolicy", "SYS_seccomp",
+        // exeseal syscall numbers (arch-dependent)
+        "SYS_openat", "SYS_sendfile", "SYS_memfd_create",
+        "SYS_fsopen", "SYS_fsconfig", "SYS_fsmount",
         // namespaces
         "CLONE_NEWNS", "CLONE_NEWUTS", "CLONE_NEWIPC", "CLONE_NEWUSER",
         "CLONE_NEWPID", "CLONE_NEWNET", "CLONE_NEWCGROUP", "CLONE_NEWTIME",

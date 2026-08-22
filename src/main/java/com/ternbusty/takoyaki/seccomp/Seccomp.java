@@ -6,6 +6,7 @@ import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.libseccomp.SeccompH;
 import com.ternbusty.takoyaki.syscall.libseccomp.scmp_arg_cmp;
 
+import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 
 import java.lang.foreign.Arena;
@@ -99,6 +100,16 @@ public final class Seccomp {
                                 SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
                                 filterFlagsValue |= 4;
                             }
+                            case "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV" -> {
+                                // SCMP_FLTATR_CTL_WAITKILL = 10 (libseccomp 2.5.4+)
+                                int rc = SeccompH.seccomp_attr_set(ctx, 10, 1);
+                                if (rc != 0) {
+                                    throw new RuntimeException(
+                                            "error adding WaitKill flag to seccomp filter: "
+                                            + "SetWaitKill requires libseccomp >= 2.5.4 and kernel >= 5.19");
+                                }
+                                filterFlagsValue |= 0x20;
+                            }
                             default -> Logger.warn("unknown seccomp filter flag: " + flag);
                         }
                     }
@@ -107,8 +118,6 @@ public final class Seccomp {
                     SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
                     filterFlagsValue = 4;
                 }
-                Logger.debug("seccomp filter flags: " + filterFlagsValue);
-
                 // Ask libseccomp to compile the rule set into a binary tree
                 // once it gets large enough for the linear match to hurt.
                 // Docker's default profile has hundreds of syscalls; without
@@ -148,8 +157,7 @@ public final class Seccomp {
                         if ("SCMP_ACT_NOTIFY".equals(sc.action)
                                 && sc.names.contains("write")) {
                             throw new RuntimeException(
-                                    "seccomp: SCMP_ACT_NOTIFY on write(2) is not"
-                                            + " permitted (would deadlock the notifier)");
+                                    "SCMP_ACT_NOTIFY cannot be used for the write syscall");
                         }
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
@@ -190,6 +198,16 @@ public final class Seccomp {
                     }
                 }
 
+                // Log the effective filter flags. When SCMP_ACT_NOTIFY rules
+                // are present, libseccomp internally adds NEW_LISTENER (0x08)
+                // to the kernel flags passed to seccomp(2). Include it in the
+                // reported value so the debug output matches runc.
+                int reportedFlags = filterFlagsValue;
+                if (hasNotify) {
+                    reportedFlags |= 0x08; // SECCOMP_FILTER_FLAG_NEW_LISTENER
+                }
+                Logger.debug("seccomp filter flags: " + reportedFlags);
+
                 int loadRc = SeccompH.seccomp_load(ctx);
                 if (loadRc != 0) {
                     // Silently returning here would let the container come up
@@ -206,7 +224,11 @@ public final class Seccomp {
                 // known range. Without this stub, unknown/future syscalls hit
                 // the libseccomp default action (typically ERRNO+EPERM) instead
                 // of the expected ENOSYS.
-                installEnosysStub(arena, sec.syscalls, filterFlagsValue);
+                // The BPF stub is a plain ALLOW/ENOSYS filter (no NOTIFY
+                // actions), so strip NEW_LISTENER and WAIT_KILLABLE_RECV
+                // which are only valid when paired with a notify fd.
+                int stubFlags = filterFlagsValue & ~(0x08 | 0x20);
+                installEnosysStub(arena, sec.syscalls, stubFlags);
 
                 // If the spec declared any SCMP_ACT_NOTIFY rules, pull the notify fd
                 // out of the loaded context. We don't manage a listener — that's the
@@ -232,8 +254,14 @@ public final class Seccomp {
             } finally {
                 SeccompH.seccomp_release(ctx);
             }
+        } catch (RuntimeException e) {
+            // Rethrow runtime errors (validation failures like write+NOTIFY,
+            // seccomp_load failures) so the caller can abort.
+            Logger.error("seccomp apply error: " + e.getMessage());
+            throw e;
         } catch (Throwable t) {
             Logger.error("seccomp apply error: " + t.getMessage());
+            throw new RuntimeException(t);
         }
     }
 
@@ -354,8 +382,9 @@ public final class Seccomp {
         int threshold = maxNr + 1;
         Logger.debug("patchbpf: ENOSYS stub for nr >= " + threshold);
 
-        // AUDIT_ARCH_AARCH64 = EM_AARCH64(183) | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE
-        long auditArch = 0xC00000B7L;
+        // AUDIT_ARCH_* = EM_<arch> | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE
+        // aarch64: 0xC00000B7 (EM_AARCH64=183), x86_64: 0xC000003E (EM_X86_64=62)
+        long auditArch = Constants.isAarch64() ? 0xC00000B7L : 0xC000003EL;
         // SECCOMP_RET_ERRNO(ENOSYS) = SECCOMP_RET_ERRNO_BASE | 38
         int retEnosys = 0x00050000 | 38;
         // SECCOMP_RET_ALLOW
@@ -387,10 +416,9 @@ public final class Seccomp {
         prog.set(ValueLayout.ADDRESS, 8, filter);
 
         // seccomp(SECCOMP_SET_MODE_FILTER=1, flags, &prog)
-        // SYS_seccomp = 277 on aarch64
         // Always include TSYNC (flag 1) so the filter covers all JVM threads.
         int flags = filterFlags | 1; // SECCOMP_FILTER_FLAG_TSYNC = 1
-        long rc = Libc.syscall(277, 1, flags, prog.address(), 0, 0);
+        long rc = Libc.syscall(Constants.NR_seccomp, 1, flags, prog.address(), 0, 0);
         if (rc != 0) {
             Logger.warn("patchbpf: seccomp(SET_MODE_FILTER) failed: "
                     + Libc.strerror(Libc.errno()));

@@ -3,6 +3,7 @@ package com.ternbusty.takoyaki.exeseal;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.hdr.Consts;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -26,13 +27,13 @@ import java.nio.file.Path;
 public final class ExeSeal {
     private ExeSeal() {}
 
-    // Syscall numbers (aarch64, generic syscall table).
-    private static final long NR_openat       = 56L;
-    private static final long NR_sendfile     = 71L;
-    private static final long NR_memfd_create = 279L;
-    private static final long NR_fsopen       = 430L;
-    private static final long NR_fsconfig     = 431L;
-    private static final long NR_fsmount      = 432L;
+    // Syscall numbers from jextract (arch-dependent, resolved at build time).
+    private static final long NR_openat       = Consts.SYS_openat();
+    private static final long NR_sendfile     = Consts.SYS_sendfile();
+    private static final long NR_memfd_create = Consts.SYS_memfd_create();
+    private static final long NR_fsopen       = Consts.SYS_fsopen();
+    private static final long NR_fsconfig     = Consts.SYS_fsconfig();
+    private static final long NR_fsmount      = Consts.SYS_fsmount();
 
     // fsconfig(2) commands (linux/mount.h)
     private static final int FSCONFIG_SET_STRING = 1;

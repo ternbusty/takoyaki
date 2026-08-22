@@ -1,0 +1,124 @@
+name: SELinux integration tests (Lima + Fedora)
+
+# Runs takoyaki inside a Fedora Lima VM where SELinux is enforcing.
+# Exercises the SELinux label application path and verifies that basic container
+# lifecycle operations do not trigger AVC denials.
+#
+# Follows the same pattern as kontainer-runtime's runc-compat SELinux job:
+# build on the runner, copy the binary into a Fedora VM via Lima, run tests.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  selinux:
+    timeout-minutes: 90
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      # ── toolchain (runner) ───────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libseccomp-dev jq
+
+      - name: Install GraalVM 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          cache: 'gradle'
+
+      - name: Install jextract
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          echo "sdkman_auto_answer=true" >> "$HOME/.sdkman/etc/config"
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install jextract
+          echo "$HOME/.sdkman/candidates/jextract/current/bin" >> "$GITHUB_PATH"
+
+      # ── build (runner) ───────────────────────────────────────────
+      - name: Run unit tests
+        run: ./gradlew test --no-daemon
+
+      - name: Build native takoyaki
+        run: |
+          ./gradlew nativeCompile --no-daemon --no-configuration-cache
+          ls -lh build/native/nativeCompile/takoyaki
+
+      # ── Lima VM ──────────────────────────────────────────────────
+      - name: Set up Lima
+        uses: lima-vm/lima-actions/setup@v1
+        id: lima-setup
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/lima
+          key: lima-${{ steps.lima-setup.outputs.version }}-fedora
+
+      - name: Start Fedora VM
+        run: limactl start --plain --name=default template://fedora
+
+      - name: Provision VM
+        run: |
+          set -eux -o pipefail
+          lima sudo dnf -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+            --exclude="kernel,kernel-core" \
+            install bats container-selinux git-core golang jq \
+                    libseccomp-devel make policycoreutils
+
+          # Remount /tmp with suid to avoid SELinux nosuid_transition denials.
+          lima sudo mount -o remount,suid /tmp
+
+      - name: Show guest info
+        run: |
+          set -eux -o pipefail
+          lima uname -a
+          lima cat /etc/os-release
+          lima sestatus
+          lima rpm -q container-selinux
+
+      # ── copy binary into VM ─────────────────────────────────────
+      - name: Copy takoyaki binary into VM
+        run: |
+          set -eux -o pipefail
+          limactl cp build/native/nativeCompile/takoyaki default:/tmp/takoyaki-bin
+          lima sudo install -m 0755 /tmp/takoyaki-bin /usr/local/bin/takoyaki
+
+      # ── runc SELinux bats tests ──────────────────────────────────
+      - name: Clone runc and build test helpers in VM
+        run: |
+          lima sudo bash -c '
+            set -eux
+            git clone --depth 1 https://github.com/opencontainers/runc /tmp/runc
+            cd /tmp/runc
+            make test-binaries
+            chmod +x tests/integration/get-images.sh
+            tests/integration/get-images.sh > /dev/null
+          '
+
+      - name: Run runc SELinux bats tests
+        run: |
+          lima sudo bash -c '
+            set -eux
+            cd /tmp/runc
+            cp /usr/local/bin/takoyaki ./runc
+            chmod +x ./runc
+            # Skip "session keyring security label" tests: takoyaki does not yet
+            # write /proc/self/attr/keycreate before joining the session keyring,
+            # so the keyring inherits the wrong SELinux label and key_label
+            # helper gets EACCES from GetKeyringID.
+            bats -t --filter "no selinux label|custom selinux label" \
+              tests/integration/selinux.bats
+          '
+
+      - name: Show AVC denials (if any)
+        if: always()
+        run: lima sudo ausearch -i -m avc,user_avc -ts boot 2>/dev/null || echo "No AVC denials found."

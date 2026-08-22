@@ -185,8 +185,21 @@ for file in $(printf '%s\n' "${!FILE_FILTER[@]}" | sort); do
             file_fail=$((file_fail + 1))
             echo "  FAIL  $tname"
             ERRORS="${ERRORS}\n  - $tname"
+            in_fail=1
+        elif [[ ${in_fail:-0} -eq 1 && "$line" =~ ^#\  ]]; then
+            # TAP diagnostic lines (comments) following a failed test
+            echo "        ${line#\# }"
+        else
+            in_fail=0
         fi
     done < "$TMPOUT"
+
+    # Dump full bats output for failing test files to aid CI debugging.
+    if [[ $file_fail -gt 0 ]]; then
+        echo "  --- full bats output ($fname) ---"
+        cat "$TMPOUT"
+        echo "  --- end ---"
+    fi
 
     # If bats itself crashed (no TAP output at all), count as file-level failure.
     if [[ $rc -ne 0 && $file_pass -eq 0 && $file_fail -eq 0 ]]; then
