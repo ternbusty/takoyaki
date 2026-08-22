@@ -47,11 +47,13 @@ public final class FeaturesCommand {
         seccomp.put("knownFlags", List.of(
                 "SECCOMP_FILTER_FLAG_TSYNC",
                 "SECCOMP_FILTER_FLAG_SPEC_ALLOW",
-                "SECCOMP_FILTER_FLAG_LOG"));
+                "SECCOMP_FILTER_FLAG_LOG",
+                "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV"));
         seccomp.put("supportedFlags", List.of(
                 "SECCOMP_FILTER_FLAG_TSYNC",
                 "SECCOMP_FILTER_FLAG_SPEC_ALLOW",
-                "SECCOMP_FILTER_FLAG_LOG"));
+                "SECCOMP_FILTER_FLAG_LOG",
+                "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV"));
         linux.put("seccomp", seccomp);
 
         Map<String, Object> apparmor = new LinkedHashMap<>();

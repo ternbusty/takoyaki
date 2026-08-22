@@ -104,11 +104,11 @@ public final class Seccomp {
                                 // SCMP_FLTATR_CTL_WAITKILL = 10 (libseccomp 2.5.4+)
                                 int rc = SeccompH.seccomp_attr_set(ctx, 10, 1);
                                 if (rc != 0) {
-                                    Logger.warn("seccomp_attr_set(WAITKILL) failed: " + rc
-                                            + " (requires libseccomp >= 2.5.4 and kernel >= 5.19)");
-                                } else {
-                                    filterFlagsValue |= 0x20;
+                                    throw new RuntimeException(
+                                            "error adding WaitKill flag to seccomp filter: "
+                                            + "SetWaitKill requires libseccomp >= 2.5.4 and kernel >= 5.19");
                                 }
+                                filterFlagsValue |= 0x20;
                             }
                             default -> Logger.warn("unknown seccomp filter flag: " + flag);
                         }
