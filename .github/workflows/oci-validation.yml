@@ -16,8 +16,12 @@ on:
 
 jobs:
   validate:
-    name: runtime-tools validation
-    runs-on: ubuntu-24.04-arm
+    name: runtime-tools validation (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04-arm, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -60,7 +64,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: unit-test-report
+          name: unit-test-report-${{ matrix.runner }}
           path: build/reports/tests/test/
 
       - name: Run contest integration tests
@@ -77,7 +81,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: contest-test-report
+          name: contest-test-report-${{ matrix.runner }}
           path: build/reports/tests/contestTest/
 
       - name: Clone and build runtime-tools validation suite
@@ -217,5 +221,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: validation-logs
+          name: validation-logs-${{ matrix.runner }}
           path: ~/validation-out/
