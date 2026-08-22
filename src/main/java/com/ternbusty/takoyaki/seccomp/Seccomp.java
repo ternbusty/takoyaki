@@ -118,8 +118,6 @@ public final class Seccomp {
                     SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
                     filterFlagsValue = 4;
                 }
-                Logger.debug("seccomp filter flags: " + filterFlagsValue);
-
                 // Ask libseccomp to compile the rule set into a binary tree
                 // once it gets large enough for the linear match to hurt.
                 // Docker's default profile has hundreds of syscalls; without
@@ -200,6 +198,16 @@ public final class Seccomp {
                         }
                     }
                 }
+
+                // Log the effective filter flags. When SCMP_ACT_NOTIFY rules
+                // are present, libseccomp internally adds NEW_LISTENER (0x08)
+                // to the kernel flags passed to seccomp(2). Include it in the
+                // reported value so the debug output matches runc.
+                int reportedFlags = filterFlagsValue;
+                if (hasNotify) {
+                    reportedFlags |= 0x08; // SECCOMP_FILTER_FLAG_NEW_LISTENER
+                }
+                Logger.debug("seccomp filter flags: " + reportedFlags);
 
                 int loadRc = SeccompH.seccomp_load(ctx);
                 if (loadRc != 0) {
