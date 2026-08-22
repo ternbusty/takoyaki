@@ -111,12 +111,7 @@ jobs:
             cd /tmp/runc
             cp /usr/local/bin/takoyaki ./runc
             chmod +x ./runc
-            # Skip "session keyring security label" tests: takoyaki does not yet
-            # write /proc/self/attr/keycreate before joining the session keyring,
-            # so the keyring inherits the wrong SELinux label and key_label
-            # helper gets EACCES from GetKeyringID.
-            bats -t --filter "no selinux label|custom selinux label" \
-              tests/integration/selinux.bats
+            bats -t tests/integration/selinux.bats
           '
 
       - name: Show AVC denials (if any)
