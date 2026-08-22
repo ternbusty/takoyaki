@@ -99,6 +99,15 @@ public final class Seccomp {
                                 SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
                                 filterFlagsValue |= 4;
                             }
+                            case "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV" -> {
+                                int rc = SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_WAITKILL(), 1);
+                                if (rc != 0) {
+                                    Logger.warn("seccomp_attr_set(WAITKILL) failed: " + rc
+                                            + " (requires libseccomp >= 2.5.4 and kernel >= 5.19)");
+                                } else {
+                                    filterFlagsValue |= 0x20;
+                                }
+                            }
                             default -> Logger.warn("unknown seccomp filter flag: " + flag);
                         }
                     }
@@ -354,8 +363,9 @@ public final class Seccomp {
         int threshold = maxNr + 1;
         Logger.debug("patchbpf: ENOSYS stub for nr >= " + threshold);
 
-        // AUDIT_ARCH_AARCH64 = EM_AARCH64(183) | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE
-        long auditArch = 0xC00000B7L;
+        // AUDIT_ARCH_* = EM_<arch> | __AUDIT_ARCH_64BIT | __AUDIT_ARCH_LE
+        // aarch64: 0xC00000B7 (EM_AARCH64=183), x86_64: 0xC000003E (EM_X86_64=62)
+        long auditArch = Constants.isAarch64() ? 0xC00000B7L : 0xC000003EL;
         // SECCOMP_RET_ERRNO(ENOSYS) = SECCOMP_RET_ERRNO_BASE | 38
         int retEnosys = 0x00050000 | 38;
         // SECCOMP_RET_ALLOW
@@ -387,10 +397,9 @@ public final class Seccomp {
         prog.set(ValueLayout.ADDRESS, 8, filter);
 
         // seccomp(SECCOMP_SET_MODE_FILTER=1, flags, &prog)
-        // SYS_seccomp = 277 on aarch64
         // Always include TSYNC (flag 1) so the filter covers all JVM threads.
         int flags = filterFlags | 1; // SECCOMP_FILTER_FLAG_TSYNC = 1
-        long rc = Libc.syscall(277, 1, flags, prog.address(), 0, 0);
+        long rc = Libc.syscall(Constants.NR_seccomp, 1, flags, prog.address(), 0, 0);
         if (rc != 0) {
             Logger.warn("patchbpf: seccomp(SET_MODE_FILTER) failed: "
                     + Libc.strerror(Libc.errno()));

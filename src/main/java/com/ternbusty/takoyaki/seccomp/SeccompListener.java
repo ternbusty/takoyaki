@@ -28,20 +28,31 @@ import java.lang.foreign.Arena;
 public final class SeccompListener {
     private SeccompListener() {}
 
-    /** Open and connect a Unix socket to listenerPath on the host. Returns fd, or -1. */
+    /**
+     * Open and connect a Unix socket to listenerPath on the host. Retries up
+     * to 2 seconds (200ms intervals) to tolerate a listener that is still
+     * starting up. Returns the connected fd, or -1 on failure.
+     */
     public static int connectHostSide(String listenerPath) {
-        try (Arena arena = Arena.ofConfined()) {
-            int sock = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
-            if (sock < 0) {
-                Logger.warn("seccomp listener socket() failed: " + Libc.strerror(Libc.errno()));
-                return -1;
-            }
-            if (!connect(arena, sock, listenerPath)) {
+        int maxAttempts = 10;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try (Arena arena = Arena.ofConfined()) {
+                int sock = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
+                if (sock < 0) {
+                    Logger.warn("seccomp listener socket() failed: " + Libc.strerror(Libc.errno()));
+                    return -1;
+                }
+                if (connect(arena, sock, listenerPath)) {
+                    return sock;
+                }
                 PosixIO.close(sock);
-                return -1;
             }
-            return sock;
+            if (attempt < maxAttempts) {
+                Logger.debug("seccomp listener not ready, retry " + attempt + "/" + maxAttempts);
+                try { Thread.sleep(200); } catch (InterruptedException e) { break; }
+            }
         }
+        return -1;
     }
 
     /**

@@ -157,6 +157,8 @@ public final class Constants {
     // ioprio constants (from linux/ioprio.h)
     public static final int IOPRIO_WHO_PROCESS = 1;
 
+    // seccomp(2) (kernel 3.17+, used by patchbpf ENOSYS stub)
+    public static final long NR_seccomp = Consts.SYS_seccomp();
     // pidfd_open(2) (kernel 5.3+)
     public static final long NR_pidfd_open = Consts.SYS_pidfd_open();
     // set_mempolicy(2) for NUMA memory policy
