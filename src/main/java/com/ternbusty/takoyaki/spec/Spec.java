@@ -843,6 +843,15 @@ public final class Spec {
             return s;
         }
 
+        /** True when any syscall rule uses SCMP_ACT_NOTIFY. */
+        public boolean hasNotifyAction() {
+            if (syscalls == null) return false;
+            for (LinuxSyscall sc : syscalls) {
+                if ("SCMP_ACT_NOTIFY".equals(sc.action)) return true;
+            }
+            return false;
+        }
+
         public Object toJson() {
             Map<String, Object> o = JsonMap.obj();
             JsonMap.put(o, "defaultAction", defaultAction);

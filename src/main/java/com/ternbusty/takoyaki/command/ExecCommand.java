@@ -317,12 +317,23 @@ public final class ExecCommand {
         // Seccomp notify listener: the socket path only resolves on the host,
         // so connect here and let the fd travel to the restriction sequence.
         int seccompListenerFd = -1;
-        if (payload.seccomp != null && payload.seccomp.listenerPath != null
-                && !payload.seccomp.listenerPath.isEmpty()) {
-            seccompListenerFd = SeccompListener.connectHostSide(payload.seccomp.listenerPath);
-            if (seccompListenerFd < 0) {
-                Logger.warn("could not connect to seccomp listener " + payload.seccomp.listenerPath
-                        + "; SCMP_ACT_NOTIFY rules will block forever");
+        if (payload.seccomp != null) {
+            boolean hasNotify = payload.seccomp.hasNotifyAction();
+            if (hasNotify && (payload.seccomp.listenerPath == null
+                    || payload.seccomp.listenerPath.isEmpty())) {
+                System.err.println("seccomp listenerPath is not set");
+                return EXIT_RUNTIME_ERROR;
+            }
+            if (payload.seccomp.listenerPath != null
+                    && !payload.seccomp.listenerPath.isEmpty()) {
+                seccompListenerFd = SeccompListener.connectHostSide(
+                        payload.seccomp.listenerPath);
+                if (seccompListenerFd < 0) {
+                    System.err.println(
+                            "failed to connect with seccomp agent specified in the seccomp profile: "
+                                    + payload.seccomp.listenerPath);
+                    return EXIT_RUNTIME_ERROR;
+                }
             }
         }
 

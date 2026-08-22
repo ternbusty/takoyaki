@@ -157,8 +157,7 @@ public final class Seccomp {
                         if ("SCMP_ACT_NOTIFY".equals(sc.action)
                                 && sc.names.contains("write")) {
                             throw new RuntimeException(
-                                    "seccomp: SCMP_ACT_NOTIFY on write(2) is not"
-                                            + " permitted (would deadlock the notifier)");
+                                    "SCMP_ACT_NOTIFY cannot be used for the write syscall");
                         }
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
@@ -251,8 +250,14 @@ public final class Seccomp {
             } finally {
                 SeccompH.seccomp_release(ctx);
             }
+        } catch (RuntimeException e) {
+            // Rethrow runtime errors (validation failures like write+NOTIFY,
+            // seccomp_load failures) so the caller can abort.
+            Logger.error("seccomp apply error: " + e.getMessage());
+            throw e;
         } catch (Throwable t) {
             Logger.error("seccomp apply error: " + t.getMessage());
+            throw new RuntimeException(t);
         }
     }
 
