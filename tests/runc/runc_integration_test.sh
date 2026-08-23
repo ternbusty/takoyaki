@@ -60,6 +60,8 @@ ERRORS=""
 cleanup_stale_state() {
     sudo rm -f /tmp/takoyaki-*.sock 2>/dev/null || true
     sudo rm -rf /run/takoyaki/* 2>/dev/null || true
+    # Remove leftover dummy network devices (netdev.bats).
+    sudo ip link del dev dummy0 2>/dev/null || true
     for _cgdir in /sys/fs/cgroup/takoyaki/*/; do
         [ -d "$_cgdir" ] || continue
         sudo bash -c '
@@ -138,9 +140,14 @@ for file in $(printf '%s\n' "${!FILE_FILTER[@]}" | sort); do
     fname=$(basename "$file")
     expected=${FILE_TEST_COUNT[$file]}
 
-    # Scale timeout by test count (30s per test, floor 180s) so that
-    # heavy files like idmap.bats (25 tests) do not hit a flat ceiling.
-    timeout_secs=$(( expected * 30 ))
+    # Scale timeout by test count. GitHub arm runners are ~20x slower
+    # for mount/idmap operations, so use 60s/test on aarch64 vs 30s on
+    # x86_64. Floor 180s either way.
+    if [[ "$(uname -m)" == "aarch64" ]]; then
+        timeout_secs=$(( expected * 60 ))
+    else
+        timeout_secs=$(( expected * 30 ))
+    fi
     (( timeout_secs < 180 )) && timeout_secs=180
 
     echo "=== [$FILE_INDEX/$FILE_TOTAL] $fname ($expected tests, ${timeout_secs}s) ==="

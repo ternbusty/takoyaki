@@ -9,6 +9,7 @@ import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.network.Loopback;
 import com.ternbusty.takoyaki.rootfs.Devices;
 import com.ternbusty.takoyaki.rootfs.Rootfs;
+import com.ternbusty.takoyaki.selinux.SeLinux;
 import com.ternbusty.takoyaki.rootfs.UserDb;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.ContainerStatus;
@@ -343,8 +344,19 @@ public final class InitProcess {
             // Join a fresh kernel session keyring unless the caller opted out via
             // --no-new-keyring (we propagate that via env var). Must happen before
             // the restriction sequence so no seccomp filter can veto keyctl.
+            //
+            // When a SELinux label is configured, write it to
+            // /proc/self/attr/keycreate BEFORE creating the keyring so the
+            // kernel stamps the correct label on the new key. Without this
+            // the keyring inherits the runtime's label and the container
+            // process (running under container_t) cannot access it.
+            // Clear keycreate afterwards so subsequent key operations do not
+            // inherit the override.
             if (!"1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"))) {
-                Keyring.joinNewSession("takoyaki-" + Libc.getpid());
+                String seLabel = spec.process != null ? spec.process.selinuxLabel : null;
+                SeLinux.applyKeyCreate(seLabel);
+                Keyring.joinNewSession("_ses." + containerId);
+                SeLinux.clearKeyCreate();
             }
 
             // Default umask 0022 for the init path (runc compat). The
