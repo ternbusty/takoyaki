@@ -9,7 +9,7 @@ plugins {
 
 group = "com.ternbusty"
 // x-release-please-start-version
-version = "0.3.2"
+version = "0.4.0"
 // x-release-please-end
 
 repositories {
