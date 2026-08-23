@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.0](https://github.com/ternbusty/takoyaki/compare/v0.3.2...v0.4.0) (2026-08-23)
+
+
+### 🎉 Features
+
+* **security:** CVE-2019-5736 exe-seal mitigation ([#66](https://github.com/ternbusty/takoyaki/issues/66)) ([09b54b6](https://github.com/ternbusty/takoyaki/commit/09b54b6ddc69a616afb408398f9553e85f8a94d8))
+* **selinux:** set keycreate label before session keyring join ([#68](https://github.com/ternbusty/takoyaki/issues/68)) ([cac159a](https://github.com/ternbusty/takoyaki/commit/cac159a1db6c1966ed7c17bd8fc2cec66c63a046))
+* **test:** add runc bats integration test suite ([#63](https://github.com/ternbusty/takoyaki/issues/63)) ([e62e54c](https://github.com/ternbusty/takoyaki/commit/e62e54c873c7d6911ea083b946f5cfe9fc4059d0))
+
+
+### 🐛 Bug Fixes
+
+* **ci:** add jextract install step to release workflow ([#61](https://github.com/ternbusty/takoyaki/issues/61)) ([3944fe6](https://github.com/ternbusty/takoyaki/commit/3944fe61a062636c386e2b1797466e8134e0e0ad))
+* **mount:** open_tree + move_mount for userns inaccessible bind sources ([#64](https://github.com/ternbusty/takoyaki/issues/64)) ([e1bc57d](https://github.com/ternbusty/takoyaki/commit/e1bc57d4b53d5082f5040edc297f5b89aac9f9c4))
+* move IdmapHelper fork child to C to avoid SubstrateVM post-fork hang ([#69](https://github.com/ternbusty/takoyaki/issues/69)) ([031d37b](https://github.com/ternbusty/takoyaki/commit/031d37b700f174dda29ff10a191f8e0944a82ff7))
+* **tests:** scale bats timeout by test count, drop daily cron ([#65](https://github.com/ternbusty/takoyaki/issues/65)) ([b77b74b](https://github.com/ternbusty/takoyaki/commit/b77b74b1cfb0a5cb37c4ef043542f0665e368807))
+
 ## [0.3.2](https://github.com/ternbusty/takoyaki/compare/v0.3.1...v0.3.2) (2026-08-17)
 
 
