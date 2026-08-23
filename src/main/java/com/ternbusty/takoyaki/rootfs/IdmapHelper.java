@@ -3,10 +3,11 @@ package com.ternbusty.takoyaki.rootfs;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
-import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.foreign.Arena;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,11 +81,9 @@ public final class IdmapHelper {
     }
 
     /**
-     * Host-side setup: fork a helper, helper unshares CLONE_NEWUSER, parent (the
-     * main takoyaki process) writes uid_map/gid_map to the helper via host pids,
-     * parent opens /proc/&lt;helper&gt;/ns/user and returns the fd. The helper waits
-     * forever and is implicitly killed when this process exits — we don't kill it
-     * explicitly because the returned fd is what pins the userns alive.
+     * Host-side setup: spawn a helper process that unshares CLONE_NEWUSER, then
+     * write uid_map/gid_map from this (parent) process via host /proc, open
+     * /proc/<helper>/ns/user and return the fd. The helper exits once released.
      */
     public static int setupHostSide(List<Spec.IdMapping> uidMaps,
                                     List<Spec.IdMapping> gidMaps) {
@@ -92,86 +91,57 @@ public final class IdmapHelper {
     }
 
     /**
-     * Spawn a helper child via fork+unshare(CLONE_NEWUSER), write the mappings to
-     * /proc/<child>/uid_map and /proc/<child>/gid_map from the parent, then keep
-     * /proc/<child>/ns/user open in the parent. The child blocks on a pipe until
-     * the parent has finished.
+     * Spawn a helper process via ProcessBuilder that unshares CLONE_NEWUSER,
+     * write the mappings to /proc/<helper>/uid_map and /proc/<helper>/gid_map
+     * from this process, then open /proc/<helper>/ns/user.
+     *
+     * The helper is /proc/self/exe with _TAKOYAKI_IDMAP_HELPER set in its
+     * environment. bootstrap.c's constructor intercepts this env var and
+     * does unshare + stdout/stdin sync entirely in C, calling _exit(0)
+     * before SubstrateVM ever starts. This avoids the safepoint deadlock
+     * that occurs when forking from a multi-threaded SubstrateVM process.
      */
     private static int openMappedUserNs(List<Spec.IdMapping> uidMaps,
                                         List<Spec.IdMapping> gidMaps) {
-        try (Arena arena = Arena.ofConfined()) {
-            int[] sync = new int[2];
-            if (PosixIO.socketpair(arena, Constants.AF_UNIX, Constants.SOCK_STREAM, 0, sync) < 0) {
-                Logger.warn("idmap helper socketpair failed: " + Libc.strerror(Libc.errno()));
+        Process helper;
+        try {
+            ProcessBuilder pb = new ProcessBuilder("/proc/self/exe");
+            pb.environment().put("_TAKOYAKI_IDMAP_HELPER", "1");
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            helper = pb.start();
+        } catch (IOException e) {
+            Logger.warn("idmap helper process start failed: " + e.getMessage());
+            return -1;
+        }
+
+        long pid = helper.pid();
+        try (InputStream in = helper.getInputStream();
+             OutputStream out = helper.getOutputStream()) {
+            // Wait for the helper to signal that unshare(CLONE_NEWUSER) completed.
+            int syncByte = in.read();
+            if (syncByte != 1) {
+                Logger.warn("idmap helper unshare(CLONE_NEWUSER) failed (sync=" + syncByte + ")");
+                helper.destroyForcibly();
                 return -1;
             }
-            int pid = PosixIO.fork();
-            if (pid < 0) {
-                Logger.warn("idmap helper fork failed: " + Libc.strerror(Libc.errno()));
-                return -1;
-            }
-            if (pid == 0) {
-                PosixIO.close(sync[0]);
-                int rc = Libc.unshare(Constants.CLONE_NEWUSER);
-                int savedErrno = Libc.errno();
-                if (Logger.isDebugEnabled()) {
-                    int childPid = Libc.getpid();
-                    // Probe what /proc/self/ns/user looks like AFTER unshare.
-                    String childLink = "?", byPidLink = "?";
-                    try {
-                        childLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
-                        byPidLink = Files.readSymbolicLink(Path.of("/proc/" + childPid + "/ns/user")).toString();
-                    } catch (IOException ignored) {}
-                    Logger.debug("[idmap-child] pid=" + childPid + " unshare rc=" + rc
-                            + " errno=" + savedErrno
-                            + " self=" + childLink + " byPid=" + byPidLink);
-                }
-                if (rc != 0) {
-                    // Signal failure to parent by writing 0 instead of 1, then exit.
-                    try (Arena a2 = Arena.ofConfined()) {
-                        byte[] zero = new byte[]{0};
-                        PosixIO.write(a2, sync[1], zero);
-                    }
-                    PosixIO._exit(1);
-                    return -1;
-                }
-                // Tell parent we're in the new userns, then wait for it to finish.
-                try (Arena a2 = Arena.ofConfined()) {
-                    byte[] one = new byte[]{1};
-                    PosixIO.write(a2, sync[1], one);
-                    byte[] go = new byte[1];
-                    PosixIO.read(a2, sync[1], go);
-                }
-                PosixIO._exit(0);
-                return -1;
-            }
-            PosixIO.close(sync[1]);
-            try (Arena a2 = Arena.ofConfined()) {
-                byte[] one = new byte[1];
-                PosixIO.read(a2, sync[0], one);
-                if (one[0] != 1) {
-                    Logger.warn("idmap helper unshare(CLONE_NEWUSER) failed; aborting idmap");
-                    PosixIO.close(sync[0]);
-                    return -1;
-                }
-            }
-            // Sanity-check: the helper's userns must NOT be our own (the kernel rejects
-            // mount_setattr(IDMAP) with EPERM if userns_fd == init_user_ns).
+
             if (Logger.isDebugEnabled()) {
                 try {
                     String helperLink = Files.readSymbolicLink(Path.of("/proc/" + pid + "/ns/user")).toString();
                     String myLink = Files.readSymbolicLink(Path.of("/proc/self/ns/user")).toString();
-                    Logger.debug("idmap parent pid=" + Libc.getpid() + " childPid=" + pid
+                    Logger.debug("idmap parent pid=" + ProcessHandle.current().pid()
+                            + " helperPid=" + pid
                             + " helper=" + helperLink + " ours=" + myLink);
                     if (helperLink.equals(myLink)) {
                         Logger.warn("idmap helper userns same as ours (" + myLink + "); unshare lied");
                     }
                 } catch (IOException ignored) {}
             }
-            // Write maps from the parent's privileged context.
+
+            // Write maps from this process's privileged context.
             writeMappings(pid, uidMaps, "uid_map");
             writeMappings(pid, gidMaps, "gid_map");
-            // Verify what actually landed in /proc/<helper>/uid_map.
+
             if (Logger.isDebugEnabled()) {
                 try {
                     String uidMapContent = Files.readString(Path.of("/proc/" + pid + "/uid_map"));
@@ -182,17 +152,27 @@ public final class IdmapHelper {
                     Logger.warn("could not read back idmap helper maps: " + e.getMessage());
                 }
             }
-            int fd = PosixIO.open(arena, "/proc/" + pid + "/ns/user", Constants.O_RDONLY, 0);
-            // Release helper child.
-            try (Arena a2 = Arena.ofConfined()) {
-                byte[] go = new byte[]{1};
-                PosixIO.write(a2, sync[0], go);
+
+            // Open the helper's userns fd while it is still alive.
+            int fd;
+            try (Arena arena = Arena.ofConfined()) {
+                fd = PosixIO.open(arena, "/proc/" + pid + "/ns/user", Constants.O_RDONLY, 0);
             }
-            PosixIO.close(sync[0]);
+
+            // Release the helper so it can _exit(0).
+            out.write(1);
+            out.flush();
+
+            helper.waitFor();
+
             if (fd < 0) {
-                Logger.warn("open helper userns fd failed: " + Libc.strerror(Libc.errno()));
+                Logger.warn("open helper userns fd failed");
             }
             return fd;
+        } catch (IOException | InterruptedException e) {
+            Logger.warn("idmap helper communication failed: " + e.getMessage());
+            helper.destroyForcibly();
+            return -1;
         }
     }
 
@@ -215,7 +195,7 @@ public final class IdmapHelper {
      * 65536") makes disk uid 0 appear as uid 100000 through the mount, matching
      * runc's behaviour.  This is the SAME direction as a process-attached userns.
      */
-    private static void writeMappings(int pid, List<Spec.IdMapping> maps, String file) {
+    private static void writeMappings(long pid, List<Spec.IdMapping> maps, String file) {
         if (maps == null || maps.isEmpty()) return;
         StringBuilder sb = new StringBuilder();
         for (Spec.IdMapping m : maps) {

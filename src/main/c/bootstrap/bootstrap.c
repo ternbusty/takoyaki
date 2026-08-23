@@ -373,6 +373,23 @@ void takoyaki_bootstrap(void) {
         }
     }
 
+    /* ── idmap helper mode ──────────────────────────────────────────────
+     * The host Java process spawns /proc/self/exe with _TAKOYAKI_IDMAP_HELPER
+     * to create a temporary user namespace for idmapped mounts.  The child
+     * unshares CLONE_NEWUSER, signals readiness on stdout (1 = success, 0 =
+     * failure), then blocks on stdin until the parent has written uid_map and
+     * gid_map.  All work stays in C; SubstrateVM never starts.
+     */
+    if (getenv("_TAKOYAKI_IDMAP_HELPER")) {
+        int rc = unshare(CLONE_NEWUSER);
+        char c = (rc == 0) ? 1 : 0;
+        ssize_t wr __attribute__((unused)) = write(STDOUT_FILENO, &c, 1);
+        if (rc != 0) _exit(1);
+        char buf;
+        ssize_t rd __attribute__((unused)) = read(STDIN_FILENO, &buf, 1);
+        _exit(0);
+    }
+
     if (!getenv(ENV_IS_BOOTSTRAP)) {
         exec_bootstrap();
         return;
@@ -878,4 +895,5 @@ void takoyaki_bootstrap(void) {
     DBG("[stage-1] exiting; stage-2 continues as init\n");
     _exit(0);
 }
+
 
