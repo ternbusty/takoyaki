@@ -60,6 +60,8 @@ ERRORS=""
 cleanup_stale_state() {
     sudo rm -f /tmp/takoyaki-*.sock 2>/dev/null || true
     sudo rm -rf /run/takoyaki/* 2>/dev/null || true
+    # Remove leftover dummy network devices (netdev.bats).
+    sudo ip link del dev dummy0 2>/dev/null || true
     for _cgdir in /sys/fs/cgroup/takoyaki/*/; do
         [ -d "$_cgdir" ] || continue
         sudo bash -c '
