@@ -45,7 +45,7 @@ jobs:
           cache: 'gradle'
 
       - name: Setup bats
-        uses: bats-core/bats-action@3.0.1
+        uses: bats-core/bats-action@4.0.0
         with:
           bats-version: 1.9.0
           support-install: false
