@@ -331,22 +331,21 @@ object Cgroup {
         }
         val pids = r.pids
         if (pids != null) {
+            val lim = pids.limit
             when {
-                pids.limit == -1L ->
-                    // runc: -1 means unlimited ("max")
+                lim == null -> {}
+                lim == -1L ->
                     writes.add(java.util.AbstractMap.SimpleEntry("pids.max", "max"))
-                pids.limit == 0L ->
-                    // runc: 0 is silently remapped to 1 (TasksMax=0 is invalid)
+                lim == 0L ->
                     writes.add(java.util.AbstractMap.SimpleEntry("pids.max", "1"))
-                pids.limit > 0 ->
-                    writes.add(java.util.AbstractMap.SimpleEntry("pids.max", pids.limit.toString()))
+                lim > 0 ->
+                    writes.add(java.util.AbstractMap.SimpleEntry("pids.max", lim.toString()))
             }
         }
         // hugepageLimits: each entry lands in its own hugetlb.<size>.max file.
         // Runc uses the same pageSize→filename mapping.
         if (r.hugepageLimits != null) {
             for (h in r.hugepageLimits) {
-                if (h.pageSize == null || h.limit == null) continue
                 writes.add(
                     java.util.AbstractMap.SimpleEntry("hugetlb.${h.pageSize}.max", h.limit.toString())
                 )

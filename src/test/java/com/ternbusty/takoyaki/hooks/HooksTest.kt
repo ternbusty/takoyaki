@@ -17,13 +17,11 @@ class HooksTest {
         bundle = "/tmp/bundle",
     )
 
-    private fun hook(path: String?, args: List<String>?, timeout: Long?): Hook =
+    private fun hook(path: String, args: List<String>?, timeout: Int?): Hook =
         Hook(path = path, args = args, timeout = timeout)
 
     @Test
     fun nullListIsNoOp() {
-        // Hooks.run must tolerate a missing hook section without throwing --
-        // many specs don't define any.
         assertDoesNotThrow { Hooks.run(null, sampleState(), "prestart") }
     }
 
@@ -33,18 +31,7 @@ class HooksTest {
     }
 
     @Test
-    fun hookWithNullPathIsSkipped() {
-        // A hook entry without a `path` is malformed but mustn't crash the
-        // runtime -- silently skip and continue with the remaining hooks.
-        val bad = hook(null, null, 1L)
-        assertDoesNotThrow { Hooks.run(listOf(bad), sampleState(), "prestart") }
-    }
-
-    @Test
     fun hookExecutesAndReceivesStateOnStdin(@TempDir tmp: Path) {
-        // End-to-end: feed the hook a real shell script that captures stdin,
-        // run it, and confirm the JSON-encoded state turned up there. This is
-        // the contract that runtime-tools' hooks_stdin test enforces.
         val script = tmp.resolve("hook.sh")
         val output = tmp.resolve("stdin.txt")
         Files.writeString(script, """
@@ -53,7 +40,7 @@ class HooksTest {
         """.trimIndent() + "\n")
         script.toFile().setExecutable(true)
 
-        val h = hook(script.toString(), listOf(script.toString()), 5L)
+        val h = hook(script.toString(), listOf(script.toString()), 5)
         Hooks.run(listOf(h), sampleState(), "prestart")
 
         assertTrue(Files.exists(output), "hook should have written its stdin")
@@ -66,9 +53,6 @@ class HooksTest {
 
     @Test
     fun hookExitNonZeroIsNotFatal(@TempDir tmp: Path) {
-        // A failing hook is logged but mustn't crash the runtime (matches
-        // runc -- only failures of "prestart" hooks block container start,
-        // which the caller decides, not Hooks.run itself).
         val script = tmp.resolve("fail.sh")
         Files.writeString(script, """
             #!/bin/sh
@@ -77,15 +61,12 @@ class HooksTest {
         """.trimIndent() + "\n")
         script.toFile().setExecutable(true)
 
-        val h = hook(script.toString(), listOf("fail.sh"), 5L)
+        val h = hook(script.toString(), listOf("fail.sh"), 5)
         assertDoesNotThrow { Hooks.run(listOf(h), sampleState(), "poststart") }
     }
 
     @Test
     fun hookTimeoutIsHonoured(@TempDir tmp: Path) {
-        // The OCI spec lets hooks specify a `timeout` in seconds. After that
-        // we must SIGKILL the hook so a buggy script can't wedge container
-        // lifecycle forever.
         val script = tmp.resolve("slow.sh")
         Files.writeString(script, """
             #!/bin/sh
@@ -94,7 +75,7 @@ class HooksTest {
         """.trimIndent() + "\n")
         script.toFile().setExecutable(true)
 
-        val h = hook(script.toString(), listOf("slow.sh"), 1L /* 1s */)
+        val h = hook(script.toString(), listOf("slow.sh"), 1)
         val start = System.currentTimeMillis()
         Hooks.run(listOf(h), sampleState(), "poststop")
         val elapsed = System.currentTimeMillis() - start

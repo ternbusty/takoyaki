@@ -6,8 +6,8 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class Spec(
     val ociVersion: String = "1.0.0",
-    val root: Root? = null,
-    val process: Process? = null,
+    val root: Root,
+    val process: Process = Process(),
     val hostname: String? = null,
     val domainname: String? = null,
     val mounts: List<Mount>? = null,
@@ -24,7 +24,7 @@ data class Spec(
 
 @Serializable
 data class Root(
-    val path: String? = null,
+    val path: String,
     val readonly: Boolean = false,
 )
 
@@ -64,9 +64,9 @@ data class User(
 
 @Serializable
 data class POSIXRlimit(
-    val type: String? = null,
-    val hard: Long = 0,
-    val soft: Long = 0,
+    val type: String,
+    val hard: Long,
+    val soft: Long,
 )
 
 @Serializable
@@ -80,10 +80,10 @@ data class LinuxCapabilities(
 
 @Serializable
 data class Hook(
-    val path: String? = null,
+    val path: String,
     val args: List<String>? = null,
     val env: List<String>? = null,
-    val timeout: Long? = null,
+    val timeout: Int? = null,
 )
 
 @Serializable
@@ -98,9 +98,9 @@ data class Hooks(
 
 @Serializable
 data class Mount(
-    val destination: String? = null,
-    val source: String? = null,
+    val destination: String,
     val type: String? = null,
+    val source: String? = null,
     val options: List<String>? = null,
     val uidMappings: List<LinuxIdMapping>? = null,
     val gidMappings: List<LinuxIdMapping>? = null,
@@ -108,7 +108,7 @@ data class Mount(
 
 @Serializable
 data class Namespace(
-    val type: String? = null,
+    val type: String,
     val path: String? = null,
 )
 
@@ -142,18 +142,18 @@ data class LinuxCpu(
 
 @Serializable
 data class LinuxPids(
-    val limit: Long = 0,
-)
-
-@Serializable
-data class LinuxHugepageLimit(
-    val pageSize: String? = null,
     val limit: Long? = null,
 )
 
 @Serializable
+data class LinuxHugepageLimit(
+    val pageSize: String,
+    val limit: Long,
+)
+
+@Serializable
 data class LinuxDeviceCgroup(
-    val allow: Boolean = false,
+    val allow: Boolean,
     val type: String? = null,
     val major: Long? = null,
     val minor: Long? = null,
@@ -162,9 +162,9 @@ data class LinuxDeviceCgroup(
 
 @Serializable
 data class LinuxThrottleDevice(
-    val major: Long? = null,
-    val minor: Long? = null,
-    val rate: Long? = null,
+    val major: Long,
+    val minor: Long,
+    val rate: Long,
 )
 
 @Serializable
@@ -190,23 +190,23 @@ data class LinuxResources(
 
 @Serializable
 data class SeccompArg(
-    val index: Int = 0,
-    val value: Long = 0,
+    val index: Int,
+    val value: Long,
     val valueTwo: Long? = null,
-    val op: String? = null,
+    val op: String,
 )
 
 @Serializable
 data class LinuxSyscall(
-    val names: List<String>? = null,
-    val action: String? = null,
+    val names: List<String>,
+    val action: String,
     val errnoRet: Long? = null,
     val args: List<SeccompArg>? = null,
 )
 
 @Serializable
 data class LinuxSeccomp(
-    val defaultAction: String? = null,
+    val defaultAction: String,
     val defaultErrnoRet: Long? = null,
     val architectures: List<String>? = null,
     val syscalls: List<LinuxSyscall>? = null,
@@ -220,8 +220,8 @@ data class LinuxSeccomp(
 
 @Serializable
 data class LinuxDevice(
-    val path: String? = null,
-    val type: String? = null,
+    val path: String,
+    val type: String,
     val major: Long? = null,
     val minor: Long? = null,
     val fileMode: Long? = null,

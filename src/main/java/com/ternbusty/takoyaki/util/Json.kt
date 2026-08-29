@@ -15,13 +15,13 @@ object JsonCodec {
     val json = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
-        encodeDefaults = false
+        encodeDefaults = true
     }
 
     val prettyJson = Json {
         ignoreUnknownKeys = true
         explicitNulls = false
-        encodeDefaults = false
+        encodeDefaults = true
         prettyPrint = true
     }
 

@@ -20,9 +20,9 @@ class SpecTest {
                 """.trimIndent()
         val spec = JsonCodec.decode<Spec>(json)
         assertEquals("1.0.0", spec.ociVersion)
-        assertEquals("rootfs", spec.root!!.path)
-        assertEquals(3, spec.process!!.args.size)
-        assertEquals("sh", spec.process!!.args[0])
+        assertEquals("rootfs", spec.root.path)
+        assertEquals(3, spec.process.args.size)
+        assertEquals("sh", spec.process.args[0])
     }
 
     @Test
@@ -44,7 +44,7 @@ class SpecTest {
 
     @Test
     fun hasNamespaceReturnsTrueForListedTypes() {
-        val spec = Spec(linux = Linux(namespaces = listOf(
+        val spec = Spec(root = Root(path = "rootfs"), linux = Linux(namespaces = listOf(
             Namespace(type = "mount"),
             Namespace(type = "pid"),
         )))
@@ -58,7 +58,7 @@ class SpecTest {
 
     @Test
     fun hasNamespaceWithNullLinuxIsSafe() {
-        val spec = Spec(linux = null)
+        val spec = Spec(root = Root(path = "rootfs"), linux = null)
         assertFalse(spec.hasNamespace("mount"))
     }
 
@@ -78,10 +78,10 @@ class SpecTest {
                 }
                 """.trimIndent()
         val spec = JsonCodec.decode<Spec>(json)
-        assertNotNull(spec.process!!.capabilities)
-        assertEquals(2, spec.process!!.capabilities!!.bounding!!.size)
-        assertTrue(spec.process!!.capabilities!!.bounding!!.contains("CAP_KILL"))
-        assertEquals(1, spec.process!!.capabilities!!.effective!!.size)
+        assertNotNull(spec.process.capabilities)
+        assertEquals(2, spec.process.capabilities!!.bounding!!.size)
+        assertTrue(spec.process.capabilities!!.bounding!!.contains("CAP_KILL"))
+        assertEquals(1, spec.process.capabilities!!.effective!!.size)
     }
 
     @Test
