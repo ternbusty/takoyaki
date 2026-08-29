@@ -95,8 +95,8 @@ object DeleteCommand {
             val spec = JsonCodec.loadFromFile<Spec>(Path.of(state.bundle, "config.json"))
             val hooks = spec?.hooks
             if (hooks != null) Hooks.run(hooks.poststop, state, "poststop")
-        } catch (_: IOException) {
-            // bundle may already be gone for stopped containers; skip silently
+        } catch (_: Exception) {
+            // bundle may already be gone or config may be invalid; skip silently
         }
 
         val dir = State.containerDir(rootPath, containerId)
