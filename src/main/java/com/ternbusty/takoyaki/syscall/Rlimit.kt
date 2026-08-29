@@ -2,8 +2,6 @@ package com.ternbusty.takoyaki.syscall
 
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.spec.*
-import java.nio.file.Files
-import java.nio.file.Path
 
 object Rlimit {
 
@@ -31,58 +29,12 @@ object Rlimit {
                 Logger.warn("unknown rlimit type: ${r.type}")
                 continue
             }
-            if (resource == Constants.RLIMIT_NOFILE) {
-                applyNofile(sc, pid, r)
+            val rc = sc.prlimit64(pid, resource, r.soft.toLong(), r.hard.toLong())
+            if (rc != 0) {
+                Logger.warn("prlimit64 ${r.type} failed: ${sc.strerror(sc.errno())}")
             } else {
-                val rc = sc.prlimit64(pid, resource, r.soft.toLong(), r.hard.toLong())
-                if (rc != 0) {
-                    Logger.warn("prlimit64 ${r.type} failed: ${sc.strerror(sc.errno())}")
-                } else {
-                    Logger.debug("rlimit ${r.type} soft=${r.soft} hard=${r.hard}")
-                }
+                Logger.debug("rlimit ${r.type} soft=${r.soft} hard=${r.hard}")
             }
-        }
-    }
-
-    /**
-     * Special handling for RLIMIT_NOFILE: on Linux 5.11+, a privileged
-     * process can set the hard limit above fs.nr_open by first raising the
-     * hard limit to nr_open (which the kernel always allows), then raising
-     * it beyond. This two-phase approach matches runc's setupRlimits.
-     */
-    private fun applyNofile(sc: Syscalls, pid: Int, r: POSIXRlimit) {
-        val resource = Constants.RLIMIT_NOFILE
-        val soft = r.soft.toLong()
-        val hard = r.hard.toLong()
-        var rc = sc.prlimit64(pid, resource, soft, hard)
-        if (rc == 0) {
-            Logger.debug("rlimit ${r.type} soft=$soft hard=$hard")
-            return
-        }
-        val nrOpen = readNrOpen()
-        if (nrOpen <= 0 || hard <= nrOpen) {
-            Logger.warn("prlimit64 ${r.type} failed: ${sc.strerror(sc.errno())}")
-            return
-        }
-        rc = sc.prlimit64(pid, resource, nrOpen, nrOpen)
-        if (rc != 0) {
-            Logger.warn("prlimit64 ${r.type} (phase 1) failed: ${sc.strerror(sc.errno())}")
-            return
-        }
-        rc = sc.prlimit64(pid, resource, soft, hard)
-        if (rc != 0) {
-            Logger.warn("prlimit64 ${r.type} above nr_open failed, using nr_open=$nrOpen")
-            sc.prlimit64(pid, resource, minOf(soft, nrOpen), nrOpen)
-        } else {
-            Logger.debug("rlimit ${r.type} soft=$soft hard=$hard (two-phase)")
-        }
-    }
-
-    private fun readNrOpen(): Long {
-        return try {
-            Files.readString(Path.of("/proc/sys/fs/nr_open")).trim().toLong()
-        } catch (_: Exception) {
-            -1
         }
     }
 
