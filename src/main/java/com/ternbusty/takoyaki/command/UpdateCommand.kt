@@ -3,8 +3,8 @@ package com.ternbusty.takoyaki.command
 import com.ternbusty.takoyaki.cgroup.Cgroup
 import java.io.IOException
 import com.ternbusty.takoyaki.config.KontainerConfig
-import com.ternbusty.takoyaki.spec.Spec
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.spec.*
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -37,10 +37,10 @@ object UpdateCommand {
             return 1
         }
 
-        var r = Spec.LinuxResources()
+        var r = LinuxResources()
         if (resourcesPath != null) {
             try {
-                r = Json.readFile(Path.of(resourcesPath), Spec.LinuxResources::fromJson)
+                r = JsonCodec.loadFromFile<LinuxResources>(Path.of(resourcesPath))
                     ?: throw IOException("failed to parse resources file")
             } catch (e: Exception) {
                 System.err.println("failed to read resources file: ${e.message}")
@@ -49,21 +49,19 @@ object UpdateCommand {
         }
 
         if (memory != null) {
-            val mem = (r.memory ?: Spec.LinuxMemory()).also { r.memory = it }
-            mem.limit = memory
+            var mem = (r.memory ?: LinuxMemory()).copy(limit = memory)
             // runc compat: when memory limit is removed (-1), swap is also
             // removed unless an explicit --memory-swap value was given.
             if (memory == -1L && memorySwap == null && mem.swap == null) {
-                mem.swap = -1L
+                mem = mem.copy(swap = -1L)
             }
+            r = r.copy(memory = mem)
         }
         if (memoryReservation != null) {
-            val mem = (r.memory ?: Spec.LinuxMemory()).also { r.memory = it }
-            mem.reservation = memoryReservation
+            r = r.copy(memory = (r.memory ?: LinuxMemory()).copy(reservation = memoryReservation))
         }
         if (memorySwap != null) {
-            val mem = (r.memory ?: Spec.LinuxMemory()).also { r.memory = it }
-            mem.swap = memorySwap
+            var mem = (r.memory ?: LinuxMemory()).copy(swap = memorySwap)
             // For cgroup v2, swap is relative to memory. Need memory limit to
             // compute the delta. If memory was not given on this invocation,
             // read the current value from the cgroup.
@@ -73,18 +71,19 @@ object UpdateCommand {
                         Cgroup.dir(cgroupPath).resolve("memory.max")
                     ).trim()
                     if (cur != "max") {
-                        mem.limit = cur.toLong()
+                        mem = mem.copy(limit = cur.toLong())
                     }
                 } catch (_: Exception) {
                 }
             }
+            r = r.copy(memory = mem)
         }
         if (cpuQuota != null || cpuPeriod != null || cpuShares != null ||
             cpuBurst != null || cpuIdle != null
         ) {
-            val cpu = (r.cpu ?: Spec.LinuxCpu()).also { r.cpu = it }
-            if (cpuQuota != null) cpu.quota = cpuQuota
-            if (cpuPeriod != null) cpu.period = cpuPeriod
+            var cpu = r.cpu ?: LinuxCpu()
+            if (cpuQuota != null) cpu = cpu.copy(quota = cpuQuota)
+            if (cpuPeriod != null) cpu = cpu.copy(period = cpuPeriod)
             // runc compat: when only period or only quota is given via CLI,
             // read the current cpu.max and preserve the other component.
             // Without this, the missing component defaults to "max"/100000
@@ -99,32 +98,31 @@ object UpdateCommand {
                     val parts = cpuMax.split("\\s+".toRegex())
                     if (parts.size == 2) {
                         if (cpu.quota == null) {
-                            cpu.quota = if (parts[0] == "max") -1L else parts[0].toLong()
+                            cpu = cpu.copy(quota = if (parts[0] == "max") -1L else parts[0].toLong())
                         }
                         if (cpu.period == null) {
-                            cpu.period = parts[1].toLong()
+                            cpu = cpu.copy(period = parts[1].toLong())
                         }
                     }
                 } catch (_: Exception) {
                 }
             }
-            if (cpuShares != null) cpu.shares = cpuShares
-            if (cpuBurst != null) cpu.burst = cpuBurst
+            if (cpuShares != null) cpu = cpu.copy(shares = cpuShares)
+            if (cpuBurst != null) cpu = cpu.copy(burst = cpuBurst)
             if (cpuIdle != null) {
                 if (cpuIdle != 0L && cpuIdle != 1L) {
                     System.err.println("invalid value for cpu.idle: must be 0 or 1, got $cpuIdle")
                     return 1
                 }
-                cpu.idle = cpuIdle
+                cpu = cpu.copy(idle = cpuIdle)
             }
+            r = r.copy(cpu = cpu)
         }
         if (cpusetCpus != null) {
-            val cpu = (r.cpu ?: Spec.LinuxCpu()).also { r.cpu = it }
-            cpu.cpus = cpusetCpus
+            r = r.copy(cpu = (r.cpu ?: LinuxCpu()).copy(cpus = cpusetCpus))
         }
         if (pidsLimit != null) {
-            val pids = (r.pids ?: Spec.LinuxPids()).also { r.pids = it }
-            pids.limit = pidsLimit
+            r = r.copy(pids = (r.pids ?: LinuxPids()).copy(limit = pidsLimit))
         }
 
         // Validate cpu.idle regardless of source (CLI or JSON).

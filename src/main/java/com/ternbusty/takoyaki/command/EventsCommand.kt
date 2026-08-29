@@ -2,7 +2,7 @@ package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.cgroup.Cgroup
 import com.ternbusty.takoyaki.config.KontainerConfig
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -42,7 +42,7 @@ object EventsCommand {
         do {
             if (!Files.isDirectory(cg) || !Files.isDirectory(statePath)) break
             val snap = snapshot(cg, containerId)
-            println(Json.encodeCompact(snap))
+            println(JsonCodec.encodeCompact(JsonCodec.toJsonElement(snap)))
             System.out.flush()
             if (once) break
             try {
@@ -76,7 +76,7 @@ object EventsCommand {
                                         "type" to "oom",
                                         "id" to containerId,
                                     )
-                                    println(Json.encodeCompact(oomEvent))
+                                    println(JsonCodec.encodeCompact(JsonCodec.toJsonElement(oomEvent)))
                                     lastOomKill = current
                                 }
                             }

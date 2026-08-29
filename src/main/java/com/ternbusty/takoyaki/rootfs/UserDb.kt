@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.rootfs
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -16,7 +16,7 @@ import java.nio.file.StandardOpenOption
  */
 object UserDb {
 
-    fun ensure(user: Spec.User?) {
+    fun ensure(user: User?) {
         if (user == null) return
         addPasswd(user.uid, user.gid)
         addGroups(user)
@@ -39,7 +39,7 @@ object UserDb {
         }
     }
 
-    private fun addGroups(user: Spec.User) {
+    private fun addGroups(user: User) {
         val p = Path.of("/etc/group")
         if (!Files.exists(p)) return
         try {

@@ -12,7 +12,7 @@ import com.ternbusty.takoyaki.rootfs.Devices
 import com.ternbusty.takoyaki.rootfs.Rootfs
 import com.ternbusty.takoyaki.rootfs.UserDb
 import com.ternbusty.takoyaki.selinux.SeLinux
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.ContainerStatus
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.CloseRange
@@ -20,7 +20,7 @@ import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
 import com.ternbusty.takoyaki.sysctl.Sysctl
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.lang.foreign.Arena
 import java.nio.file.Files
 import java.nio.file.Path
@@ -166,7 +166,7 @@ object InitProcess {
 
         val spec: Spec
         try {
-            spec = Json.readFile(Path.of(bundlePath, "config.json"), Spec::fromJson)
+            spec = JsonCodec.loadFromFile<Spec>(Path.of(bundlePath, "config.json"))
                 ?: throw IOException("failed to parse spec from $bundlePath/config.json")
         } catch (e: Exception) {
             Logger.error("failed to load spec: ${e.message}")

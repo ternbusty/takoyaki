@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.cgroup
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
@@ -13,15 +13,8 @@ import org.junit.jupiter.api.Assertions.*
  */
 class DeviceCgroupTest {
 
-    private fun rule(allow: Boolean, type: String?, major: Long?, minor: Long?, access: String?): Spec.LinuxDeviceCgroup {
-        val r = Spec.LinuxDeviceCgroup()
-        r.allow = allow
-        r.type = type
-        r.major = major
-        r.minor = minor
-        r.access = access
-        return r
-    }
+    private fun rule(allow: Boolean, type: String?, major: Long?, minor: Long?, access: String?): LinuxDeviceCgroup =
+        LinuxDeviceCgroup(allow = allow, type = type, major = major, minor = minor, access = access)
 
     @Test
     fun programIsAlwaysAMultipleOf8Bytes() {

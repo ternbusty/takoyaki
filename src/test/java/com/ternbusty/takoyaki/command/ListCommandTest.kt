@@ -32,7 +32,7 @@ class ListCommandTest {
     @Test
     fun emptyRootDirectoryPrintsEmptyJsonInJsonMode(@TempDir tmp: Path) {
         // No containers saved yet. The runtime-tools list adapter expects
-        // a JSON array for empty, not absent output. Json.encode may emit
+        // a JSON array for empty, not absent output. JsonCodec.encode may emit
         // either "[]" or "[ ]" depending on pretty-printer setup, so accept
         // either as long as it parses to an empty array.
         val rc = ListCommand.run(tmp.toString(), "json", false)
@@ -45,10 +45,9 @@ class ListCommandTest {
 
     @Test
     fun missingDefaultRootDirectoryPrintsEmptyJson() {
-        // /run/runc is a default root path that does not exist on a machine
-        // without runc installed. The first invocation (before any create)
-        // should return a valid "no containers" answer.
-        val rc = ListCommand.run("/run/runc", "json", false)
+        // /run/takoyaki is a default root path that does not exist before any
+        // create. The first invocation should return a valid empty answer.
+        val rc = ListCommand.run("/run/takoyaki", "json", false)
         assertEquals(0, rc)
         assertEquals("[]\n", captured.toString())
     }

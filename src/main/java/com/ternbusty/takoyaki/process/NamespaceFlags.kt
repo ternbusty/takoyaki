@@ -1,11 +1,11 @@
 package com.ternbusty.takoyaki.process
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 
 object NamespaceFlags {
 
-    fun fromSpec(namespaces: List<Spec.Namespace>?): Int {
+    fun fromSpec(namespaces: List<Namespace>?): Int {
         if (namespaces == null) return 0
         var flags = 0
         for (ns in namespaces) {

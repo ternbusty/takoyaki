@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.rootless
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Libc
 
 /**
@@ -20,13 +20,13 @@ object Rootless {
     fun isRootless(): Boolean = Libc.geteuid() != 0
 
     /** Write uid_map for [pid] via newuidmap if available, else fall back to direct write. */
-    fun writeUidMap(pid: Int, mappings: List<Spec.IdMapping>?): Boolean =
+    fun writeUidMap(pid: Int, mappings: List<LinuxIdMapping>?): Boolean =
         writeViaHelper(pid, mappings, "newuidmap")
 
-    fun writeGidMap(pid: Int, mappings: List<Spec.IdMapping>?): Boolean =
+    fun writeGidMap(pid: Int, mappings: List<LinuxIdMapping>?): Boolean =
         writeViaHelper(pid, mappings, "newgidmap")
 
-    private fun writeViaHelper(pid: Int, mappings: List<Spec.IdMapping>?, helper: String): Boolean {
+    private fun writeViaHelper(pid: Int, mappings: List<LinuxIdMapping>?, helper: String): Boolean {
         if (mappings.isNullOrEmpty()) return true
         val cmd = ArrayList<String>()
         cmd.add(helper)

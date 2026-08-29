@@ -26,14 +26,12 @@ class KillCommandCallTest {
     }
 
     /** Build a State with the given status+pid without touching disk. */
-    private fun runningState(pid: Int): State {
-        val s = State()
-        s.id = "id"
-        s.status = ContainerStatus.RUNNING.value
-        s.pid = pid
-        s.bundle = "/bundle"
-        return s
-    }
+    private fun runningState(pid: Int): State = State(
+        id = "id",
+        status = ContainerStatus.RUNNING.value,
+        pid = pid,
+        bundle = "/bundle",
+    )
 
     @Test
     fun killRunningContainerCallsKillWithRightSignal() {
@@ -59,8 +57,7 @@ class KillCommandCallTest {
 
     @Test
     fun killOnStoppedContainerReturnsErrorWithoutCallingKill() {
-        val st = spyk(runningState(4242))
-        st.status = ContainerStatus.STOPPED.value
+        val st = spyk(runningState(4242).copy(status = ContainerStatus.STOPPED.value))
         every { st.refreshStatus() } returns st
 
         val rec = RecordingSyscalls()
@@ -152,8 +149,7 @@ class KillCommandCallTest {
 
     @Test
     fun missingPidIsAnError() {
-        val st = spyk(runningState(4242))
-        st.pid = null
+        val st = spyk(runningState(4242).copy(pid = null))
         every { st.refreshStatus() } returns st
 
         val rec = RecordingSyscalls()

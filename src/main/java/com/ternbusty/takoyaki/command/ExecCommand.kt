@@ -9,13 +9,13 @@ import com.ternbusty.takoyaki.ipc.SyncChannel
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.process.ExecPayload
 import com.ternbusty.takoyaki.seccomp.SeccompListener
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.ContainerStatus
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.IOException
 import java.lang.foreign.Arena
 import java.lang.foreign.ValueLayout
@@ -50,7 +50,7 @@ object ExecCommand {
         user: String?, cwd: String?, envs: List<String>?, command: List<String>?,
         detach: Boolean, pidFile: String?, tty: Boolean, consoleSocket: String?,
         additionalGids: List<String>?, caps: List<String>?, preserveFds: Int,
-        subCgroupPath: String?, consoleSize: Spec.Box?, ignorePaused: Boolean,
+        subCgroupPath: String?, consoleSize: ConsoleSize?, ignorePaused: Boolean,
         pidfdSocket: String?
     ): Int {
         val exclusivity = exclusivityError(processJsonPath, user, cwd, envs, command)
@@ -113,8 +113,7 @@ object ExecCommand {
         }
 
         val spec: Spec = try {
-            Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson)
-                ?: throw IOException("failed to parse config.json")
+            JsonCodec.loadFromFile<Spec>(Path.of(state.bundle, "config.json"))
         } catch (e: Exception) {
             System.err.println("failed to load config.json: ${e.message}")
             return EXIT_RUNTIME_ERROR
@@ -122,10 +121,10 @@ object ExecCommand {
 
         // Effective process document: `-p FILE` verbatim (runc semantics), or
         // the container's own process section with CLI overrides applied.
-        val process: Spec.Process = try {
+        var process: Process = try {
             if (processJsonPath != null) {
-                val p = Json.readFile(Path.of(processJsonPath), Spec.Process::fromJson)
-                if (p == null || p.args == null || p.args.isEmpty()) {
+                val p = JsonCodec.loadFromFile<Process>(Path.of(processJsonPath))
+                if (p.args.isEmpty()) {
                     System.err.println("process.json has no args")
                     return EXIT_RUNTIME_ERROR
                 }
@@ -143,23 +142,12 @@ object ExecCommand {
 
         // Apply --console-size if provided by the CLI.
         if (consoleSize != null) {
-            process.consoleSize = consoleSize
+            process = process.copy(consoleSize = consoleSize)
         }
 
         // Resolve effective execCPUAffinity: process.json overrides config.json.
-        var effectiveAffinity = process.execCPUAffinity
-        if (effectiveAffinity == null) {
-            effectiveAffinity = spec.process?.execCPUAffinity
-        }
+        val effectiveAffinity = process.execCPUAffinity ?: spec.process?.execCPUAffinity
 
-        val payload = ExecPayload()
-        payload.containerId = containerId
-        payload.bundle = state.bundle
-        payload.ociVersion = state.ociVersion
-        payload.process = process
-        payload.seccomp = spec.linux?.seccomp
-        payload.memoryPolicy = spec.linux?.memoryPolicy
-        payload.preserveFds = preserveFds
         // A missing runtime config just means a container created before cgroup
         // support (skip); any other load failure must NOT silently exec the
         // process outside the container's resource limits.
@@ -176,7 +164,16 @@ object ExecCommand {
             return EXIT_RUNTIME_ERROR
         }
 
-        payload.noNewKeyring = noNewKeyring
+        val payload = ExecPayload(
+            containerId = containerId,
+            bundle = state.bundle,
+            ociVersion = state.ociVersion,
+            process = process,
+            seccomp = spec.linux?.seccomp,
+            memoryPolicy = spec.linux?.memoryPolicy,
+            preserveFds = preserveFds,
+            noNewKeyring = noNewKeyring,
+        )
 
         // runc compat: --cgroup PATH resolves to a subcgroup under the
         // container's cgroup. "/" means the container root cgroup (default).
@@ -237,93 +234,59 @@ object ExecCommand {
      */
     @Suppress("LongParameterList")
     internal fun buildEffectiveProcess(
-        base: Spec.Process?, user: String?, cwd: String?,
+        base: Process?, user: String?, cwd: String?,
         envs: List<String>?, command: List<String>?,
         tty: Boolean, additionalGids: List<String>?, caps: List<String>?
-    ): Spec.Process {
+    ): Process {
         if (base == null) {
             throw IllegalArgumentException("container config has no process section")
         }
-        val p = Json.decode(Json.encode(base.toJson()), Spec.Process::fromJson)
-            ?: throw IllegalStateException("failed to clone process document")
-
+        var p = base
         if (!command.isNullOrEmpty()) {
-            p.args = ArrayList(command)
+            p = p.copy(args = command)
         }
-        if (p.args == null || p.args.isEmpty()) {
+        if (p.args.isEmpty()) {
             throw IllegalArgumentException("no command specified")
         }
-        // runc compat: exec defaults to terminal=false unless -t is
-        // explicitly passed. Without this, exec inherits terminal=true from
-        // the container spec and allocates a PTY for every exec, breaking
-        // output comparison in bats tests.
-        p.terminal = tty
+        p = p.copy(terminal = tty)
         if (user != null) {
             val uv = user.split(":")
-            val u = Spec.User()
-            u.uid = uv[0].toInt()
-            u.gid = if (uv.size > 1) uv[1].toInt()
-            else p.user?.gid ?: 0
-            u.additionalGids = p.user?.additionalGids
-            p.user = u
+            val uid = uv[0].toInt()
+            val gid = if (uv.size > 1) uv[1].toInt() else p.user.gid
+            p = p.copy(user = User(uid = uid, gid = gid, additionalGids = p.user.additionalGids))
         }
         if (!additionalGids.isNullOrEmpty()) {
-            if (p.user == null) p.user = Spec.User()
-            val gids = p.user.additionalGids?.let { ArrayList(it) } ?: ArrayList()
-            for (g in additionalGids) {
-                gids.add(g.toInt())
-            }
-            p.user.additionalGids = gids
+            val existingGids = p.user.additionalGids ?: emptyList()
+            p = p.copy(user = p.user.copy(additionalGids = existingGids + additionalGids.map { it.toInt() }))
         }
         if (!caps.isNullOrEmpty()) {
-            // --cap adds capabilities to all sets. Initialise from spec or empty.
-            val capabilities = (p.capabilities ?: Spec.LinuxCapabilities()).also { p.capabilities = it }
+            var capabilities = p.capabilities ?: LinuxCapabilities()
             for (cap in caps) {
                 val c = if (cap.startsWith("CAP_")) cap else "CAP_$cap"
-                addCap(capabilities, c)
+                capabilities = addCap(capabilities, c)
             }
+            p = p.copy(capabilities = capabilities)
         }
         if (cwd != null) {
-            p.cwd = cwd
+            p = p.copy(cwd = cwd)
         }
         if (!envs.isNullOrEmpty()) {
-            val merged = p.env?.let { ArrayList(it) } ?: ArrayList()
-            merged.addAll(envs)
-            p.env = merged
+            p = p.copy(env = (p.env ?: emptyList()) + envs)
         }
         if (p.env == null) {
-            // No env anywhere in the spec. ExecProcess will add HOME from
-            // /etc/passwd; no need to hardcode HOME here.
-            p.env = emptyList()
+            p = p.copy(env = emptyList())
         }
         return p
     }
 
-    /**
-     * runc's exec --cap adds the capability to bounding, effective, and
-     * permitted. It does NOT add to inheritable. It adds to ambient only
-     * if the capability is already present in inheritable (from the spec).
-     */
-    private fun addCap(c: Spec.LinuxCapabilities, cap: String) {
-        val bounding = ArrayList(c.bounding ?: emptyList())
-        if (cap !in bounding) bounding.add(cap)
-        c.bounding = bounding
-
-        val effective = ArrayList(c.effective ?: emptyList())
-        if (cap !in effective) effective.add(cap)
-        c.effective = effective
-
-        val permitted = ArrayList(c.permitted ?: emptyList())
-        if (cap !in permitted) permitted.add(cap)
-        c.permitted = permitted
-
-        // Ambient: only if already in inheritable.
-        val inheritable = c.inheritable
-        if (inheritable != null && cap in inheritable) {
-            val ambient = ArrayList(c.ambient ?: emptyList())
-            if (cap !in ambient) ambient.add(cap)
-            c.ambient = ambient
-        }
+    private fun addCap(c: LinuxCapabilities, cap: String): LinuxCapabilities {
+        val bounding = (c.bounding ?: emptyList()).let { if (cap in it) it else it + cap }
+        val effective = (c.effective ?: emptyList()).let { if (cap in it) it else it + cap }
+        val permitted = (c.permitted ?: emptyList()).let { if (cap in it) it else it + cap }
+        val ambient = if (c.inheritable != null && cap in c.inheritable) {
+            (c.ambient ?: emptyList()).let { if (cap in it) it else it + cap }
+        } else c.ambient
+        return c.copy(bounding = bounding, effective = effective, permitted = permitted, ambient = ambient)
     }
 
     /**
@@ -335,7 +298,7 @@ object ExecCommand {
     private fun spawn(
         arena: Arena, initPid: Int, payload: ExecPayload,
         cgroupPath: String?, detach: Boolean, pidFile: String?,
-        affinity: Spec.ExecCPUAffinity?,
+        affinity: ExecCPUAffinity?,
         cgroupExplicitRoot: Boolean, containerCgroupPath: String?,
         consoleSocket: String?, pidfdSocket: String?
     ): Int {
@@ -478,7 +441,7 @@ object ExecCommand {
         // Pass initial CPU affinity to bootstrap.c so it can set the affinity
         // on the parent thread before fork, letting the child inherit it.
         if (affinity != null && !affinity.initial.isNullOrEmpty()) {
-            val mask = Spec.ExecCPUAffinity.parseCpuList(affinity.initial)
+            val mask = ExecCPUAffinity.parseCpuList(affinity.initial)
             envList.add("_TAKOYAKI_EXEC_CPU_INITIAL=0x${mask.toULong().toString(16)}")
         }
 
@@ -490,7 +453,7 @@ object ExecCommand {
             execArena, exePath, argv, envList.toTypedArray()
         )
 
-        val payloadBytes = Json.encode(payload.toJson()).toByteArray()
+        val payloadBytes = JsonCodec.encode(payload).toByteArray()
 
         val childPid = PosixIO.fork()
         if (childPid < 0) {
@@ -654,7 +617,7 @@ object ExecCommand {
 
     /** Set CPU affinity from a Linux CPU list string (e.g. "0-3,5"). */
     private fun setCpuAffinity(pid: Int, cpuList: String) {
-        val mask = Spec.ExecCPUAffinity.parseCpuList(cpuList)
+        val mask = ExecCPUAffinity.parseCpuList(cpuList)
         Arena.ofConfined().use { arena ->
             val size = 128
             val seg = arena.allocate(size.toLong())

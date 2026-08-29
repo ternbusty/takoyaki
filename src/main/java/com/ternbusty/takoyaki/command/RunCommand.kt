@@ -2,9 +2,9 @@ package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.console.InternalConsole
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.nio.file.Path
 
 /**
@@ -46,7 +46,7 @@ object RunCommand {
         if (!detach && consoleSocket == null) {
             try {
                 val bundle = Path.of(bundleIn).toAbsolutePath().normalize().toString()
-                val spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson)
+                val spec = JsonCodec.loadFromFile<Spec>(Path.of(bundle, "config.json"))
                 if (spec?.process?.terminal == true) {
                     internalConsole = InternalConsole.createForRun(bundle)
                     internalConsole.startListening()

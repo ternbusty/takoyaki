@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.contest
 
-import com.ternbusty.takoyaki.util.json.JsonWriter
+import com.ternbusty.takoyaki.util.JsonCodec
 import org.junit.jupiter.api.extension.ConditionEvaluationResult
 import org.junit.jupiter.api.extension.ExecutionCondition
 import org.junit.jupiter.api.extension.ExtendWith
@@ -98,7 +98,7 @@ object Contest {
         Files.createDirectories(bundle)
         Files.createDirectories(bundle.resolve("rootfs"))
         val config = bundle.resolve("config.json")
-        Files.writeString(config, JsonWriter.toPretty(spec))
+        Files.writeString(config, JsonCodec.encodePretty(JsonCodec.toJsonElement(spec)))
         return bundle
     }
 

@@ -1,7 +1,6 @@
 package com.ternbusty.takoyaki.command
 
-import com.ternbusty.takoyaki.util.Json
-
+import com.ternbusty.takoyaki.util.JsonCodec
 /**
  * Output the enabled features of the runtime as JSON. This is used by
  * the runc integration tests to discover supported seccomp flags and
@@ -68,7 +67,7 @@ object FeaturesCommand {
         )
 
         f["linux"] = linux
-        println(Json.encode(f))
+        println(JsonCodec.encodePretty(JsonCodec.toJsonElement(f)))
         return 0
     }
 

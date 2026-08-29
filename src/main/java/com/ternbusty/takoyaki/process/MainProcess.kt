@@ -6,7 +6,7 @@ import com.ternbusty.takoyaki.hooks.Hooks
 import com.ternbusty.takoyaki.ipc.SyncChannel
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.rootless.Rootless
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.ContainerStatus
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Libc
@@ -71,7 +71,7 @@ object MainProcess {
             // is being *created* (no .path on the namespace entry). When the
             // config specifies a .path the bootstrap joins that existing userns
             // via setns(2) and never sends SYNC_USERMAP_PLS.
-            val creatingUserNs = spec.isCreatingNamespace("user")
+            val creatingUserNs = spec.createsNamespace("user")
             if (creatingUserNs) {
                 val req = SyncChannel.readInt32(syncFd)
                 if (req != SyncChannel.MSG_USERMAP_PLS) {
@@ -153,7 +153,7 @@ object MainProcess {
             // CLONE_NEWCGROUP is in the clone flags. Writing it
             // unconditionally causes EPIPE when stage-1 has already exited
             // (it doesn't wait for CGROUP_ACK when there's no cgroup ns).
-            val creatingCgroupNs = spec.isCreatingNamespace("cgroup")
+            val creatingCgroupNs = spec.createsNamespace("cgroup")
             if (creatingCgroupNs) {
                 SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK)
             }
@@ -299,7 +299,7 @@ object MainProcess {
      * [fallbackEuid], the caller's effective uid (handy for rootless
      * quick boot).
      */
-    internal fun buildIdMapping(mappings: List<Spec.IdMapping>?, fallbackEuid: Long): String {
+    internal fun buildIdMapping(mappings: List<LinuxIdMapping>?, fallbackEuid: Long): String {
         if (mappings.isNullOrEmpty()) {
             return "0 $fallbackEuid 1\n"
         }
@@ -320,6 +320,6 @@ object MainProcess {
      *
      * Package-visible for tests.
      */
-    internal fun multiRange(m: List<Spec.IdMapping>?): Boolean =
+    internal fun multiRange(m: List<LinuxIdMapping>?): Boolean =
         m != null && m.isNotEmpty() && (m.size > 1 || m[0].size > 1)
 }

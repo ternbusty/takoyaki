@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.spec
 
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
@@ -18,7 +18,7 @@ class SpecTest {
                   }
                 }
                 """.trimIndent()
-        val spec = Json.decode(json, Spec::fromJson)!!
+        val spec = JsonCodec.decode<Spec>(json)
         assertEquals("1.0.0", spec.ociVersion)
         assertEquals("rootfs", spec.root!!.path)
         assertEquals(3, spec.process!!.args.size)
@@ -38,19 +38,16 @@ class SpecTest {
                   "unknown": "garbage"
                 }
                 """.trimIndent()
-        val spec = Json.decode(json, Spec::fromJson)!!
+        val spec = JsonCodec.decode<Spec>(json)
         assertEquals("1.2.0", spec.ociVersion)
     }
 
     @Test
     fun hasNamespaceReturnsTrueForListedTypes() {
-        val spec = Spec()
-        spec.linux = Spec.Linux()
-        val mnt = Spec.Namespace()
-        mnt.type = "mount"
-        val pid = Spec.Namespace()
-        pid.type = "pid"
-        spec.linux!!.namespaces = listOf(mnt, pid)
+        val spec = Spec(linux = Linux(namespaces = listOf(
+            Namespace(type = "mount"),
+            Namespace(type = "pid"),
+        )))
 
         assertTrue(spec.hasNamespace("mount"))
         assertTrue(spec.hasNamespace("pid"))
@@ -61,8 +58,7 @@ class SpecTest {
 
     @Test
     fun hasNamespaceWithNullLinuxIsSafe() {
-        val spec = Spec()
-        spec.linux = null
+        val spec = Spec(linux = null)
         assertFalse(spec.hasNamespace("mount"))
     }
 
@@ -81,7 +77,7 @@ class SpecTest {
                   }
                 }
                 """.trimIndent()
-        val spec = Json.decode(json, Spec::fromJson)!!
+        val spec = JsonCodec.decode<Spec>(json)
         assertNotNull(spec.process!!.capabilities)
         assertEquals(2, spec.process!!.capabilities!!.bounding!!.size)
         assertTrue(spec.process!!.capabilities!!.bounding!!.contains("CAP_KILL"))
@@ -105,7 +101,7 @@ class SpecTest {
                   }]
                 }
                 """.trimIndent()
-        val spec = Json.decode(json, Spec::fromJson)!!
+        val spec = JsonCodec.decode<Spec>(json)
         assertEquals(1, spec.mounts!!.size)
         val m = spec.mounts!![0]
         assertEquals("/idmap", m.destination)

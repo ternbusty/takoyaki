@@ -2,7 +2,7 @@ package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.cgroup.Cgroup
 import com.ternbusty.takoyaki.config.KontainerConfig
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockkObject
@@ -65,7 +65,7 @@ class UpdateCommandTest {
                 null, 256L * 1024 * 1024, null, null,
                 null, null, null, null, null, null, null)
             assertEquals(0, rc)
-            val arg = slot<Spec.LinuxResources>()
+            val arg = slot<LinuxResources>()
             verify { Cgroup.applyLimitsOnly(
                 eq("/sys/fs/cgroup/user.slice/x"), capture(arg)) }
             val r = arg.captured
@@ -93,7 +93,7 @@ class UpdateCommandTest {
                 null, null, null, null,
                 50000L, 100000L, 1024L, null, null, null, null)
             assertEquals(0, rc)
-            val arg = slot<Spec.LinuxResources>()
+            val arg = slot<LinuxResources>()
             verify { Cgroup.applyLimitsOnly(any(), capture(arg)) }
             val r = arg.captured
             assertNotNull(r.cpu)
@@ -121,7 +121,7 @@ class UpdateCommandTest {
                 null, null, null, null, null, null,
                 null, 512L, null, null, null)
             assertEquals(0, rc)
-            val arg = slot<Spec.LinuxResources>()
+            val arg = slot<LinuxResources>()
             verify { Cgroup.applyLimitsOnly(any(), capture(arg)) }
             assertNotNull(arg.captured.pids)
             assertEquals(512L, arg.captured.pids!!.limit)
@@ -147,7 +147,7 @@ class UpdateCommandTest {
                 res.toString(), 999L, null, null,
                 null, null, null, null, null, null, null)
             assertEquals(0, rc)
-            val arg = slot<Spec.LinuxResources>()
+            val arg = slot<LinuxResources>()
             verify { Cgroup.applyLimitsOnly(any(), capture(arg)) }
             val r = arg.captured
             // flag wins

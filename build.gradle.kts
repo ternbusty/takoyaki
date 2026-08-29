@@ -5,6 +5,7 @@ plugins {
     application
     jacoco
     kotlin("jvm") version "2.4.10"
+    kotlin("plugin.serialization") version "2.4.10"
     id("org.graalvm.buildtools.native") version "1.1.10"
 }
 
@@ -31,12 +32,7 @@ kotlin {
 
 
 dependencies {
-    // No CLI parsing framework — Main.java hand-parses argv. picocli's
-    // reflection-driven CommandSpec build cost ~80 ms on aarch64 native-image.
-    // No JSON library — util.json hand-parses into a Map/List tree and the
-    // Spec / State / KontainerConfig beans codec to/from it. jackson-databind
-    // pulled in ~3,000 reachable methods and transitively ~4.6 MB of java.xml
-    // at native-image build time, all for our small OCI schemas.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     compileOnly("org.graalvm.sdk:nativeimage:25.2.4")
 
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
@@ -239,8 +235,8 @@ graalvmNative {
                 // are listed via --initialize-at-run-time below.
                 "--initialize-at-build-time=com.ternbusty.takoyaki",
                 "--initialize-at-build-time=kotlin",
+                "--initialize-at-build-time=kotlinx.serialization",
                 // Run-time init for FFM/native-using classes:
-                "--initialize-at-run-time=com.ternbusty.takoyaki.util.Json",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.command.Wait",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.seccomp",

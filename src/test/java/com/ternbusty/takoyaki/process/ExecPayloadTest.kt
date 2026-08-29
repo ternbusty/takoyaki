@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.process
 
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
@@ -31,8 +31,8 @@ class ExecPayloadTest {
                   }
                 }
                 """.trimIndent()
-        val decoded = Json.decode(json, ExecPayload::fromJson)!!
-        val p = Json.decode(Json.encode(decoded.toJson()), ExecPayload::fromJson)!!
+        val decoded = JsonCodec.decode<ExecPayload>(json)
+        val p = JsonCodec.decode<ExecPayload>(JsonCodec.encode(decoded))
 
         assertEquals("c1", p.containerId)
         assertEquals("/run/bundle", p.bundle)
@@ -53,14 +53,14 @@ class ExecPayloadTest {
 
     @Test
     fun toleratesAbsentOptionalFields() {
-        val p = Json.decode("""
+        val p = JsonCodec.decode<ExecPayload>("""
                 { "containerId": "c1" }
-                """.trimIndent(), ExecPayload::fromJson)!!
+                """.trimIndent())
         assertEquals("c1", p.containerId)
         assertNull(p.process)
         assertNull(p.seccomp)
 
-        val round = Json.decode(Json.encode(p.toJson()), ExecPayload::fromJson)!!
+        val round = JsonCodec.decode<ExecPayload>(JsonCodec.encode(p))
         assertEquals("c1", round.containerId)
         assertNull(round.process)
     }

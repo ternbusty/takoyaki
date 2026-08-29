@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.capability
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import io.mockk.every
@@ -60,8 +60,7 @@ class CapabilityTest {
     @Test
     fun applyBoundingSetDropsAllWhenBoundingNotSpecified() {
         every { Libc.prctl(any(), any(), any(), any(), any()) } returns 0
-        val caps = Spec.LinuxCapabilities()
-        Capability.applyBoundingSet(caps)
+        Capability.applyBoundingSet(LinuxCapabilities())
         verify { Libc.prctl(
             Constants.PR_CAPBSET_DROP, 0L, 0L, 0L, 0L) }
         verify { Libc.prctl(
@@ -70,8 +69,7 @@ class CapabilityTest {
 
     @Test
     fun applyBoundingSetDropsEverythingNotListed() {
-        val caps = Spec.LinuxCapabilities()
-        caps.bounding = listOf("CAP_CHOWN", "CAP_KILL") // ids 0 and 5
+        val caps = LinuxCapabilities(bounding = listOf("CAP_CHOWN", "CAP_KILL")) // ids 0 and 5
 
         every { Libc.prctl(any(), any(), any(), any(), any()) } returns 0
         Capability.applyBoundingSet(caps)
@@ -88,8 +86,7 @@ class CapabilityTest {
 
     @Test
     fun applyBoundingSetIgnoresUnknownCapNames() {
-        val caps = Spec.LinuxCapabilities()
-        caps.bounding = listOf("CAP_BOGUS")
+        val caps = LinuxCapabilities(bounding = listOf("CAP_BOGUS"))
 
         every { Libc.prctl(any(), any(), any(), any(), any()) } returns 0
         Capability.applyBoundingSet(caps)
@@ -99,10 +96,11 @@ class CapabilityTest {
 
     @Test
     fun applyFinalSetsCallsCapsetSyscall() {
-        val caps = Spec.LinuxCapabilities()
-        caps.effective = listOf("CAP_CHOWN")
-        caps.permitted = listOf("CAP_CHOWN")
-        caps.inheritable = emptyList()
+        val caps = LinuxCapabilities(
+            effective = listOf("CAP_CHOWN"),
+            permitted = listOf("CAP_CHOWN"),
+            inheritable = emptyList(),
+        )
 
         every { Libc.syscall(any(), any(), any(), any(), any(), any()) } returns 0L
         Capability.applyFinalSets(caps)
@@ -113,11 +111,12 @@ class CapabilityTest {
 
     @Test
     fun applyFinalSetsAmbientClearsThenRaisesEachListedCap() {
-        val caps = Spec.LinuxCapabilities()
-        caps.effective = listOf("CAP_KILL")
-        caps.permitted = listOf("CAP_KILL")
-        caps.inheritable = listOf("CAP_KILL")
-        caps.ambient = listOf("CAP_KILL") // id 5
+        val caps = LinuxCapabilities(
+            effective = listOf("CAP_KILL"),
+            permitted = listOf("CAP_KILL"),
+            inheritable = listOf("CAP_KILL"),
+            ambient = listOf("CAP_KILL"), // id 5
+        )
 
         every { Libc.syscall(any(), any(), any(), any(), any(), any()) } returns 0L
         every { Libc.prctl(any(), any(), any(), any(), any()) } returns 0
@@ -136,11 +135,12 @@ class CapabilityTest {
 
     @Test
     fun applyFinalSetsAttemptsAmbientRaiseEvenWithoutPermittedOrInheritable() {
-        val caps = Spec.LinuxCapabilities()
-        caps.effective = emptyList()
-        caps.permitted = emptyList()
-        caps.inheritable = emptyList()
-        caps.ambient = listOf("CAP_KILL")
+        val caps = LinuxCapabilities(
+            effective = emptyList(),
+            permitted = emptyList(),
+            inheritable = emptyList(),
+            ambient = listOf("CAP_KILL"),
+        )
 
         every { Libc.syscall(any(), any(), any(), any(), any(), any()) } returns 0L
         every { Libc.prctl(any(), any(), any(), any(), any()) } returns 0

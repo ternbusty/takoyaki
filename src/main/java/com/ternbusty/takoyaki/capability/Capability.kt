@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.capability
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import java.lang.foreign.Arena
@@ -41,7 +41,7 @@ object Capability {
         }
     }
 
-    fun applyBoundingSet(caps: Spec.LinuxCapabilities?) {
+    fun applyBoundingSet(caps: LinuxCapabilities?) {
         if (caps == null) return
         // When caps is non-null but bounding is null (empty capabilities object),
         // treat as empty set: drop everything from the bounding set.
@@ -54,7 +54,7 @@ object Capability {
         Logger.debug("bounding set applied (${keep.size} kept)")
     }
 
-    fun applyFinalSets(caps: Spec.LinuxCapabilities?) {
+    fun applyFinalSets(caps: LinuxCapabilities?) {
         if (caps == null) return
         val eff = mask(caps.effective)
         val per = mask(caps.permitted)

@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.rootfs
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
@@ -19,7 +19,7 @@ import java.nio.file.attribute.PosixFilePermission
  */
 object Devices {
 
-    fun create(rootfsPath: String, devices: List<Spec.LinuxDevice>?) {
+    fun create(rootfsPath: String, devices: List<LinuxDevice>?) {
         if (devices.isNullOrEmpty()) return
         val sc = SyscallHost.current()
         Arena.ofConfined().use { arena ->
@@ -117,7 +117,7 @@ object Devices {
      * Set uid/gid on a device node per the OCI spec entry.
      * runc always chowns to the spec's uid:gid (default 0:0).
      */
-    private fun chownDevice(arena: Arena, path: String, d: Spec.LinuxDevice) {
+    private fun chownDevice(arena: Arena, path: String, d: LinuxDevice) {
         val uid = d.uid?.toInt() ?: 0
         val gid = d.gid?.toInt() ?: 0
         if (Libc.chown(arena, path, uid, gid) != 0) {

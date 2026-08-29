@@ -47,7 +47,7 @@ class KontainerConfigTest {
     @Test
     fun nullCgroupPathIsAllowedAndRoundTrips(@TempDir tmp: Path) {
         // Containers without resources.cgroupsPath leave this null. We must
-        // serialize it as null rather than blowing up on Json.encode.
+        // serialize it as null rather than blowing up on JsonCodec.encode.
         val c = KontainerConfig(null)
         c.save(tmp.toString(), "no-cgroup")
         val loaded = KontainerConfig.load(tmp.toString(), "no-cgroup")

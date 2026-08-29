@@ -1,14 +1,14 @@
 package com.ternbusty.takoyaki.command
 
-import com.ternbusty.takoyaki.spec.Spec
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.spec.*
+import com.ternbusty.takoyaki.util.JsonCodec
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class ExecCommandTest {
 
     companion object {
-        private fun baseProcess(): Spec.Process = Json.decode(
+        private fun baseProcess(): Process = JsonCodec.decode<Process>(
             """
             {
               "args": ["init-cmd"],
@@ -19,9 +19,8 @@ class ExecCommandTest {
               "capabilities": { "bounding": ["CAP_KILL"] },
               "apparmorProfile": "prof"
             }
-            """.trimIndent(),
-            Spec.Process::fromJson
-        )!!
+            """.trimIndent()
+        )
     }
 
     @Test
@@ -82,9 +81,8 @@ class ExecCommandTest {
     fun defaultEnvWhenSpecHasNone() {
         // When the spec has no env, buildEffectiveProcess returns an empty
         // list (HOME is added later by ExecProcess from /etc/passwd).
-        val base = Json.decode(
-            """{ "args": ["x"] }""",
-            Spec.Process::fromJson
+        val base = JsonCodec.decode<Process>(
+            """{ "args": ["x"] }"""
         )
         val p = ExecCommand.buildEffectiveProcess(
             base, null, null, listOf(), listOf("id"),
@@ -103,7 +101,7 @@ class ExecCommandTest {
             )
         }
 
-        val argless = Json.decode("{}", Spec.Process::fromJson)
+        val argless = JsonCodec.decode<Process>("{}")
         assertThrows(IllegalArgumentException::class.java) {
             ExecCommand.buildEffectiveProcess(
                 argless, null, null, listOf(), listOf(),

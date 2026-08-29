@@ -1,8 +1,9 @@
 package com.ternbusty.takoyaki.state
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.util.Json
-import com.ternbusty.takoyaki.util.json.JsonMap
+import com.ternbusty.takoyaki.util.JsonCodec
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -28,28 +29,27 @@ enum class ContainerStatus(val value: String) {
     }
 }
 
-class State(
-    var ociVersion: String? = null,
-    var id: String? = null,
-    var status: String? = null,
-    var pid: Int? = null,
-    var bundle: String? = null,
-    var annotations: Map<String, String>? = null,
-    var created: String? = null
+@Serializable
+data class State(
+    val ociVersion: String? = null,
+    val id: String? = null,
+    val status: String? = null,
+    val pid: Int? = null,
+    val bundle: String? = null,
+    val annotations: Map<String, String>? = null,
+    val created: String? = null,
 ) {
+    @Transient
+    private var loadedRootPath: String? = null
+
     constructor(
         ociVersion: String?, id: String?, status: ContainerStatus,
         pid: Int?, bundle: String?, annotations: Map<String, String>?, created: String?
     ) : this(ociVersion, id, status.value, pid, bundle, annotations, created)
 
-    /** Internal transient field set by [load] for frozen-state detection. */
-    @Transient
-    private var loadedRootPath: String? = null
-
     fun statusEnum(): ContainerStatus = ContainerStatus.fromString(status ?: "stopped")
 
-    fun withStatus(s: ContainerStatus): State =
-        State(ociVersion, id, s, pid, bundle, annotations, created)
+    fun withStatus(s: ContainerStatus): State = copy(status = s.value)
 
     @Throws(IOException::class)
     fun save(rootPath: String) {
@@ -58,7 +58,7 @@ class State(
         Files.createDirectories(dir)
         val p = dir.resolve("state.json")
         Logger.debug("saving state to $p")
-        Json.writeFile(p, toJson())
+        JsonCodec.saveToFile(p, this)
     }
 
     fun refreshStatus(): State {
@@ -70,10 +70,6 @@ class State(
         return if (statusEnum() == ContainerStatus.STOPPED) this else withStatus(ContainerStatus.STOPPED)
     }
 
-    /**
-     * Detect whether this container's cgroup is frozen. Reads the kontainer
-     * config to find the cgroup path and then checks cgroup.freeze.
-     */
     private fun isFrozen(): Boolean {
         val rootPath = loadedRootPath ?: return false
         return try {
@@ -87,18 +83,6 @@ class State(
         } catch (e: Exception) {
             false
         }
-    }
-
-    fun toJson(): Any {
-        val o = JsonMap.obj()
-        JsonMap.put(o, "ociVersion", ociVersion)
-        JsonMap.put(o, "id", id)
-        JsonMap.put(o, "pid", pid)
-        JsonMap.put(o, "status", status)
-        JsonMap.put(o, "bundle", bundle)
-        JsonMap.put(o, "annotations", annotations)
-        JsonMap.put(o, "created", created)
-        return o
     }
 
     companion object {
@@ -118,8 +102,7 @@ class State(
         fun load(rootPath: String, containerId: String): State {
             val p = statePath(rootPath, containerId)
             Logger.debug("loading state from $p")
-            val s = Json.readFile(p, ::fromJson)
-                ?: throw IOException("failed to parse state from $p")
+            val s = JsonCodec.loadFromFile<State>(p)
             s.loadedRootPath = rootPath
             return s
         }
@@ -144,21 +127,6 @@ class State(
             } catch (e: IOException) {
                 false
             }
-        }
-
-        fun fromJson(node: Any?): State? {
-            if (node == null) return null
-            val o = JsonMap.asObject(node) ?: return null
-            val s = State()
-            s.ociVersion = JsonMap.str(o, "ociVersion")
-            s.id = JsonMap.str(o, "id")
-            s.status = JsonMap.str(o, "status")
-            s.pid = JsonMap.intBoxed(o, "pid")
-            s.bundle = JsonMap.str(o, "bundle")
-            @Suppress("UNCHECKED_CAST")
-            s.annotations = JsonMap.strMap(o, "annotations") as Map<String, String>?
-            s.created = JsonMap.str(o, "created")
-            return s
         }
     }
 }

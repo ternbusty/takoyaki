@@ -5,7 +5,7 @@ import com.ternbusty.takoyaki.capability.Capability
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.seccomp.Seccomp
 import com.ternbusty.takoyaki.selinux.SeLinux
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Groups
@@ -48,7 +48,7 @@ object ProcessRestrictions {
      * Apply I/O priority from the OCI process.ioPriority field. Called before
      * the restriction sequence while the process still has full privileges.
      */
-    fun applyIOPriority(ioPriority: Spec.IOPriority?) {
+    fun applyIOPriority(ioPriority: LinuxIOPriority?) {
         if (ioPriority == null) return
         // ioprio_set(IOPRIO_WHO_PROCESS, 0, IOPRIO_PRIO_VALUE(class, prio))
         // IOPRIO_PRIO_VALUE(class, data) = (class << 13) | data
@@ -71,7 +71,7 @@ object ProcessRestrictions {
      * Uses the raw `sched_setattr(2)` syscall with a manually-laid-out
      * `struct sched_attr` (48 bytes).
      */
-    fun applyScheduler(scheduler: Spec.Scheduler?) {
+    fun applyScheduler(scheduler: LinuxScheduler?) {
         if (scheduler == null) return
         Arena.ofConfined().use { arena ->
             // struct sched_attr layout (48 bytes):
@@ -112,8 +112,8 @@ object ProcessRestrictions {
      * @param seccompListenerFd pre-connected host-side listener socket, or -1
      */
     fun apply(
-        process: Spec.Process?,
-        seccomp: Spec.LinuxSeccomp?,
+        process: Process?,
+        seccomp: LinuxSeccomp?,
         listenerState: State,
         seccompListenerFd: Int
     ) {
@@ -171,7 +171,7 @@ object ProcessRestrictions {
             Seccomp.apply(seccomp, listenerState, seccompListenerFd)
         }
 
-        val caps: Spec.LinuxCapabilities? = process?.capabilities
+        val caps: LinuxCapabilities? = process?.capabilities
         if (caps != null) {
             Capability.applyBoundingSet(caps)
             Capability.setKeepCaps()

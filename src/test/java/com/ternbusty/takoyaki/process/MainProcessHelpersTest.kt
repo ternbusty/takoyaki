@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.process
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
@@ -11,13 +11,8 @@ import org.junit.jupiter.api.Assertions.*
  */
 class MainProcessHelpersTest {
 
-    private fun map(container: Int, host: Int, size: Int): Spec.IdMapping {
-        val m = Spec.IdMapping()
-        m.containerID = container.toLong()
-        m.hostID = host.toLong()
-        m.size = size.toLong()
-        return m
-    }
+    private fun map(container: Int, host: Int, size: Int): LinuxIdMapping =
+        LinuxIdMapping(containerID = container.toLong(), hostID = host.toLong(), size = size.toLong())
 
     // ---- buildIdMapping -----------------------------------------------------
 

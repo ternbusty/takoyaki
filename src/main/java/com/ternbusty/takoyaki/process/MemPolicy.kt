@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.process
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import java.lang.foreign.Arena
@@ -27,7 +27,7 @@ object MemPolicy {
      * Validate and apply the memory policy. Throws on invalid config;
      * does nothing when [policy] is null.
      */
-    fun apply(policy: Spec.MemoryPolicy?) {
+    fun apply(policy: LinuxMemoryPolicy?) {
         if (policy == null) return
 
         val mode = parseMode(policy.mode)

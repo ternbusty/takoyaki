@@ -6,8 +6,12 @@ import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
-import com.ternbusty.takoyaki.util.Json
-
+import com.ternbusty.takoyaki.util.JsonCodec
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.encodeToJsonElement
 import java.lang.foreign.Arena
 
 /**
@@ -128,15 +132,16 @@ class SeccompListener private constructor() {
          * ```
          */
         private fun buildContainerProcessState(state: State, metadata: String?): String {
-            val cps = LinkedHashMap<String, Any>()
-            cps["ociVersion"] = state.ociVersion ?: "1.0.2"
-            cps["fds"] = listOf("seccompFd")
-            cps["pid"] = state.pid ?: 0
-            if (!metadata.isNullOrEmpty()) {
-                cps["metadata"] = metadata
+            val obj = buildJsonObject {
+                put("ociVersion", state.ociVersion ?: "1.0.2")
+                putJsonArray("fds") { add("seccompFd") }
+                put("pid", state.pid ?: 0)
+                if (!metadata.isNullOrEmpty()) {
+                    put("metadata", metadata)
+                }
+                put("state", JsonCodec.json.encodeToJsonElement(state))
             }
-            cps["state"] = state.toJson()
-            return Json.encode(cps)
+            return JsonCodec.encodePretty(obj)
         }
 
         private fun connect(arena: Arena, sock: Int, path: String): Boolean =

@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.cgroup
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.*
 import org.mockito.Mockito.*
@@ -9,8 +9,6 @@ import java.nio.file.Path
 import org.junit.jupiter.api.Assertions.*
 
 class CgroupTest {
-
-    private fun resources(): Spec.LinuxResources = Spec.LinuxResources()
 
     @Test
     fun nullCgroupPathIsNoOp() {
@@ -42,16 +40,13 @@ class CgroupTest {
     fun memoryLimitWritesMemoryMax() {
         // Confirm spec.linux.resources.memory.limit lands at memory.max with
         // the exact value (or "max" sentinel for -1).
-        val r = resources()
-        r.memory = Spec.LinuxMemory()
-        r.memory!!.limit = 67108864L // 64 MiB
+        val r = LinuxResources(memory = LinuxMemory(limit = 67108864L)) // 64 MiB
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.createDirectories(any()) }.thenReturn(null)
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
             fm.`when`<Any> { Files.readString(any()) }.thenReturn("")
-            val linux = Spec.Linux()
-            linux.resources = r
+            val linux = Linux(resources = r)
             Cgroup.setup(123, "/takoyaki-mem", linux)
 
             fm.verify { Files.writeString(
@@ -62,16 +57,13 @@ class CgroupTest {
 
     @Test
     fun memoryMinusOneLimitWritesMaxSentinel() {
-        val r = resources()
-        r.memory = Spec.LinuxMemory()
-        r.memory!!.limit = -1L
+        val r = LinuxResources(memory = LinuxMemory(limit = -1L))
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.createDirectories(any()) }.thenReturn(null)
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
             fm.`when`<Any> { Files.readString(any()) }.thenReturn("")
-            val linux = Spec.Linux()
-            linux.resources = r
+            val linux = Linux(resources = r)
             Cgroup.setup(123, "/takoyaki-mem", linux)
 
             fm.verify { Files.writeString(
@@ -82,16 +74,13 @@ class CgroupTest {
 
     @Test
     fun cpuCpusetIsApplied() {
-        val r = resources()
-        r.cpu = Spec.LinuxCpu()
-        r.cpu!!.cpus = "0-1"
+        val r = LinuxResources(cpu = LinuxCpu(cpus = "0-1"))
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.createDirectories(any()) }.thenReturn(null)
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
             fm.`when`<Any> { Files.readString(any()) }.thenReturn("")
-            val linux = Spec.Linux()
-            linux.resources = r
+            val linux = Linux(resources = r)
             Cgroup.setup(123, "/takoyaki-cpu", linux)
 
             fm.verify { Files.writeString(
@@ -103,17 +92,13 @@ class CgroupTest {
     @Test
     fun cpuQuotaAndPeriodAreCombinedIntoCpuMax() {
         // cgroup v2 writes both as one string "quota period".
-        val r = resources()
-        r.cpu = Spec.LinuxCpu()
-        r.cpu!!.quota = 50000L
-        r.cpu!!.period = 100000L
+        val r = LinuxResources(cpu = LinuxCpu(quota = 50000L, period = 100000L))
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.createDirectories(any()) }.thenReturn(null)
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
             fm.`when`<Any> { Files.readString(any()) }.thenReturn("")
-            val linux = Spec.Linux()
-            linux.resources = r
+            val linux = Linux(resources = r)
             Cgroup.setup(123, "/takoyaki-q", linux)
 
             fm.verify { Files.writeString(
@@ -126,16 +111,13 @@ class CgroupTest {
     fun pidsLimitIsDeferredDuringSetup() {
         // pids.max is deferred during setup() so the GraalVM init process
         // can create threads. applyDeferredPids() writes it after INIT_READY.
-        val r = resources()
-        r.pids = Spec.LinuxPids()
-        r.pids!!.limit = 100
+        val r = LinuxResources(pids = LinuxPids(limit = 100))
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.createDirectories(any()) }.thenReturn(null)
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
             fm.`when`<Any> { Files.readString(any()) }.thenReturn("")
-            val linux = Spec.Linux()
-            linux.resources = r
+            val linux = Linux(resources = r)
             Cgroup.setup(123, "/takoyaki-p", linux)
 
             // pids.max must NOT be written during setup.
@@ -147,9 +129,7 @@ class CgroupTest {
 
     @Test
     fun applyDeferredPidsWritesPidsMax() {
-        val r = resources()
-        r.pids = Spec.LinuxPids()
-        r.pids!!.limit = 100
+        val r = LinuxResources(pids = LinuxPids(limit = 100))
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
@@ -166,16 +146,13 @@ class CgroupTest {
         // For a nested cgroup like /takoyaki/sub the runtime must "+memory"
         // (etc.) in EACH ancestor's cgroup.subtree_control. Verify that
         // subtree_control writes hit at least the root.
-        val r = resources()
-        r.memory = Spec.LinuxMemory()
-        r.memory!!.limit = 4096L
+        val r = LinuxResources(memory = LinuxMemory(limit = 4096L))
 
         mockStatic(Files::class.java).use { fm ->
             fm.`when`<Any> { Files.createDirectories(any()) }.thenReturn(null)
             fm.`when`<Any> { Files.writeString(any(), anyString()) }.thenReturn(Path.of("/dev/null"))
             fm.`when`<Any> { Files.readString(any()) }.thenReturn("")
-            val linux = Spec.Linux()
-            linux.resources = r
+            val linux = Linux(resources = r)
             Cgroup.setup(123, "/takoyaki/sub", linux)
 
             // The root cgroup must get a "+memory" write.

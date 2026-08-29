@@ -5,11 +5,11 @@ import com.ternbusty.takoyaki.config.KontainerConfig
 import com.ternbusty.takoyaki.hooks.Hooks
 import com.ternbusty.takoyaki.ipc.NotifySocket
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -92,7 +92,7 @@ object DeleteCommand {
 
         // poststop hook fires in the runtime namespace before we remove the state dir.
         try {
-            val spec = Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson)
+            val spec = JsonCodec.loadFromFile<Spec>(Path.of(state.bundle, "config.json"))
             val hooks = spec?.hooks
             if (hooks != null) Hooks.run(hooks.poststop, state, "poststop")
         } catch (_: IOException) {

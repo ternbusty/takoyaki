@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.syscall
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.RecordingSyscalls.PrlimitCall
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -8,13 +8,8 @@ import java.util.function.IntSupplier
 
 class RlimitTest {
 
-    private fun r(type: String, soft: Long, hard: Long): Spec.POSIXRlimit {
-        val p = Spec.POSIXRlimit()
-        p.type = type
-        p.soft = soft
-        p.hard = hard
-        return p
-    }
+    private fun r(type: String, soft: Long, hard: Long): POSIXRlimit =
+        POSIXRlimit(type = type, soft = soft, hard = hard)
 
     @Test
     fun nullListDoesNothing() {

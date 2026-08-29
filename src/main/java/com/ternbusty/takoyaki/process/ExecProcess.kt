@@ -10,7 +10,7 @@ import com.ternbusty.takoyaki.syscall.CloseRange
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.ByteArrayOutputStream
 import java.lang.foreign.Arena
 
@@ -69,7 +69,7 @@ object ExecProcess {
 
         val payload: ExecPayload?
         try {
-            payload = Json.decode(readToEof(payloadFd), ExecPayload::fromJson)
+            payload = JsonCodec.decode<ExecPayload>(readToEof(payloadFd))
         } catch (e: Exception) {
             Logger.error("failed to read exec payload: ${e.message}")
             PosixIO._exit(1)

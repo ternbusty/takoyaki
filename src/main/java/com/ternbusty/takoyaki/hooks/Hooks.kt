@@ -1,9 +1,9 @@
 package com.ternbusty.takoyaki.hooks
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -30,7 +30,7 @@ object Hooks {
      *
      * @return the first error message if any hook failed, null if all succeeded.
      */
-    fun run(hooks: List<Spec.Hook>?, state: State, phase: String): String? =
+    fun run(hooks: List<Hook>?, state: State, phase: String): String? =
         runEach(hooks, state, phase, failFast = false, processEnv = null)
 
     /**
@@ -39,7 +39,7 @@ object Hooks {
      * and throws -- the caller is expected to surface this as a create/start
      * failure.
      */
-    fun runFailFast(hooks: List<Spec.Hook>?, state: State, phase: String): String? =
+    fun runFailFast(hooks: List<Hook>?, state: State, phase: String): String? =
         runEach(hooks, state, phase, failFast = true, processEnv = null)
 
     /**
@@ -49,7 +49,7 @@ object Hooks {
      * for startContainer hooks, which inherit the container process's env.
      */
     fun runFailFast(
-        hooks: List<Spec.Hook>?,
+        hooks: List<Hook>?,
         state: State,
         phase: String,
         processEnv: List<String>?
@@ -57,7 +57,7 @@ object Hooks {
         runEach(hooks, state, phase, failFast = true, processEnv = processEnv)
 
     private fun runEach(
-        hooks: List<Spec.Hook>?,
+        hooks: List<Hook>?,
         state: State,
         phase: String,
         failFast: Boolean,
@@ -65,7 +65,7 @@ object Hooks {
     ): String? {
         if (hooks.isNullOrEmpty()) return null
         var firstError: String? = null
-        val stateJson = Json.encode(state.toJson())
+        val stateJson = JsonCodec.encode(state)
         for ((idx, h) in hooks.withIndex()) {
             val hookPath = h.path ?: continue
             // runc uses 0-based hook numbering in error messages.

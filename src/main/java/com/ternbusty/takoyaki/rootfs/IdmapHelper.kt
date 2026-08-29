@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.rootfs
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.PosixIO
 
@@ -31,7 +31,7 @@ class IdmapHelper private constructor() {
     companion object {
 
         /** Apply an id-mapped bind mount from [m]`.source` to [destination]. */
-        fun apply(m: Spec.Mount, destination: String): Boolean =
+        fun apply(m: Mount, destination: String): Boolean =
             apply(m, destination, recursive = false, cloneRecursive = false)
 
         /**
@@ -43,7 +43,7 @@ class IdmapHelper private constructor() {
          *                       subtrees contain earlier mounts from the same spec)
          */
         fun apply(
-            m: Spec.Mount, destination: String,
+            m: Mount, destination: String,
             recursive: Boolean, cloneRecursive: Boolean
         ): Boolean {
             val uidMaps = m.uidMappings
@@ -58,11 +58,11 @@ class IdmapHelper private constructor() {
             }
         }
 
-        fun applyWithFd(m: Spec.Mount, usernsFd: Int, destination: String): Boolean =
+        fun applyWithFd(m: Mount, usernsFd: Int, destination: String): Boolean =
             applyWithFd(m, usernsFd, destination, recursive = false, cloneRecursive = false)
 
         fun applyWithFd(
-            m: Spec.Mount, usernsFd: Int, destination: String,
+            m: Mount, usernsFd: Int, destination: String,
             recursive: Boolean, cloneRecursive: Boolean
         ): Boolean {
             val src = m.source ?: return false
@@ -75,8 +75,8 @@ class IdmapHelper private constructor() {
          * /proc/<helper>/ns/user and return the fd. The helper exits once released.
          */
         fun setupHostSide(
-            uidMaps: List<Spec.IdMapping>,
-            gidMaps: List<Spec.IdMapping>
+            uidMaps: List<LinuxIdMapping>,
+            gidMaps: List<LinuxIdMapping>
         ): Int = openMappedUserNs(uidMaps, gidMaps)
 
         /**
@@ -91,8 +91,8 @@ class IdmapHelper private constructor() {
          * that occurs when forking from a multi-threaded SubstrateVM process.
          */
         private fun openMappedUserNs(
-            uidMaps: List<Spec.IdMapping>,
-            gidMaps: List<Spec.IdMapping>?
+            uidMaps: List<LinuxIdMapping>,
+            gidMaps: List<LinuxIdMapping>?
         ): Int {
             val helper = try {
                 ProcessBuilder("/proc/self/exe").apply {
@@ -195,7 +195,7 @@ class IdmapHelper private constructor() {
          * 65536") makes disk uid 0 appear as uid 100000 through the mount, matching
          * runc's behaviour. This is the SAME direction as a process-attached userns.
          */
-        private fun writeMappings(pid: Long, maps: List<Spec.IdMapping>?, file: String) {
+        private fun writeMappings(pid: Long, maps: List<LinuxIdMapping>?, file: String) {
             if (maps.isNullOrEmpty()) return
             val content = buildString {
                 for (m in maps) {

@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.hooks
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
@@ -10,22 +10,15 @@ import java.nio.file.Path
 
 class HooksTest {
 
-    private fun sampleState(): State {
-        val s = State()
-        s.id = "ctr-a"
-        s.status = "created"
-        s.pid = 4242
-        s.bundle = "/tmp/bundle"
-        return s
-    }
+    private fun sampleState(): State = State(
+        id = "ctr-a",
+        status = "created",
+        pid = 4242,
+        bundle = "/tmp/bundle",
+    )
 
-    private fun hook(path: String?, args: List<String>?, timeout: Long?): Spec.Hook {
-        val h = Spec.Hook()
-        h.path = path
-        h.args = args
-        h.timeout = timeout
-        return h
-    }
+    private fun hook(path: String?, args: List<String>?, timeout: Long?): Hook =
+        Hook(path = path, args = args, timeout = timeout)
 
     @Test
     fun nullListIsNoOp() {

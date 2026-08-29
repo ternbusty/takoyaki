@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.cgroup
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import java.io.IOException
@@ -47,7 +47,7 @@ object Cgroup {
         return Path.of(CGROUP_ROOT, norm)
     }
 
-    fun setup(pid: Int, cgroupPath: String?, linux: Spec.Linux?) {
+    fun setup(pid: Int, cgroupPath: String?, linux: Linux?) {
         if (cgroupPath == null) return
         val full = dir(cgroupPath)
         try {
@@ -132,7 +132,7 @@ object Cgroup {
         return null
     }
 
-    private fun enableControllers(full: Path, r: Spec.LinuxResources?) {
+    private fun enableControllers(full: Path, r: LinuxResources?) {
         // runc compat: enable ALL available controllers in the parent's
         // subtree_control, not just the ones we plan to write. The container
         // might use controllers internally (e.g. creating subcgroups and
@@ -187,7 +187,7 @@ object Cgroup {
      * Re-apply resource limits to an existing cgroup (e.g. via `update`).
      * Also enables any new controllers required by the update.
      */
-    fun applyLimitsOnly(cgroupPath: String, r: Spec.LinuxResources?) {
+    fun applyLimitsOnly(cgroupPath: String, r: LinuxResources?) {
         val full = dir(cgroupPath)
         enableControllers(full, r)
         applyLimits(full, r)
@@ -201,7 +201,7 @@ object Cgroup {
 
     private fun applyLimits(
         full: Path,
-        r: Spec.LinuxResources?,
+        r: LinuxResources?,
         strict: Boolean = false,
         skipPids: Boolean = false
     ) {
@@ -234,7 +234,7 @@ object Cgroup {
      * finished initialization. Without this deferral, a low pids.max value
      * (e.g. 1 from pids.limit=0) would prevent the init from starting.
      */
-    fun applyDeferredPids(cgroupPath: String?, r: Spec.LinuxResources?) {
+    fun applyDeferredPids(cgroupPath: String?, r: LinuxResources?) {
         if (cgroupPath == null || r == null) return
         val full = dir(cgroupPath)
         for ((key, value) in plannedWrites(r)) {
@@ -253,7 +253,7 @@ object Cgroup {
      * allow list. This mirrors runc's ordering where cgroupManager.Set
      * (including device BPF) runs after SYNC_READY.
      */
-    fun applyDeferredDevices(cgroupPath: String?, r: Spec.LinuxResources?) {
+    fun applyDeferredDevices(cgroupPath: String?, r: LinuxResources?) {
         if (cgroupPath == null || r == null || r.devices.isNullOrEmpty()) return
         DeviceCgroup.apply(cgroupPath, r.devices)
     }
@@ -265,7 +265,7 @@ object Cgroup {
      * last so they can override the strongly typed fields if the same file
      * was set both ways.
      */
-    private fun plannedWrites(r: Spec.LinuxResources?): List<Map.Entry<String, String>> {
+    private fun plannedWrites(r: LinuxResources?): List<Map.Entry<String, String>> {
         val writes = mutableListOf<Map.Entry<String, String>>()
         if (r == null) return writes
         val memory = r.memory
@@ -389,7 +389,7 @@ object Cgroup {
      * Multiple entries for the same major:minor get merged so the kernel
      * doesn't clobber a previous write.
      */
-    private fun appendBlockIO(writes: MutableList<Map.Entry<String, String>>, io: Spec.LinuxBlockIO) {
+    private fun appendBlockIO(writes: MutableList<Map.Entry<String, String>>, io: LinuxBlockIO) {
         val weight = io.weight
         if (weight != null && weight > 0) {
             writes.add(java.util.AbstractMap.SimpleEntry("io.weight", "default $weight"))
@@ -406,7 +406,7 @@ object Cgroup {
 
     private fun appendThrottle(
         perDevice: MutableMap<String, StringBuilder>,
-        devs: List<Spec.LinuxThrottleDevice>?,
+        devs: List<LinuxThrottleDevice>?,
         key: String
     ) {
         if (devs == null) return

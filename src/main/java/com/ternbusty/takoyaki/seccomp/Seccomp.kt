@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.seccomp
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
@@ -55,7 +55,7 @@ class Seccomp private constructor() {
          *                       absent (the listener path must then be reachable from
          *                       here, which it usually isn't post-pivot).
          */
-        fun apply(sec: Spec.LinuxSeccomp?, state: State, preConnectedFd: Int) {
+        fun apply(sec: LinuxSeccomp?, state: State, preConnectedFd: Int) {
             if (sec == null) return
             if (!ensureLoaded()) {
                 Logger.error("libseccomp.so.2 not found, cannot apply seccomp")
@@ -285,10 +285,10 @@ class Seccomp private constructor() {
          */
         private fun addRulesWithOrSplit(
             arena: Arena, ctx: MemorySegment, action: Int, nr: Int,
-            args: List<Spec.SeccompArg>
+            args: List<SeccompArg>
         ) {
             // Group args by index. If all indices are unique, we can use a single rule.
-            val byIndex = LinkedHashMap<Int, MutableList<Spec.SeccompArg>>()
+            val byIndex = LinkedHashMap<Int, MutableList<SeccompArg>>()
             for (a in args) {
                 byIndex.getOrPut(a.index) { mutableListOf() }.add(a)
             }
@@ -302,9 +302,9 @@ class Seccomp private constructor() {
             // Generate the Cartesian product of per-index arg groups.
             // Each combination becomes one rule_add call.
             val groups = ArrayList(byIndex.values)
-            var combos: MutableList<MutableList<Spec.SeccompArg>> = mutableListOf(mutableListOf())
+            var combos: MutableList<MutableList<SeccompArg>> = mutableListOf(mutableListOf())
             for (group in groups) {
-                val next = mutableListOf<MutableList<Spec.SeccompArg>>()
+                val next = mutableListOf<MutableList<SeccompArg>>()
                 for (prefix in combos) {
                     for (a in group) {
                         val combo = ArrayList(prefix)
@@ -328,7 +328,7 @@ class Seccomp private constructor() {
          */
         private fun addRuleWithArgs(
             arena: Arena, ctx: MemorySegment, action: Int, nr: Int,
-            args: List<Spec.SeccompArg>
+            args: List<SeccompArg>
         ): Int {
             val n = args.size
             val arr = scmp_arg_cmp.allocateArray(n.toLong(), arena)
@@ -362,7 +362,7 @@ class Seccomp private constructor() {
          * install. Each entry in `syscalls` may cover several names, and every
          * name becomes an independent libseccomp rule.
          */
-        private fun countSyscalls(syscalls: List<Spec.LinuxSyscall>): Int {
+        private fun countSyscalls(syscalls: List<LinuxSyscall>): Int {
             var n = 0
             for (s in syscalls) {
                 n += s.names?.size ?: 0
@@ -382,7 +382,7 @@ class Seccomp private constructor() {
          */
         private fun installEnosysStub(
             arena: Arena,
-            syscalls: List<Spec.LinuxSyscall>?,
+            syscalls: List<LinuxSyscall>?,
             filterFlags: Int
         ) {
             val maxNr = findMaxSyscallNr(arena, syscalls)
@@ -456,7 +456,7 @@ class Seccomp private constructor() {
          */
         private fun findMaxSyscallNr(
             arena: Arena,
-            syscalls: List<Spec.LinuxSyscall>?
+            syscalls: List<LinuxSyscall>?
         ): Int {
             var max = 0
             // Probe spec-referenced syscalls.

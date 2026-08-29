@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.rootfs
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentMatchers.any
@@ -15,12 +15,8 @@ import java.nio.file.Path
 class UserDbTest {
 
     companion object {
-        private fun user(uid: Int, gid: Int): Spec.User {
-            val u = Spec.User()
-            u.uid = uid
-            u.gid = gid
-            return u
-        }
+        private fun user(uid: Int, gid: Int): User =
+            User(uid = uid, gid = gid)
     }
 
     @Test
@@ -157,8 +153,7 @@ class UserDbTest {
                 )
             }.thenReturn(Path.of("/dev/null"))
 
-            val u = user(1000, 1000)
-            u.additionalGids = listOf(1000, 100, 200)
+            val u = user(1000, 1000).copy(additionalGids = listOf(1000, 100, 200))
             UserDb.ensure(u)
 
             // All missing entries land in ONE append. Primary gid=1000 appears

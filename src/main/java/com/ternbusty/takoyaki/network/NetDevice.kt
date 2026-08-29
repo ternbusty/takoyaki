@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.network
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
@@ -57,7 +57,7 @@ object NetDevice {
      * namespace (identified by initPid). Called from the host (MainProcess)
      * after the init process has created its namespaces.
      */
-    fun moveDevices(devices: Map<String, Spec.NetDevice>?, initPid: Int) {
+    fun moveDevices(devices: Map<String, LinuxNetDevice>?, initPid: Int) {
         if (devices.isNullOrEmpty()) return
 
         Arena.ofConfined().use { arena ->
@@ -88,7 +88,7 @@ object NetDevice {
      * Rename devices inside the container's network namespace. Called from
      * InitProcess after namespace setup.
      */
-    fun renameDevices(devices: Map<String, Spec.NetDevice>?) {
+    fun renameDevices(devices: Map<String, LinuxNetDevice>?) {
         if (devices.isNullOrEmpty()) return
 
         Arena.ofConfined().use { arena ->

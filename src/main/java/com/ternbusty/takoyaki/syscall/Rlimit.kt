@@ -1,27 +1,27 @@
 package com.ternbusty.takoyaki.syscall
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import java.nio.file.Files
 import java.nio.file.Path
 
 object Rlimit {
 
     /** Apply all rlimits except the one named by [excludeType]. */
-    fun applyExcept(pid: Int, rlimits: List<Spec.POSIXRlimit>?, excludeType: String) {
+    fun applyExcept(pid: Int, rlimits: List<POSIXRlimit>?, excludeType: String) {
         if (rlimits.isNullOrEmpty()) return
         val filtered = rlimits.filter { it.type != excludeType }
         apply(pid, filtered)
     }
 
     /** Apply only the rlimit named by [onlyType]. */
-    fun applyOnly(pid: Int, rlimits: List<Spec.POSIXRlimit>?, onlyType: String) {
+    fun applyOnly(pid: Int, rlimits: List<POSIXRlimit>?, onlyType: String) {
         if (rlimits.isNullOrEmpty()) return
         val filtered = rlimits.filter { it.type == onlyType }
         apply(pid, filtered)
     }
 
-    fun apply(pid: Int, rlimits: List<Spec.POSIXRlimit>?) {
+    fun apply(pid: Int, rlimits: List<POSIXRlimit>?) {
         if (rlimits.isNullOrEmpty()) return
         val sc = SyscallHost.current()
         for (r in rlimits) {
@@ -50,7 +50,7 @@ object Rlimit {
      * hard limit to nr_open (which the kernel always allows), then raising
      * it beyond. This two-phase approach matches runc's setupRlimits.
      */
-    private fun applyNofile(sc: Syscalls, pid: Int, r: Spec.POSIXRlimit) {
+    private fun applyNofile(sc: Syscalls, pid: Int, r: POSIXRlimit) {
         val resource = Constants.RLIMIT_NOFILE
         var rc = sc.prlimit64(pid, resource, r.soft, r.hard)
         if (rc == 0) {

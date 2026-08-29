@@ -2,7 +2,7 @@ package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.state.State
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
@@ -54,18 +54,20 @@ object ListCommand {
             // "rootfs" is derived from the bundle path and "annotations" is
             // omitted entirely.
             println(
-                Json.encodeCompact(
-                    states.map { s ->
-                        linkedMapOf<String, Any?>(
-                            "ociVersion" to s.ociVersion,
-                            "id" to s.id,
-                            "pid" to s.pid,
-                            "status" to s.status,
-                            "bundle" to s.bundle,
-                            "rootfs" to if (s.bundle != null) "${s.bundle}/rootfs" else "",
-                            "created" to s.created
-                        )
-                    }
+                JsonCodec.encodeCompact(
+                    JsonCodec.toJsonElement(
+                        states.map { s ->
+                            linkedMapOf<String, Any?>(
+                                "ociVersion" to s.ociVersion,
+                                "id" to s.id,
+                                "pid" to s.pid,
+                                "status" to s.status,
+                                "bundle" to s.bundle,
+                                "rootfs" to if (s.bundle != null) "${s.bundle}/rootfs" else "",
+                                "created" to s.created
+                            )
+                        }
+                    )
                 )
             )
             return 0

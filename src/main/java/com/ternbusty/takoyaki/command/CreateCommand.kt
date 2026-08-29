@@ -11,12 +11,12 @@ import com.ternbusty.takoyaki.rootfs.IdmapHelper
 import com.ternbusty.takoyaki.rootfs.IdmapMount
 import com.ternbusty.takoyaki.rootfs.MountOptions
 import com.ternbusty.takoyaki.seccomp.SeccompListener
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.lang.foreign.Arena
 import java.nio.file.Path
 import java.util.Base64
@@ -47,7 +47,7 @@ object CreateCommand {
 
         val spec: Spec
         try {
-            spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson)
+            spec = JsonCodec.loadFromFile<Spec>(Path.of(bundle, "config.json"))
                 ?: throw IOException("failed to parse config.json")
         } catch (e: java.nio.file.NoSuchFileException) {
             System.err.println("$bundle does not exist")
@@ -203,8 +203,8 @@ object CreateCommand {
                 // Explicit uidMappings on the mount take precedence; otherwise
                 // the "idmap"/"ridmap" mount option with the container's userns
                 // mappings (implied mapping).
-                var uidMaps: List<Spec.IdMapping>? = m.uidMappings
-                var gidMaps: List<Spec.IdMapping>? = m.gidMappings
+                var uidMaps: List<LinuxIdMapping>? = m.uidMappings
+                var gidMaps: List<LinuxIdMapping>? = m.gidMappings
                 val hasExplicit = !uidMaps.isNullOrEmpty()
                 var hasIdmapOption = false
                 var isRidmap = false

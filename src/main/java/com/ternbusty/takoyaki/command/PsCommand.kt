@@ -4,7 +4,7 @@ import com.ternbusty.takoyaki.cgroup.Cgroup
 import com.ternbusty.takoyaki.config.KontainerConfig
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.state.State
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.io.IOException
 import java.nio.file.Files
 
@@ -46,7 +46,7 @@ object PsCommand {
         if (pids.isEmpty() && statePid != null) pids.add(statePid)
 
         if (format == "json") {
-            println(Json.encode(pids))
+            println(JsonCodec.encodePretty(JsonCodec.toJsonElement(pids)))
             return 0
         }
         // Run the host "ps" command and filter to only container pids.

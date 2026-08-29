@@ -20,23 +20,19 @@ class DeleteCommandTest {
         private const val ROOT = "/run/takoyaki"
     }
 
-    private fun stoppedState(): State {
-        val s = State()
-        s.id = "ctr-a"
-        s.status = ContainerStatus.STOPPED.value
-        s.pid = 4242
-        s.bundle = "/tmp/bundle"
-        return s
-    }
+    private fun stoppedState(): State = State(
+        id = "ctr-a",
+        status = ContainerStatus.STOPPED.value,
+        pid = 4242,
+        bundle = "/tmp/bundle",
+    )
 
-    private fun runningState(): State {
-        val s = State()
-        s.id = "ctr-a"
-        s.status = ContainerStatus.RUNNING.value
-        s.pid = 4242
-        s.bundle = "/tmp/bundle"
-        return s
-    }
+    private fun runningState(): State = State(
+        id = "ctr-a",
+        status = ContainerStatus.RUNNING.value,
+        pid = 4242,
+        bundle = "/tmp/bundle",
+    )
 
     @Test
     fun deletingMissingContainerWithoutForceErrors() {

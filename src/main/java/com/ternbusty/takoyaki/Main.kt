@@ -16,7 +16,7 @@ import com.ternbusty.takoyaki.command.StartCommand
 import com.ternbusty.takoyaki.command.StateCommand
 import com.ternbusty.takoyaki.command.UpdateCommand
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.process.ExecProcess
 import com.ternbusty.takoyaki.process.InitProcess
 import java.io.IOException
@@ -718,7 +718,7 @@ class Main {
                 }
             }
             // Parse --console-size WIDTH:HEIGHT (runc uses WIDTH:HEIGHT order)
-            var consoleSize: Spec.Box? = null
+            var consoleSize: ConsoleSize? = null
             val sizeStr = consoleSizeStr
             if (sizeStr != null) {
                 val parts = sizeStr.split(":")
@@ -729,10 +729,7 @@ class Main {
                         System.err.println("takoyaki exec: bad console-size: $consoleSizeStr")
                         return 1
                     }
-                    consoleSize = Spec.Box().also {
-                        it.width = w
-                        it.height = h
-                    }
+                    consoleSize = ConsoleSize(width = w, height = h)
                 }
             }
             return ExecCommand.run(

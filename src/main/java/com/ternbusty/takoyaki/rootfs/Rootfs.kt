@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.rootfs
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
@@ -330,7 +330,7 @@ object Rootfs {
      */
     internal fun applyOciMounts(
         rootfsPath: String,
-        mounts: List<Spec.Mount>,
+        mounts: List<Mount>,
         idmapFds: Map<String, Int>,
         idmapUsernsFds: Map<String, IntArray>?,
         bindSourceFds: Map<String, Int>?,
@@ -394,17 +394,10 @@ object Rootfs {
                 // userns mappings so IdmapHelper can create the right userns.
                 var effectiveMount = m
                 if (!hasExplicitMappings && (parsed.isIdmap || parsed.isRecursiveIdmap)) {
-                    effectiveMount = Spec.Mount().also {
-                        it.source = m.source
-                        it.destination = m.destination
-                        it.type = m.type
-                        it.options = m.options
-                        val linux = spec.linux
-                        if (linux != null) {
-                            it.uidMappings = linux.uidMappings
-                            it.gidMappings = linux.gidMappings
-                        }
-                    }
+                    effectiveMount = m.copy(
+                        uidMappings = spec.linux?.uidMappings,
+                        gidMappings = spec.linux?.gidMappings,
+                    )
                 }
                 val prepFd = idmapFds[m.destination]
                 val deferredInfo = idmapUsernsFds?.get(m.destination)
@@ -849,7 +842,7 @@ object Rootfs {
      */
     private fun createMountTarget(
         rootfsPath: String,
-        m: Spec.Mount,
+        m: Mount,
         target: String,
         isBind: Boolean,
     ) {

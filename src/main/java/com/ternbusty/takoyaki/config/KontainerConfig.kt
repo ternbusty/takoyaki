@@ -1,27 +1,20 @@
 package com.ternbusty.takoyaki.config
 
-import com.ternbusty.takoyaki.util.Json
-import com.ternbusty.takoyaki.util.json.JsonMap
+import com.ternbusty.takoyaki.util.JsonCodec
+import kotlinx.serialization.Serializable
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 
-class KontainerConfig(
-    var cgroupPath: String? = null,
-    var noNewKeyring: Boolean = false
+@Serializable
+data class KontainerConfig(
+    val cgroupPath: String? = null,
+    val noNewKeyring: Boolean = false,
 ) {
-
     fun save(rootPath: String, containerId: String) {
         val p = path(rootPath, containerId)
         Files.createDirectories(p.parent)
-        Json.writeFile(p, toJson())
-    }
-
-    fun toJson(): Any {
-        val o = JsonMap.obj()
-        JsonMap.put(o, "cgroupPath", cgroupPath)
-        if (noNewKeyring) JsonMap.put(o, "noNewKeyring", true)
-        return o
+        JsonCodec.saveToFile(p, this)
     }
 
     companion object {
@@ -29,16 +22,6 @@ class KontainerConfig(
             Path.of(rootPath, containerId, "config.json")
 
         fun load(rootPath: String, containerId: String): KontainerConfig =
-            Json.readFile(path(rootPath, containerId), ::fromJson)
-                ?: throw IOException("failed to parse config for $containerId")
-
-        fun fromJson(node: Any?): KontainerConfig? {
-            if (node == null) return null
-            val o = JsonMap.asObject(node) ?: return null
-            return KontainerConfig(
-                cgroupPath = JsonMap.str(o, "cgroupPath"),
-                noNewKeyring = JsonMap.boolOr(o, "noNewKeyring", false)
-            )
-        }
+            JsonCodec.loadFromFile(path(rootPath, containerId))
     }
 }

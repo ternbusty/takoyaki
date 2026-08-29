@@ -1,18 +1,14 @@
 package com.ternbusty.takoyaki.process
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class NamespaceFlagsTest {
 
-    private fun ns(type: String, path: String?): Spec.Namespace {
-        val n = Spec.Namespace()
-        n.type = type
-        n.path = path
-        return n
-    }
+    private fun ns(type: String, path: String?): Namespace =
+        Namespace(type = type, path = path)
 
     @Test
     fun nullListReturnsZero() {

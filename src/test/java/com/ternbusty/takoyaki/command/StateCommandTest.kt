@@ -35,15 +35,13 @@ class StateCommandTest {
         System.setOut(realStdout)
     }
 
-    private fun sampleState(): State {
-        val s = State()
-        s.ociVersion = "1.0.0"
-        s.id = "ctr-a"
-        s.status = ContainerStatus.RUNNING.value
-        s.pid = 4242
-        s.bundle = "/tmp/bundle"
-        return s
-    }
+    private fun sampleState(): State = State(
+        ociVersion = "1.0.0",
+        id = "ctr-a",
+        status = ContainerStatus.RUNNING.value,
+        pid = 4242,
+        bundle = "/tmp/bundle",
+    )
 
     @Test
     fun printsStateJsonOnSuccess() {

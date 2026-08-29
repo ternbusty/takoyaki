@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.rootfs
 
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.RecordingSyscalls
 import com.ternbusty.takoyaki.syscall.SyscallHost
@@ -18,14 +18,8 @@ import java.nio.file.Path
 class RootfsApplyOciMountsTest {
 
     companion object {
-        private fun mount(dest: String, src: String?, type: String?, options: List<String>?): Spec.Mount {
-            val m = Spec.Mount()
-            m.destination = dest
-            m.source = src
-            m.type = type
-            m.options = options
-            return m
-        }
+        private fun mount(dest: String, src: String?, type: String?, options: List<String>?): Mount =
+            Mount(destination = dest, source = src, type = type, options = options)
     }
 
     @Test
@@ -57,7 +51,7 @@ class RootfsApplyOciMountsTest {
     @Test
     fun nullDestinationIsSkippedNotCrashed(@TempDir tmp: Path) {
         val rec = RecordingSyscalls().stubMountReturn(0)
-        val m = Spec.Mount() // destination = null
+        val m = Mount() // destination = null
         SyscallHost.install(rec).use {
             assertDoesNotThrow {
                 Rootfs.applyOciMounts(

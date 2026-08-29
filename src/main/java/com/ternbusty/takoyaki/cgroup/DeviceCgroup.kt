@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.cgroup
 
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
@@ -63,17 +63,10 @@ object DeviceCgroup {
     private const val BPF_DEVCG_DEV_BLOCK = 0x1
     private const val BPF_DEVCG_DEV_CHAR = 0x2
 
-    private fun allow(type: String?, major: Long?, minor: Long?, access: String?): Spec.LinuxDeviceCgroup {
-        val r = Spec.LinuxDeviceCgroup()
-        r.allow = true
-        r.type = type
-        r.major = major
-        r.minor = minor
-        r.access = access
-        return r
-    }
+    private fun allow(type: String?, major: Long?, minor: Long?, access: String?): LinuxDeviceCgroup =
+        LinuxDeviceCgroup(allow = true, type = type, major = major, minor = minor, access = access)
 
-    fun apply(cgroupPath: String, rules: List<Spec.LinuxDeviceCgroup>?) {
+    fun apply(cgroupPath: String, rules: List<LinuxDeviceCgroup>?) {
         if (rules.isNullOrEmpty()) return
 
         // OCI spec: "The runtime SHOULD allow ... [the default device set]". The
@@ -84,7 +77,7 @@ object DeviceCgroup {
         // doesn't end up blocking /dev/null and friends, which would break sh's
         // own backgrounding (which redirects stdin from /dev/null) and most user
         // workloads. This matches runc's defaultAllowedDevices behaviour.
-        val effective = mutableListOf<Spec.LinuxDeviceCgroup>()
+        val effective = mutableListOf<LinuxDeviceCgroup>()
         effective.add(allow("c", 1L, 3L, "rwm"))    // /dev/null
         effective.add(allow("c", 1L, 5L, "rwm"))    // /dev/zero
         effective.add(allow("c", 1L, 7L, "rwm"))    // /dev/full
@@ -128,7 +121,7 @@ object DeviceCgroup {
     }
 
     // Package-visible so the unit test suite can pin the emitted bytecode.
-    internal fun buildProgram(rules: List<Spec.LinuxDeviceCgroup>): ByteArray {
+    internal fun buildProgram(rules: List<LinuxDeviceCgroup>): ByteArray {
         val out = ByteArrayOutputStream()
         // Setup: load ctx fields into R2 (access_type), then derive R3 (access bits),
         // R4 (dev type), R5 (major), R6 (minor).
@@ -145,7 +138,7 @@ object DeviceCgroup {
         // [{deny all}, {allow b 8:0}] works: the specific allow matches before
         // the default deny.
         var defaultAllow = false // default tail
-        val specific = mutableListOf<Spec.LinuxDeviceCgroup>()
+        val specific = mutableListOf<LinuxDeviceCgroup>()
         for (r in rules) {
             val rType = r.type
             val isWildcard = (rType == null || rType.isEmpty() || rType == "a") &&

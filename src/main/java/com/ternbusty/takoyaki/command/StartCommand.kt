@@ -3,10 +3,10 @@ package com.ternbusty.takoyaki.command
 import com.ternbusty.takoyaki.hooks.Hooks
 import com.ternbusty.takoyaki.ipc.NotifySocket
 import com.ternbusty.takoyaki.logger.Logger
-import com.ternbusty.takoyaki.spec.Spec
+import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.ContainerStatus
 import com.ternbusty.takoyaki.state.State
-import com.ternbusty.takoyaki.util.Json
+import com.ternbusty.takoyaki.util.JsonCodec
 import java.nio.file.Path
 
 object StartCommand {
@@ -31,7 +31,7 @@ object StartCommand {
         }
         var spec: Spec? = null
         try {
-            spec = Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson)
+            spec = JsonCodec.loadFromFile<Spec>(Path.of(state.bundle, "config.json"))
         } catch (e: Exception) {
             Logger.debug("could not reload spec for hooks: ${e.message}")
         }
