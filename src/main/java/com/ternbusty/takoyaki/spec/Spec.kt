@@ -7,7 +7,7 @@ import kotlinx.serialization.Serializable
 data class Spec(
     val ociVersion: String = "1.0.0",
     val root: Root,
-    val process: Process = Process(),
+    val process: Process = Process(args = emptyList()),
     val hostname: String? = null,
     val domainname: String? = null,
     val mounts: List<Mount>? = null,
@@ -30,7 +30,7 @@ data class Root(
 
 @Serializable
 data class Process(
-    val args: List<String> = emptyList(),
+    val args: List<String>,
     val env: List<String>? = null,
     val cwd: String = "/",
     val noNewPrivileges: Boolean? = null,
@@ -50,23 +50,23 @@ data class Process(
 
 @Serializable
 data class ConsoleSize(
-    val height: Int = 0,
-    val width: Int = 0,
+    val height: UInt,
+    val width: UInt,
 )
 
 @Serializable
 data class User(
-    val uid: Int = 0,
-    val gid: Int = 0,
-    val umask: Long? = null,
-    val additionalGids: List<Int>? = null,
+    val uid: UInt = 0u,
+    val gid: UInt = 0u,
+    val umask: UInt? = null,
+    val additionalGids: List<UInt>? = null,
 )
 
 @Serializable
 data class POSIXRlimit(
     val type: String,
-    val hard: Long,
-    val soft: Long,
+    val hard: ULong,
+    val soft: ULong,
 )
 
 @Serializable
@@ -114,9 +114,9 @@ data class Namespace(
 
 @Serializable
 data class LinuxIdMapping(
-    val containerID: Long = 0,
-    val hostID: Long = 0,
-    val size: Long = 0,
+    val containerID: UInt,
+    val hostID: UInt,
+    val size: UInt,
 )
 
 @Serializable
@@ -190,25 +190,42 @@ data class LinuxResources(
 
 @Serializable
 data class SeccompArg(
-    val index: Int,
-    val value: Long,
-    val valueTwo: Long? = null,
+    val index: UInt,
+    val value: ULong,
+    val valueTwo: ULong? = null,
     val op: String,
+)
+
+@Serializable
+data class Filter(
+    val caps: List<String>? = null,
+    val arches: List<String>? = null,
+    val minKernel: String? = null,
 )
 
 @Serializable
 data class LinuxSyscall(
     val names: List<String>,
     val action: String,
-    val errnoRet: Long? = null,
+    val errnoRet: UInt? = null,
     val args: List<SeccompArg>? = null,
+    val includes: Filter? = null,
+    val excludes: Filter? = null,
+    val comment: String? = null,
+)
+
+@Serializable
+data class ArchMap(
+    val architecture: String,
+    val subArchitectures: List<String>? = null,
 )
 
 @Serializable
 data class LinuxSeccomp(
     val defaultAction: String,
-    val defaultErrnoRet: Long? = null,
+    val defaultErrnoRet: UInt? = null,
     val architectures: List<String>? = null,
+    val archMap: List<ArchMap>? = null,
     val syscalls: List<LinuxSyscall>? = null,
     val flags: List<String>? = null,
     val listenerPath: String? = null,
@@ -224,9 +241,9 @@ data class LinuxDevice(
     val type: String,
     val major: Long? = null,
     val minor: Long? = null,
-    val fileMode: Long? = null,
-    val uid: Long? = null,
-    val gid: Long? = null,
+    val fileMode: UInt? = null,
+    val uid: UInt? = null,
+    val gid: UInt? = null,
 )
 
 @Serializable
@@ -330,6 +347,7 @@ data class Linux(
     val readonlyPaths: List<String>? = null,
     val rootfsPropagation: String? = null,
     val sysctl: Map<String, String>? = null,
+    val mountLabel: String? = null,
     val timeOffsets: Map<String, LinuxTimeOffset>? = null,
     val memoryPolicy: LinuxMemoryPolicy? = null,
     val netDevices: Map<String, LinuxNetDevice>? = null,

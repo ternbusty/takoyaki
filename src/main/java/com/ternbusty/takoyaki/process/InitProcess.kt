@@ -419,8 +419,8 @@ object InitProcess {
                     if (consoleSize != null) {
                         ConsoleSocket.setWinsize(
                             ptySlave,
-                            consoleSize.height,
-                            consoleSize.width
+                            consoleSize.height.toInt(),
+                            consoleSize.width.toInt()
                         )
                     }
                     ConsoleSocket.wireStdio(ptySlave)
@@ -456,8 +456,8 @@ object InitProcess {
                 // Non-empty HOME is kept as-is.
                 val homeVal = envMap["HOME"]
                 if (homeVal.isNullOrEmpty()) {
-                    val uid = process.user?.uid ?: 0
-                    val passwdHome = UserDb.lookupHome(uid)
+                    val uid = process.user?.uid ?: 0u
+                    val passwdHome = UserDb.lookupHome(uid.toInt())
                     if (!passwdHome.isNullOrEmpty()) {
                         envMap["HOME"] = passwdHome
                     } else {

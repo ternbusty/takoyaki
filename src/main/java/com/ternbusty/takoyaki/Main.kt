@@ -729,7 +729,7 @@ class Main {
                         System.err.println("takoyaki exec: bad console-size: $consoleSizeStr")
                         return 1
                     }
-                    consoleSize = ConsoleSize(width = w, height = h)
+                    consoleSize = ConsoleSize(width = w.toUInt(), height = h.toUInt())
                 }
             }
             return ExecCommand.run(

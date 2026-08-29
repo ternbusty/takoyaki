@@ -18,7 +18,7 @@ object UserDb {
 
     fun ensure(user: User?) {
         if (user == null) return
-        addPasswd(user.uid, user.gid)
+        addPasswd(user.uid.toInt(), user.gid.toInt())
         addGroups(user)
     }
 
@@ -48,11 +48,11 @@ object UserDb {
             val content = Files.readString(p)
             val pending = linkedSetOf<Int>()
             val entries = StringBuilder()
-            appendIfMissing(content, pending, entries, user.gid, "user")
+            appendIfMissing(content, pending, entries, user.gid.toInt(), "user")
             if (user.additionalGids != null) {
                 for (gid in user.additionalGids) {
                     if (gid != user.gid) {
-                        appendIfMissing(content, pending, entries, gid, "extra$gid")
+                        appendIfMissing(content, pending, entries, gid.toInt(), "extra$gid")
                     }
                 }
             }

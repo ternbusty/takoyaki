@@ -251,13 +251,13 @@ object ExecCommand {
         p = p.copy(terminal = tty)
         if (user != null) {
             val uv = user.split(":")
-            val uid = uv[0].toInt()
-            val gid = if (uv.size > 1) uv[1].toInt() else p.user.gid
+            val uid = uv[0].toUInt()
+            val gid = if (uv.size > 1) uv[1].toUInt() else p.user.gid
             p = p.copy(user = User(uid = uid, gid = gid, additionalGids = p.user.additionalGids))
         }
         if (!additionalGids.isNullOrEmpty()) {
             val existingGids = p.user.additionalGids ?: emptyList()
-            p = p.copy(user = p.user.copy(additionalGids = existingGids + additionalGids.map { it.toInt() }))
+            p = p.copy(user = p.user.copy(additionalGids = existingGids + additionalGids.map { it.toUInt() }))
         }
         if (!caps.isNullOrEmpty()) {
             var capabilities = p.capabilities ?: LinuxCapabilities()

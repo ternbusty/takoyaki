@@ -81,7 +81,7 @@ object SpecCommand {
                     permitted = defaultCaps,
                 ),
                 rlimits = listOf(
-                    POSIXRlimit(type = "RLIMIT_NOFILE", hard = 1024, soft = 1024)
+                    POSIXRlimit(type = "RLIMIT_NOFILE", hard = 1024uL, soft = 1024uL)
                 ),
             ),
             hostname = "takoyaki",
@@ -165,8 +165,8 @@ object SpecCommand {
             }
 
         // UID/GID mappings
-        val uidMap = LinuxIdMapping(containerID = 0, hostID = 1000, size = 1)
-        val gidMap = LinuxIdMapping(containerID = 0, hostID = 1000, size = 1)
+        val uidMap = LinuxIdMapping(containerID = 0u, hostID = 1000u, size = 1u)
+        val gidMap = LinuxIdMapping(containerID = 0u, hostID = 1000u, size = 1u)
 
         // Adjust mounts for rootless
         val newMounts = spec.mounts?.map { m ->

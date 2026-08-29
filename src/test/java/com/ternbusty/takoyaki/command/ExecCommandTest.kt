@@ -34,7 +34,7 @@ class ExecCommandTest {
         assertEquals(true, p.noNewPrivileges)
         assertEquals(listOf("CAP_KILL"), p.capabilities!!.bounding)
         assertEquals("prof", p.apparmorProfile)
-        assertEquals(1000, p.user.uid)
+        assertEquals(1000u, p.user.uid)
         assertEquals("/srv", p.cwd)
     }
 
@@ -44,10 +44,10 @@ class ExecCommandTest {
             baseProcess(), "0:10", "/tmp", listOf("EXTRA=1"), listOf("id"),
             false, listOf(), listOf()
         )
-        assertEquals(0, p.user.uid)
-        assertEquals(10, p.user.gid)
+        assertEquals(0u, p.user.uid)
+        assertEquals(10u, p.user.gid)
         assertEquals(
-            listOf(5), p.user.additionalGids,
+            listOf(5u), p.user.additionalGids,
             "additionalGids from the spec must survive a -u override"
         )
         assertEquals("/tmp", p.cwd)
@@ -60,8 +60,8 @@ class ExecCommandTest {
             baseProcess(), "0", null, listOf(), listOf("id"),
             false, listOf(), listOf()
         )
-        assertEquals(0, p.user.uid)
-        assertEquals(1000, p.user.gid)
+        assertEquals(0u, p.user.uid)
+        assertEquals(1000u, p.user.gid)
     }
 
     @Test
@@ -73,7 +73,7 @@ class ExecCommandTest {
             false, listOf(), listOf()
         )
         assertEquals(listOf("init-cmd"), base.args)
-        assertEquals(1000, base.user.uid)
+        assertEquals(1000u, base.user.uid)
         assertEquals(listOf("PATH=/usr/bin", "FOO=bar"), base.env)
     }
 
@@ -101,7 +101,7 @@ class ExecCommandTest {
             )
         }
 
-        val argless = JsonCodec.decode<Process>("{}")
+        val argless = JsonCodec.decode<Process>("""{"args":[]}""")
         assertThrows(IllegalArgumentException::class.java) {
             ExecCommand.buildEffectiveProcess(
                 argless, null, null, listOf(), listOf(),

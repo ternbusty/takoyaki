@@ -119,8 +119,8 @@ object ProcessRestrictions {
     ) {
         // umask: check process.user.umask first (OCI spec canonical location),
         // then fall back to process.umask for backward compatibility.
-        val umaskVal: Long? = when {
-            process?.user?.umask != null -> process.user.umask
+        val umaskVal = when {
+            process?.user?.umask != null -> process.user.umask.toLong()
             process?.umask != null -> process.umask
             else -> null
         }
@@ -178,13 +178,11 @@ object ProcessRestrictions {
         }
 
         if (process?.user?.additionalGids != null) {
-            Groups.setAdditional(process.user.additionalGids)
+            Groups.setAdditional(process.user.additionalGids.map { it.toInt() })
         }
 
-        val targetGid = process?.user?.gid ?: 0
-        val targetUid = process?.user?.uid ?: 0
-        // setresgid/setresuid drops real/effective/saved IDs all at once so the
-        // process can't restore privileges via saved UID.
+        val targetGid = (process?.user?.gid ?: 0u).toInt()
+        val targetUid = (process?.user?.uid ?: 0u).toInt()
         if (Libc.setresgid(targetGid, targetGid, targetGid) != 0) {
             Logger.warn("setresgid $targetGid failed: ${Libc.strerror(Libc.errno())}")
         }

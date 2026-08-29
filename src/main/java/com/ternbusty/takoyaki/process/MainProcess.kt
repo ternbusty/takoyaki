@@ -321,5 +321,5 @@ object MainProcess {
      * Package-visible for tests.
      */
     internal fun multiRange(m: List<LinuxIdMapping>?): Boolean =
-        m != null && m.isNotEmpty() && (m.size > 1 || m[0].size > 1)
+        m != null && m.isNotEmpty() && (m.size > 1 || m[0].size > 1u)
 }

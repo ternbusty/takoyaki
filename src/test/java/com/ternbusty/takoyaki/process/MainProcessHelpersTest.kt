@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Assertions.*
 class MainProcessHelpersTest {
 
     private fun map(container: Int, host: Int, size: Int): LinuxIdMapping =
-        LinuxIdMapping(containerID = container.toLong(), hostID = host.toLong(), size = size.toLong())
+        LinuxIdMapping(containerID = container.toUInt(), hostID = host.toUInt(), size = size.toUInt())
 
     // ---- buildIdMapping -----------------------------------------------------
 

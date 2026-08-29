@@ -63,7 +63,7 @@ class Seccomp private constructor() {
             }
             try {
                 Arena.ofConfined().use { arena ->
-                    val defaultAction = actionToken(sec.defaultAction, sec.defaultErrnoRet)
+                    val defaultAction = actionToken(sec.defaultAction, sec.defaultErrnoRet?.toLong())
                     val ctx = NativeH.seccomp_init(defaultAction)
                     if (ctx == null || ctx.address() == 0L) {
                         Logger.error("seccomp_init returned NULL")
@@ -152,7 +152,7 @@ class Seccomp private constructor() {
                         var hasNotify = false
                         if (syscalls != null) {
                             for (sc in syscalls) {
-                                val action = actionToken(sc.action, sc.errnoRet)
+                                val action = actionToken(sc.action, sc.errnoRet?.toLong())
                                 if (action == ACT_NOTIFY) hasNotify = true
                                 if (sc.names == null) continue
                                 // SCMP_ACT_NOTIFY on write(2) is a deadlock trap: the
@@ -290,7 +290,7 @@ class Seccomp private constructor() {
             // Group args by index. If all indices are unique, we can use a single rule.
             val byIndex = LinkedHashMap<Int, MutableList<SeccompArg>>()
             for (a in args) {
-                byIndex.getOrPut(a.index) { mutableListOf() }.add(a)
+                byIndex.getOrPut(a.index.toInt()) { mutableListOf() }.add(a)
             }
             val hasDuplicateIndex = byIndex.values.any { it.size > 1 }
             if (!hasDuplicateIndex) {
@@ -335,10 +335,10 @@ class Seccomp private constructor() {
             for (i in 0 until n) {
                 val a = args[i]
                 val e = scmp_arg_cmp.asSlice(arr, i.toLong())
-                scmp_arg_cmp.arg(e, a.index)
+                scmp_arg_cmp.arg(e, a.index.toInt())
                 scmp_arg_cmp.op(e, mapCompare(a.op))
-                scmp_arg_cmp.datum_a(e, a.value)
-                scmp_arg_cmp.datum_b(e, a.valueTwo ?: 0)
+                scmp_arg_cmp.datum_a(e, a.value.toLong())
+                scmp_arg_cmp.datum_b(e, (a.valueTwo ?: 0uL).toLong())
             }
             return NativeH.seccomp_rule_add_array(ctx, action, nr, n, arr)
         }

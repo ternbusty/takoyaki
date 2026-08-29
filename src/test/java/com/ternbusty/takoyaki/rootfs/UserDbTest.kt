@@ -16,7 +16,7 @@ class UserDbTest {
 
     companion object {
         private fun user(uid: Int, gid: Int): User =
-            User(uid = uid, gid = gid)
+            User(uid = uid.toUInt(), gid = gid.toUInt())
     }
 
     @Test
@@ -153,7 +153,7 @@ class UserDbTest {
                 )
             }.thenReturn(Path.of("/dev/null"))
 
-            val u = user(1000, 1000).copy(additionalGids = listOf(1000, 100, 200))
+            val u = user(1000, 1000).copy(additionalGids = listOf(1000u, 100u, 200u))
             UserDb.ensure(u)
 
             // All missing entries land in ONE append. Primary gid=1000 appears

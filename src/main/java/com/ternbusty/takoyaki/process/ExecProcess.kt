@@ -166,8 +166,8 @@ object ExecProcess {
                 // Non-empty HOME is kept as-is.
                 val homeVal = envMap["HOME"]
                 if (homeVal.isNullOrEmpty()) {
-                    val uid = proc.user?.uid ?: 0
-                    val passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid)
+                    val uid = proc.user?.uid ?: 0u
+                    val passwdHome = com.ternbusty.takoyaki.rootfs.UserDb.lookupHome(uid.toInt())
                     if (!passwdHome.isNullOrEmpty()) {
                         envMap["HOME"] = passwdHome
                     } else {
@@ -194,8 +194,8 @@ object ExecProcess {
                         if (cs != null) {
                                 com.ternbusty.takoyaki.console.ConsoleSocket.setWinsize(
                                     pty.slave,
-                                    cs.height,
-                                    cs.width
+                                    cs.height.toInt(),
+                                    cs.width.toInt()
                                 )
                             }
                             com.ternbusty.takoyaki.console.ConsoleSocket.wireStdio(pty.slave)

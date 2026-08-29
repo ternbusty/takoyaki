@@ -9,7 +9,7 @@ import java.util.function.IntSupplier
 class RlimitTest {
 
     private fun r(type: String, soft: Long, hard: Long): POSIXRlimit =
-        POSIXRlimit(type = type, soft = soft, hard = hard)
+        POSIXRlimit(type = type, soft = soft.toULong(), hard = hard.toULong())
 
     @Test
     fun nullListDoesNothing() {

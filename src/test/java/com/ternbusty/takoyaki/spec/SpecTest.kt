@@ -106,8 +106,8 @@ class SpecTest {
         val m = spec.mounts!![0]
         assertEquals("/idmap", m.destination)
         assertEquals(1, m.uidMappings!!.size)
-        assertEquals(100000, m.uidMappings!![0].hostID)
-        assertEquals(0, m.uidMappings!![0].containerID)
-        assertEquals(1, m.uidMappings!![0].size)
+        assertEquals(100000u, m.uidMappings!![0].hostID)
+        assertEquals(0u, m.uidMappings!![0].containerID)
+        assertEquals(1u, m.uidMappings!![0].size)
     }
 }

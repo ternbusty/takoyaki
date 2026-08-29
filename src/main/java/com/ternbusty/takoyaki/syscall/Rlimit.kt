@@ -25,7 +25,7 @@ object Rlimit {
         if (rlimits.isNullOrEmpty()) return
         val sc = SyscallHost.current()
         for (r in rlimits) {
-            val rtype = r.type ?: continue
+            val rtype = r.type
             val resource = resourceId(rtype)
             if (resource < 0) {
                 Logger.warn("unknown rlimit type: ${r.type}")
@@ -34,7 +34,7 @@ object Rlimit {
             if (resource == Constants.RLIMIT_NOFILE) {
                 applyNofile(sc, pid, r)
             } else {
-                val rc = sc.prlimit64(pid, resource, r.soft, r.hard)
+                val rc = sc.prlimit64(pid, resource, r.soft.toLong(), r.hard.toLong())
                 if (rc != 0) {
                     Logger.warn("prlimit64 ${r.type} failed: ${sc.strerror(sc.errno())}")
                 } else {
@@ -52,32 +52,29 @@ object Rlimit {
      */
     private fun applyNofile(sc: Syscalls, pid: Int, r: POSIXRlimit) {
         val resource = Constants.RLIMIT_NOFILE
-        var rc = sc.prlimit64(pid, resource, r.soft, r.hard)
+        val soft = r.soft.toLong()
+        val hard = r.hard.toLong()
+        var rc = sc.prlimit64(pid, resource, soft, hard)
         if (rc == 0) {
-            Logger.debug("rlimit ${r.type} soft=${r.soft} hard=${r.hard}")
+            Logger.debug("rlimit ${r.type} soft=$soft hard=$hard")
             return
         }
-        // First attempt failed. Try the two-phase approach: read nr_open,
-        // set hard to nr_open, then set to the desired value.
         val nrOpen = readNrOpen()
-        if (nrOpen <= 0 || r.hard <= nrOpen) {
+        if (nrOpen <= 0 || hard <= nrOpen) {
             Logger.warn("prlimit64 ${r.type} failed: ${sc.strerror(sc.errno())}")
             return
         }
-        // Phase 1: raise hard to nr_open
         rc = sc.prlimit64(pid, resource, nrOpen, nrOpen)
         if (rc != 0) {
             Logger.warn("prlimit64 ${r.type} (phase 1) failed: ${sc.strerror(sc.errno())}")
             return
         }
-        // Phase 2: now raise above nr_open
-        rc = sc.prlimit64(pid, resource, r.soft, r.hard)
+        rc = sc.prlimit64(pid, resource, soft, hard)
         if (rc != 0) {
-            // Fall back to nr_open as the maximum
             Logger.warn("prlimit64 ${r.type} above nr_open failed, using nr_open=$nrOpen")
-            sc.prlimit64(pid, resource, minOf(r.soft, nrOpen), nrOpen)
+            sc.prlimit64(pid, resource, minOf(soft, nrOpen), nrOpen)
         } else {
-            Logger.debug("rlimit ${r.type} soft=${r.soft} hard=${r.hard} (two-phase)")
+            Logger.debug("rlimit ${r.type} soft=$soft hard=$hard (two-phase)")
         }
     }
 
