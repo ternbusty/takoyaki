@@ -4,6 +4,7 @@ import java.time.Duration
 plugins {
     application
     jacoco
+    kotlin("jvm") version "2.4.10"
     id("org.graalvm.buildtools.native") version "1.1.10"
 }
 
@@ -22,6 +23,13 @@ java {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
+    }
+}
+
+
 dependencies {
     // No CLI parsing framework — Main.java hand-parses argv. picocli's
     // reflection-driven CommandSpec build cost ~80 ms on aarch64 native-image.
@@ -36,6 +44,7 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.mockito:mockito-core:5.23.0")
     testImplementation("org.mockito:mockito-junit-jupiter:5.23.0")
+    testImplementation("io.mockk:mockk:1.14.2")
 }
 
 application {
@@ -173,6 +182,7 @@ val jextractNative by tasks.registering(Exec::class) {
 
 sourceSets["main"].java.srcDir(jextractDir)
 tasks.named<JavaCompile>("compileJava") { dependsOn(jextractNative) }
+tasks.named("compileKotlin") { dependsOn(jextractNative) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
