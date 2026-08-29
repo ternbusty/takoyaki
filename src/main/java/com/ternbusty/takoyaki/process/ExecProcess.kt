@@ -75,9 +75,8 @@ object ExecProcess {
             PosixIO._exit(1)
             return
         }
-        if (payload == null || payload.process == null
-            || payload.process!!.args.isNullOrEmpty()
-        ) {
+        val proc = payload?.process
+        if (payload == null || proc == null || proc.args.isNullOrEmpty()) {
             Logger.error("exec payload has no process.args")
             PosixIO._exit(1)
             return
@@ -103,8 +102,6 @@ object ExecProcess {
 
         try {
             Arena.ofConfined().use { arena ->
-                val proc = payload.process!!
-
                 // oom_score_adj first, while still privileged; inherited across execve.
                 ProcessRestrictions.applyOomScoreAdj(proc.oomScoreAdj)
 
@@ -142,8 +139,8 @@ object ExecProcess {
                 // perspective the init path reports to a SCMP_ACT_NOTIFY listener,
                 // and the pid the seccomp filter actually applies to.
                 val listenerState = State.create(
-                    payload.ociVersion!!, payload.containerId!!,
-                    ContainerStatus.RUNNING, Libc.getpid(), payload.bundle!!, null
+                    payload.ociVersion ?: "", payload.containerId ?: "",
+                    ContainerStatus.RUNNING, Libc.getpid(), payload.bundle ?: "", null
                 )
 
                 ProcessRestrictions.apply(

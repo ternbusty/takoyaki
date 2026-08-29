@@ -127,10 +127,10 @@ object MainProcess {
             // Move network devices into the container's network namespace.
             // Must happen after the init has created its namespaces (we have its
             // pid) and before the init configures networking inside them.
-            if (!spec.linux?.netDevices.isNullOrEmpty()) {
-                com.ternbusty.takoyaki.network.NetDevice.moveDevices(
-                    spec.linux!!.netDevices, stage2Pid
-                )
+            spec.linux?.netDevices?.let { nd ->
+                if (nd.isNotEmpty()) {
+                    com.ternbusty.takoyaki.network.NetDevice.moveDevices(nd, stage2Pid)
+                }
             }
 
             // The first Cgroup.setup (for stage1Pid) already created the

@@ -16,7 +16,6 @@ object SyscallHost {
         ThreadLocal.withInitial(::LinuxSyscalls)
 
     /** Get the active impl for this thread. */
-    @JvmStatic
     fun current(): Syscalls = CURRENT.get()
 
     /**
@@ -28,7 +27,6 @@ object SyscallHost {
      * }
      * ```
      */
-    @JvmStatic
     fun install(impl: Syscalls): Scope {
         val prev = CURRENT.get()
         CURRENT.set(impl)

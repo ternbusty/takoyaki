@@ -70,18 +70,15 @@ class LinuxSyscalls : Syscalls {
 
     override fun keyctlJoinSessionKeyring(name: String?): Long {
         val nr = Constants.NR_keyctl
-        var arena: Arena? = null
-        try {
-            val arg = if (name != null) {
-                arena = Arena.ofConfined()
-                arena!!.allocateFrom(name).address()
-            } else {
-                0L
+        if (name != null) {
+            Arena.ofConfined().use { arena ->
+                val arg = arena.allocateFrom(name).address()
+                return Libc.syscall(nr, Constants.KEYCTL_JOIN_SESSION_KEYRING.toLong(),
+                    arg, 0, 0, 0)
             }
+        } else {
             return Libc.syscall(nr, Constants.KEYCTL_JOIN_SESSION_KEYRING.toLong(),
-                arg, 0, 0, 0)
-        } finally {
-            arena?.close()
+                0, 0, 0, 0)
         }
     }
 

@@ -40,7 +40,6 @@ class Main {
         /** OCI runtime-spec version this build targets. */
         private const val OCI_SPEC_VERSION = "1.0.2"
 
-        @JvmStatic
         fun main(args: Array<String>) {
             val trace = System.getenv("_TAKOYAKI_TRACE_STARTUP") == "1"
             // Capture monotonic time AS EARLY AS POSSIBLE. We print all trace
@@ -313,7 +312,7 @@ class Main {
             //                 [--no-pivot] [--no-new-keyring] [--preserve-fds N] <id>
             val o = parseCreateOptions("create", args, subStart, false) ?: return 1
             return CreateCommand.run(
-                rootPath, debug, o.id!!, o.bundle, o.pidFile, o.consoleSocket,
+                rootPath, debug, o.id ?: return 1, o.bundle, o.pidFile, o.consoleSocket,
                 o.noPivot, o.noNewKeyring, o.preserveFds, o.pidfdSocket
             )
         }
@@ -329,7 +328,7 @@ class Main {
             // the container init to exit and then delete the state.
             val o = parseCreateOptions("run", args, subStart, true) ?: return 1
             return RunCommand.run(
-                rootPath, debug, o.id!!, o.bundle, o.pidFile, o.consoleSocket,
+                rootPath, debug, o.id ?: return 1, o.bundle, o.pidFile, o.consoleSocket,
                 o.noPivot, o.noNewKeyring, o.preserveFds, o.detach, o.pidfdSocket
             )
         }
@@ -711,16 +710,18 @@ class Main {
             }
             // runc compat: --cgroup must not escape to parent (.. components).
             // "/" is allowed (means top-level cgroup, the default).
-            if (cgroupPath != null && cgroupPath != "/") {
-                if (".." in cgroupPath!!) {
+            val cgroup = cgroupPath
+            if (cgroup != null && cgroup != "/") {
+                if (".." in cgroup) {
                     System.err.println("bad sub cgroup path \"$cgroupPath\"")
                     return 1
                 }
             }
             // Parse --console-size WIDTH:HEIGHT (runc uses WIDTH:HEIGHT order)
             var consoleSize: Spec.Box? = null
-            if (consoleSizeStr != null) {
-                val parts = consoleSizeStr!!.split(":")
+            val sizeStr = consoleSizeStr
+            if (sizeStr != null) {
+                val parts = sizeStr.split(":")
                 if (parts.size == 2) {
                     val w = parts[0].toIntOrNull()
                     val h = parts[1].toIntOrNull()

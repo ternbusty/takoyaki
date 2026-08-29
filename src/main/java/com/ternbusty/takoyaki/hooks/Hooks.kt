@@ -67,19 +67,15 @@ object Hooks {
         var firstError: String? = null
         val stateJson = Json.encode(state.toJson())
         for ((idx, h) in hooks.withIndex()) {
-            if (h.path == null) continue
+            val hookPath = h.path ?: continue
             // runc uses 0-based hook numbering in error messages.
             val hookNum = idx
             val cmd = mutableListOf<String>()
             val hookArgs = h.args
-            val hookPath = h.path
             if (!hookArgs.isNullOrEmpty()) {
-                // OCI spec: hook.args[0] is the command to execute (like argv[0]);
-                // the rest are passed as positional arguments. Unlike the old code
-                // that replaced args[0] with h.path, runc uses h.args verbatim.
                 cmd.addAll(hookArgs)
             } else {
-                cmd.add(hookPath!!)
+                cmd.add(hookPath)
             }
             val pb = ProcessBuilder(cmd).redirectErrorStream(true)
             // Start from a clean env — inheriting the runtime's env would leak

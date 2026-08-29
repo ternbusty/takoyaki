@@ -1,6 +1,7 @@
 package com.ternbusty.takoyaki.process
 
 import com.ternbusty.takoyaki.console.ConsoleSocket
+import java.io.IOException
 import com.ternbusty.takoyaki.hooks.Hooks
 import com.ternbusty.takoyaki.ipc.NotifySocket
 import com.ternbusty.takoyaki.ipc.SyncChannel
@@ -165,7 +166,8 @@ object InitProcess {
 
         val spec: Spec
         try {
-            spec = Json.readFile(Path.of(bundlePath, "config.json"), Spec::fromJson)!!
+            spec = Json.readFile(Path.of(bundlePath, "config.json"), Spec::fromJson)
+                ?: throw IOException("failed to parse spec from $bundlePath/config.json")
         } catch (e: Exception) {
             Logger.error("failed to load spec: ${e.message}")
             PosixIO._exit(1)
@@ -189,8 +191,8 @@ object InitProcess {
 
                 // Apply process.oomScoreAdj. Writes to /proc/self/oom_score_adj so it
                 // is inherited by the user process after exec.
-                if (spec.process != null) {
-                    ProcessRestrictions.applyOomScoreAdj(spec.process!!.oomScoreAdj)
+                spec.process?.let { p ->
+                    ProcessRestrictions.applyOomScoreAdj(p.oomScoreAdj)
                 }
 
                 // Parse pre-prepared idmap helper fds passed via env from CreateCommand.
@@ -280,10 +282,10 @@ object InitProcess {
                 // Rename network devices that were moved into this namespace by
                 // MainProcess before loopback comes up.
                 if (spec.hasNamespace("network")) {
-                    if (!spec.linux?.netDevices.isNullOrEmpty()) {
-                        com.ternbusty.takoyaki.network.NetDevice.renameDevices(
-                            spec.linux!!.netDevices
-                        )
+                    spec.linux?.netDevices?.let { nd ->
+                        if (nd.isNotEmpty()) {
+                            com.ternbusty.takoyaki.network.NetDevice.renameDevices(nd)
+                        }
                     }
                     Loopback.up()
                 }
@@ -326,8 +328,8 @@ object InitProcess {
                 }
 
                 // Generate /etc/passwd and /etc/group entries while still writable.
-                if (spec.process != null) {
-                    UserDb.ensure(spec.process!!.user)
+                spec.process?.let { p ->
+                    UserDb.ensure(p.user)
                 }
 
                 val specRoot = spec.root
@@ -359,15 +361,15 @@ object InitProcess {
 
                 // I/O priority and scheduler must be applied while still
                 // fully privileged, before the restriction sequence drops caps.
-                if (spec.process != null) {
-                    ProcessRestrictions.applyIOPriority(spec.process!!.ioPriority)
-                    ProcessRestrictions.applyScheduler(spec.process!!.scheduler)
+                spec.process?.let { p ->
+                    ProcessRestrictions.applyIOPriority(p.ioPriority)
+                    ProcessRestrictions.applyScheduler(p.scheduler)
                 }
 
                 // NUMA memory policy (linux.memoryPolicy): applied before cap drop
                 // and inherited by execve.
-                if (spec.linux != null) {
-                    MemPolicy.apply(spec.linux!!.memoryPolicy)
+                spec.linux?.let { linux ->
+                    MemPolicy.apply(linux.memoryPolicy)
                 }
 
                 // Apply rlimits BEFORE dropping capabilities (ProcessRestrictions.apply).
@@ -381,10 +383,11 @@ object InitProcess {
                     )
                 }
 
+                val cid = containerId ?: ""
                 ProcessRestrictions.apply(
                     spec.process,
                     spec.linux?.seccomp,
-                    buildState(spec, containerId!!, bundlePath, ContainerStatus.CREATED),
+                    buildState(spec, cid, bundlePath, ContainerStatus.CREATED),
                     seccompListenerFd
                 )
 
@@ -433,7 +436,8 @@ object InitProcess {
                 NotifySocket.waitForStart(notifyListenerFd)
                 PosixIO.close(notifyListenerFd)
 
-                if (spec.process?.args.isNullOrEmpty()) {
+                val process = spec.process
+                if (process == null || process.args.isNullOrEmpty()) {
                     Logger.error("process.args is empty")
                     PosixIO._exit(1)
                     return
@@ -441,7 +445,7 @@ object InitProcess {
 
                 // Prepare the environment: dedup (last wins), inject HOME if empty.
                 val envMap = LinkedHashMap<String, String>()
-                spec.process!!.env?.forEach { entry ->
+                process.env?.forEach { entry ->
                     val eq = entry.indexOf('=')
                     if (eq > 0) {
                         envMap[entry.substring(0, eq)] = entry.substring(eq + 1)
@@ -452,12 +456,11 @@ object InitProcess {
                 // Non-empty HOME is kept as-is.
                 val homeVal = envMap["HOME"]
                 if (homeVal.isNullOrEmpty()) {
-                    val uid = spec.process!!.user?.uid ?: 0
+                    val uid = process.user?.uid ?: 0
                     val passwdHome = UserDb.lookupHome(uid)
                     if (!passwdHome.isNullOrEmpty()) {
                         envMap["HOME"] = passwdHome
                     } else {
-                        // /etc/passwd has no entry: default to "/" (runc's getUserHome default).
                         envMap["HOME"] = "/"
                     }
                 }
@@ -467,7 +470,7 @@ object InitProcess {
                     Libc.setenv(arena, key, value, true)
                 }
 
-                val argv = spec.process!!.args.toTypedArray()
+                val argv = process.args.toTypedArray()
                 Logger.info("executing: ${argv.joinToString(" ")}")
 
                 // Apply RLIMIT_AS LAST -- after the JVM has done all its heap
@@ -476,9 +479,9 @@ object InitProcess {
                 // over the limit and the very next allocation would OOM. The
                 // about-to-execve user process picks up the new limits.
                 // Other rlimits were already applied above (before cap drop).
-                if (spec.process!!.rlimits != null) {
+                process.rlimits?.let { rlimits ->
                     com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(
-                        Libc.getpid(), spec.process!!.rlimits, "RLIMIT_AS"
+                        Libc.getpid(), rlimits, "RLIMIT_AS"
                     )
                 }
 

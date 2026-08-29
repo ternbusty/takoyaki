@@ -160,7 +160,7 @@ class Seccomp private constructor() {
                                 // response typically involves writing back through the
                                 // same syscall the container just called. runc and
                                 // youki both refuse this combination up front.
-                                if (sc.action == "SCMP_ACT_NOTIFY" && sc.names!!.contains("write")) {
+                                if (sc.action == "SCMP_ACT_NOTIFY" && sc.names?.contains("write") == true) {
                                     throw RuntimeException(
                                         "SCMP_ACT_NOTIFY cannot be used for the write syscall"
                                     )
@@ -252,7 +252,7 @@ class Seccomp private constructor() {
                                 )
                             } else {
                                 SeccompListener.forward(
-                                    sec.listenerPath!!, state,
+                                    sec.listenerPath ?: "", state,
                                     sec.listenerMetadata, notifyFd, preConnectedFd
                                 )
                                 // Close our copy; the listener has its own dup via SCM_RIGHTS.

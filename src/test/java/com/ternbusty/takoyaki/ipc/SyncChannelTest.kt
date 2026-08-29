@@ -2,8 +2,8 @@ package com.ternbusty.takoyaki.ipc
 
 import com.ternbusty.takoyaki.syscall.PosixIO
 import io.mockk.every
-import io.mockk.mockkStatic
-import io.mockk.unmockkStatic
+import io.mockk.mockkObject
+import io.mockk.unmockkObject
 import io.mockk.verify
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
@@ -30,7 +30,7 @@ class SyncChannelTest {
     fun writeInt32EmitsLittleEndianBytes() {
         // 0x12345678 -> bytes 78 56 34 12 (LE), matching how InitProcess.c
         // reads them on the other end.
-        mockkStatic(PosixIO::write)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.write(any(), any(), any()) } returns 4L
 
@@ -46,14 +46,14 @@ class SyncChannelTest {
                         && (b[3].toInt() and 0xff) == 0x12
                 }) }
         } finally {
-            unmockkStatic(PosixIO::write)
+            unmockkObject(PosixIO)
         }
     }
 
     @Test
     fun writeInt32ForKnownSentinelsEmitsExpectedBytes() {
         // MSG_INIT_READY = 0x50 -> bytes 50 00 00 00 (LE).
-        mockkStatic(PosixIO::write)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.write(any(), any(), any()) } returns 4L
 
@@ -66,7 +66,7 @@ class SyncChannelTest {
                         && b[1].toInt() == 0 && b[2].toInt() == 0 && b[3].toInt() == 0
                 }) }
         } finally {
-            unmockkStatic(PosixIO::write)
+            unmockkObject(PosixIO)
         }
     }
 
@@ -74,7 +74,7 @@ class SyncChannelTest {
     fun writeInt32ShortWriteThrows() {
         // A short write (n != 4) MUST throw — Stage-2 would otherwise block
         // reading 4 bytes that will never arrive, deadlocking init.
-        mockkStatic(PosixIO::write)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.write(any(), any(), any()) } returns 2L
 
@@ -82,14 +82,14 @@ class SyncChannelTest {
                 SyncChannel.writeInt32(3, 0)
             }
         } finally {
-            unmockkStatic(PosixIO::write)
+            unmockkObject(PosixIO)
         }
     }
 
     @Test
     fun readInt32DecodesLittleEndianBytes() {
         // Inverse of writeInt32: bytes 78 56 34 12 on the wire -> 0x12345678.
-        mockkStatic(PosixIO::read)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.read(any(), any(), any()) } answers {
                 val buf = thirdArg<ByteArray>()
@@ -102,7 +102,7 @@ class SyncChannelTest {
 
             assertEquals(0x12345678, SyncChannel.readInt32(5))
         } finally {
-            unmockkStatic(PosixIO::read)
+            unmockkObject(PosixIO)
         }
     }
 
@@ -110,12 +110,12 @@ class SyncChannelTest {
     fun readInt32HandlesAllZeroes() {
         // The wire-zero case must round-trip. (Used when sender wants to signal
         // a benign sentinel like "nothing".)
-        mockkStatic(PosixIO::read)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.read(any(), any(), any()) } returns 4L
             assertEquals(0, SyncChannel.readInt32(5))
         } finally {
-            unmockkStatic(PosixIO::read)
+            unmockkObject(PosixIO)
         }
     }
 
@@ -124,7 +124,7 @@ class SyncChannelTest {
         // 0xFF 0xFF 0xFF 0xFF must decode to -1 (the high bit propagates).
         // This is what kernel error returns look like when surfaced via the
         // channel.
-        mockkStatic(PosixIO::read)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.read(any(), any(), any()) } answers {
                 val buf = thirdArg<ByteArray>()
@@ -136,7 +136,7 @@ class SyncChannelTest {
             }
             assertEquals(-1, SyncChannel.readInt32(5))
         } finally {
-            unmockkStatic(PosixIO::read)
+            unmockkObject(PosixIO)
         }
     }
 
@@ -144,7 +144,7 @@ class SyncChannelTest {
     fun readInt32ShortReadThrows() {
         // A short read (peer closed the fd mid-frame) MUST surface as an
         // exception so the caller doesn't proceed with a half-read sentinel.
-        mockkStatic(PosixIO::read)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.read(any(), any(), any()) } returns 2L
 
@@ -152,7 +152,7 @@ class SyncChannelTest {
                 SyncChannel.readInt32(5)
             }
         } finally {
-            unmockkStatic(PosixIO::read)
+            unmockkObject(PosixIO)
         }
     }
 
@@ -163,7 +163,7 @@ class SyncChannelTest {
         // contract in miniature.
         val wireBuf = arrayOfNulls<ByteArray>(1)
 
-        mockkStatic(PosixIO::write, PosixIO::read)
+        mockkObject(PosixIO)
         try {
             every { PosixIO.write(any(), any(), any()) } answers {
                 val src = thirdArg<ByteArray>()
@@ -184,7 +184,7 @@ class SyncChannelTest {
                 }
             }
         } finally {
-            unmockkStatic(PosixIO::write, PosixIO::read)
+            unmockkObject(PosixIO)
         }
     }
 }

@@ -113,7 +113,8 @@ object ExecCommand {
         }
 
         val spec: Spec = try {
-            Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson)!!
+            Json.readFile(Path.of(state.bundle, "config.json"), Spec::fromJson)
+                ?: throw IOException("failed to parse config.json")
         } catch (e: Exception) {
             System.err.println("failed to load config.json: ${e.message}")
             return EXIT_RUNTIME_ERROR
@@ -276,8 +277,7 @@ object ExecCommand {
         }
         if (!caps.isNullOrEmpty()) {
             // --cap adds capabilities to all sets. Initialise from spec or empty.
-            if (p.capabilities == null) p.capabilities = Spec.LinuxCapabilities()
-            val capabilities = p.capabilities!!
+            val capabilities = (p.capabilities ?: Spec.LinuxCapabilities()).also { p.capabilities = it }
             for (cap in caps) {
                 val c = if (cap.startsWith("CAP_")) cap else "CAP_$cap"
                 addCap(capabilities, c)
@@ -547,7 +547,7 @@ object ExecCommand {
             // writing to cgroup.procs returns EBUSY. Report this as an error
             // rather than silently falling through.
             System.err.println(
-                "error adding pid $workloadPid to cgroups: write ${Cgroup.dir(cgroupPath!!)}" +
+                "error adding pid $workloadPid to cgroups: write ${Cgroup.dir(cgroupPath ?: "")}" +
                     "/cgroup.procs: device or resource busy"
             )
             // Kill the workload and return an error.

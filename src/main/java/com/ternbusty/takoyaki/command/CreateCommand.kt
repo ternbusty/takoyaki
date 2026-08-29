@@ -1,6 +1,7 @@
 package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.console.ConsoleSocket
+import java.io.IOException
 import com.ternbusty.takoyaki.exeseal.ExeSeal
 import com.ternbusty.takoyaki.ipc.NotifySocket
 import com.ternbusty.takoyaki.logger.Logger
@@ -46,7 +47,8 @@ object CreateCommand {
 
         val spec: Spec
         try {
-            spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson)!!
+            spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson)
+                ?: throw IOException("failed to parse config.json")
         } catch (e: java.nio.file.NoSuchFileException) {
             System.err.println("$bundle does not exist")
             return 1
@@ -85,7 +87,11 @@ object CreateCommand {
         // enforce console-socket presence here. Without it, InitProcess simply
         // skips pty setup and the process inherits its parent's stdio.
 
-        val specRootPath = spec.root!!.path!!
+        val specRootPath = spec.root?.path
+            ?: run {
+                System.err.println("spec.root.path is required")
+                return 1
+            }
         val rootfsPath = if (specRootPath.startsWith("/")) {
             specRootPath
         } else {
@@ -247,7 +253,7 @@ object CreateCommand {
                 // Step 1: create the helper userns with the desired uid/gid maps,
                 // unless we already have a userns fd from joining an existing one.
                 if (usernsFd < 0) {
-                    usernsFd = IdmapHelper.setupHostSide(uidMaps!!, gidMaps ?: emptyList())
+                    usernsFd = IdmapHelper.setupHostSide(uidMaps ?: continue, gidMaps ?: emptyList())
                 }
                 if (usernsFd < 0) {
                     Logger.warn(
@@ -289,12 +295,12 @@ object CreateCommand {
                         PosixIO.fcntl(usernsFd, Constants.F_SETFD, ufl and Constants.FD_CLOEXEC.inv())
                     }
                     usernsFdMap.add(
-                        "${Base64.getEncoder().encodeToString(m.destination!!.toByteArray())}:$usernsFd" +
+                        "${Base64.getEncoder().encodeToString((m.destination ?: continue).toByteArray())}:$usernsFd" +
                             ":${if (recursive) 1 else 0}"
                     )
                     continue
                 }
-                val treeFd = IdmapMount.openTree(source!!, cloneRecursive)
+                val treeFd = IdmapMount.openTree(source ?: continue, cloneRecursive)
                 if (treeFd < 0) {
                     Logger.warn(
                         "open_tree($source) failed for ${m.destination}" +
@@ -321,7 +327,7 @@ object CreateCommand {
                 PosixIO.close(usernsFd)
 
                 fdMap.add(
-                    "${Base64.getEncoder().encodeToString(m.destination!!.toByteArray())}:$treeFd"
+                    "${Base64.getEncoder().encodeToString((m.destination ?: continue).toByteArray())}:$treeFd"
                 )
             }
             if (fdMap.length() > 0) {
@@ -356,7 +362,7 @@ object CreateCommand {
                     }
                     if (!isBind) continue
 
-                    var absSource = m.source!!
+                    var absSource = m.source ?: continue
                     if (!java.io.File(absSource).isAbsolute) {
                         absSource = java.io.File(absSource).absolutePath
                     }
@@ -405,7 +411,7 @@ object CreateCommand {
                         PosixIO.fcntl(srcFd, Constants.F_SETFD, fl and Constants.FD_CLOEXEC.inv())
                     }
                     bindFdMap.add(
-                        "${Base64.getEncoder().encodeToString(m.destination!!.toByteArray())}:$srcFd"
+                        "${Base64.getEncoder().encodeToString((m.destination ?: continue).toByteArray())}:$srcFd"
                     )
                     Logger.debug(
                         "open_tree bind source $absSource as fd $srcFd for ${m.destination}"

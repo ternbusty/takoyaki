@@ -30,7 +30,7 @@ object Devices {
                     Files.createDirectories(Path.of(target).parent)
                 } catch (_: Exception) {
                 }
-                val devType = d.type!!
+                val devType = d.type ?: continue
                 val typeBits = typeBits(devType)
                 if (typeBits == 0) {
                     Logger.warn("unsupported device type: ${d.type}")
@@ -64,7 +64,7 @@ object Devices {
                     continue
                 }
                 // mknod denied (e.g. user namespace) - fall back to bind mount from host.
-                val hostPath = d.path!!
+                val hostPath = d.path ?: continue
                 if (sc.access(hostPath, Constants.F_OK) != 0) {
                     Logger.debug("device ${d.path} not on host either, skipping")
                     continue

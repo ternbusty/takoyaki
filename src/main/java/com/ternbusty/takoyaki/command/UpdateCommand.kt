@@ -1,6 +1,7 @@
 package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.cgroup.Cgroup
+import java.io.IOException
 import com.ternbusty.takoyaki.config.KontainerConfig
 import com.ternbusty.takoyaki.spec.Spec
 import com.ternbusty.takoyaki.util.Json
@@ -39,7 +40,8 @@ object UpdateCommand {
         var r = Spec.LinuxResources()
         if (resourcesPath != null) {
             try {
-                r = Json.readFile(Path.of(resourcesPath), Spec.LinuxResources::fromJson)!!
+                r = Json.readFile(Path.of(resourcesPath), Spec.LinuxResources::fromJson)
+                    ?: throw IOException("failed to parse resources file")
             } catch (e: Exception) {
                 System.err.println("failed to read resources file: ${e.message}")
                 return 1
@@ -47,8 +49,7 @@ object UpdateCommand {
         }
 
         if (memory != null) {
-            if (r.memory == null) r.memory = Spec.LinuxMemory()
-            val mem = r.memory!!
+            val mem = (r.memory ?: Spec.LinuxMemory()).also { r.memory = it }
             mem.limit = memory
             // runc compat: when memory limit is removed (-1), swap is also
             // removed unless an explicit --memory-swap value was given.
@@ -57,12 +58,11 @@ object UpdateCommand {
             }
         }
         if (memoryReservation != null) {
-            if (r.memory == null) r.memory = Spec.LinuxMemory()
-            r.memory!!.reservation = memoryReservation
+            val mem = (r.memory ?: Spec.LinuxMemory()).also { r.memory = it }
+            mem.reservation = memoryReservation
         }
         if (memorySwap != null) {
-            if (r.memory == null) r.memory = Spec.LinuxMemory()
-            val mem = r.memory!!
+            val mem = (r.memory ?: Spec.LinuxMemory()).also { r.memory = it }
             mem.swap = memorySwap
             // For cgroup v2, swap is relative to memory. Need memory limit to
             // compute the delta. If memory was not given on this invocation,
@@ -82,8 +82,7 @@ object UpdateCommand {
         if (cpuQuota != null || cpuPeriod != null || cpuShares != null ||
             cpuBurst != null || cpuIdle != null
         ) {
-            if (r.cpu == null) r.cpu = Spec.LinuxCpu()
-            val cpu = r.cpu!!
+            val cpu = (r.cpu ?: Spec.LinuxCpu()).also { r.cpu = it }
             if (cpuQuota != null) cpu.quota = cpuQuota
             if (cpuPeriod != null) cpu.period = cpuPeriod
             // runc compat: when only period or only quota is given via CLI,
@@ -120,12 +119,12 @@ object UpdateCommand {
             }
         }
         if (cpusetCpus != null) {
-            if (r.cpu == null) r.cpu = Spec.LinuxCpu()
-            r.cpu!!.cpus = cpusetCpus
+            val cpu = (r.cpu ?: Spec.LinuxCpu()).also { r.cpu = it }
+            cpu.cpus = cpusetCpus
         }
         if (pidsLimit != null) {
-            if (r.pids == null) r.pids = Spec.LinuxPids()
-            r.pids!!.limit = pidsLimit
+            val pids = (r.pids ?: Spec.LinuxPids()).also { r.pids = it }
+            pids.limit = pidsLimit
         }
 
         // Validate cpu.idle regardless of source (CLI or JSON).

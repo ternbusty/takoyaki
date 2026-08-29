@@ -51,32 +51,23 @@ class IdmapHelper private constructor() {
             val usernsFd = openMappedUserNs(uidMaps, m.gidMappings)
             if (usernsFd < 0) return false
             return try {
-                IdmapMount.apply(m.source!!, usernsFd, destination, recursive, cloneRecursive)
+                val src = m.source ?: return false
+                IdmapMount.apply(src, usernsFd, destination, recursive, cloneRecursive)
             } finally {
                 PosixIO.close(usernsFd)
             }
         }
 
-        /**
-         * Apply an idmap bind mount using a pre-prepared userns fd (passed in from the
-         * main process via env). The fd was opened in the host's pid/user namespace,
-         * survives fork+execve, and points to a userns whose uid_map/gid_map were
-         * already written by the host-side main process.
-         */
         fun applyWithFd(m: Spec.Mount, usernsFd: Int, destination: String): Boolean =
             applyWithFd(m, usernsFd, destination, recursive = false, cloneRecursive = false)
 
-        /**
-         * Apply with pre-prepared fd.
-         *
-         * @param recursive      pass AT_RECURSIVE to mount_setattr (ridmap)
-         * @param cloneRecursive pass AT_RECURSIVE to open_tree (rbind submounts)
-         */
         fun applyWithFd(
             m: Spec.Mount, usernsFd: Int, destination: String,
             recursive: Boolean, cloneRecursive: Boolean
-        ): Boolean =
-            IdmapMount.apply(m.source!!, usernsFd, destination, recursive, cloneRecursive)
+        ): Boolean {
+            val src = m.source ?: return false
+            return IdmapMount.apply(src, usernsFd, destination, recursive, cloneRecursive)
+        }
 
         /**
          * Host-side setup: spawn a helper process that unshares CLONE_NEWUSER, then

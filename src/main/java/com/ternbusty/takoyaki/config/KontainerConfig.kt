@@ -2,6 +2,7 @@ package com.ternbusty.takoyaki.config
 
 import com.ternbusty.takoyaki.util.Json
 import com.ternbusty.takoyaki.util.json.JsonMap
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -28,7 +29,8 @@ class KontainerConfig(
             Path.of(rootPath, containerId, "config.json")
 
         fun load(rootPath: String, containerId: String): KontainerConfig =
-            Json.readFile(path(rootPath, containerId), ::fromJson)!!
+            Json.readFile(path(rootPath, containerId), ::fromJson)
+                ?: throw IOException("failed to parse config for $containerId")
 
         fun fromJson(node: Any?): KontainerConfig? {
             if (node == null) return null

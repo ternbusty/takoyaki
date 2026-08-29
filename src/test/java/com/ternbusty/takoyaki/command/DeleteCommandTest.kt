@@ -6,10 +6,10 @@ import com.ternbusty.takoyaki.syscall.Constants
 import com.ternbusty.takoyaki.syscall.Libc
 import io.mockk.every
 import io.mockk.mockkObject
-import io.mockk.mockkStatic
+import io.mockk.mockkObject
 import io.mockk.spyk
 import io.mockk.unmockkObject
-import io.mockk.unmockkStatic
+import io.mockk.unmockkObject
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import java.io.IOException
@@ -70,7 +70,7 @@ class DeleteCommandTest {
         every { st.refreshStatus() } returns st
 
         mockkObject(State.Companion)
-        mockkStatic(Libc::kill)
+        mockkObject(Libc)
         try {
             every { State.exists(any(), any()) } returns true
             every { State.load(any(), any()) } returns st
@@ -80,7 +80,7 @@ class DeleteCommandTest {
             assertEquals(1, rc, "OCI: delete on non-stopped MUST error without --force")
             io.mockk.verify(exactly = 0) { Libc.kill(any(), any()) }
         } finally {
-            unmockkStatic(Libc::kill)
+            unmockkObject(Libc)
             unmockkObject(State.Companion)
         }
     }
@@ -91,7 +91,7 @@ class DeleteCommandTest {
         every { st.refreshStatus() } returns st
 
         mockkObject(State.Companion)
-        mockkStatic(Libc::kill)
+        mockkObject(Libc)
         try {
             every { State.exists(any(), any()) } returns true
             every { State.load(any(), any()) } returns st
@@ -103,7 +103,7 @@ class DeleteCommandTest {
             assertEquals(0, rc)
             io.mockk.verify { Libc.kill(4242, Constants.SIGKILL) }
         } finally {
-            unmockkStatic(Libc::kill)
+            unmockkObject(Libc)
             unmockkObject(State.Companion)
         }
     }
@@ -114,7 +114,7 @@ class DeleteCommandTest {
         every { st.refreshStatus() } returns st
 
         mockkObject(State.Companion)
-        mockkStatic(Libc::kill)
+        mockkObject(Libc)
         try {
             every { State.exists(any(), any()) } returns true
             every { State.load(any(), any()) } returns st
@@ -126,7 +126,7 @@ class DeleteCommandTest {
             // No kill should be issued — container is already stopped.
             io.mockk.verify(exactly = 0) { Libc.kill(any(), any()) }
         } finally {
-            unmockkStatic(Libc::kill)
+            unmockkObject(Libc)
             unmockkObject(State.Companion)
         }
     }

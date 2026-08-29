@@ -32,7 +32,6 @@ object PosixIO {
         return arg
     }
 
-    @JvmStatic
     fun socketpair(arena: Arena, domain: Int, type: Int, protocol: Int, fds: IntArray): Int {
         val seg = arena.allocate(ValueLayout.JAVA_INT, 2)
         val rc = NativeH.socketpair(domain, type, protocol, seg)
@@ -43,18 +42,15 @@ object PosixIO {
         return rc
     }
 
-    @JvmStatic
     fun socket(domain: Int, type: Int, protocol: Int): Int =
         NativeH.socket(domain, type, protocol)
 
-    @JvmStatic
     fun bindUnix(arena: Arena, fd: Int, path: String): Int {
         val pb = path.toByteArray()
         val arg = constSockaddrArg(arena, sockaddrUn(arena, pb))
         return NativeH.bind(fd, arg, sockaddrUnLen(pb))
     }
 
-    @JvmStatic
     fun connectUnix(arena: Arena, fd: Int, path: String): Int {
         val pb = path.toByteArray()
         val arg = constSockaddrArg(arena, sockaddrUn(arena, pb))
@@ -77,10 +73,8 @@ object PosixIO {
         return addr
     }
 
-    @JvmStatic
     fun listen(fd: Int, backlog: Int): Int = NativeH.listen(fd, backlog)
 
-    @JvmStatic
     fun accept(fd: Int): Int {
         Arena.ofConfined().use { arena ->
             // NULL addr/addrlen: we do not care who connected.
@@ -90,7 +84,6 @@ object PosixIO {
         }
     }
 
-    @JvmStatic
     fun read(arena: Arena, fd: Int, buf: ByteArray): Long {
         val seg = arena.allocate(buf.size.toLong())
         val n = NativeH.read(fd, seg, buf.size.toLong())
@@ -98,21 +91,18 @@ object PosixIO {
         return n
     }
 
-    @JvmStatic
     fun write(arena: Arena, fd: Int, buf: ByteArray): Long {
         val seg = arena.allocate(buf.size.toLong())
         MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.size)
         return NativeH.write(fd, seg, buf.size.toLong())
     }
 
-    @JvmStatic
     fun send(arena: Arena, fd: Int, buf: ByteArray, flags: Int): Long {
         val seg = arena.allocate(buf.size.toLong())
         MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.size)
         return NativeH.send(fd, seg, buf.size.toLong(), flags)
     }
 
-    @JvmStatic
     fun recv(arena: Arena, fd: Int, buf: ByteArray, flags: Int): Long {
         val seg = arena.allocate(buf.size.toLong())
         val n = NativeH.recv(fd, seg, buf.size.toLong(), flags)
@@ -125,23 +115,19 @@ object PosixIO {
      * Unlike [bindUnix] this does not construct a sockaddr_un; the
      * caller is responsible for building the appropriate address structure.
      */
-    @JvmStatic
     fun bindRaw(arena: Arena, fd: Int, sockaddr: MemorySegment, addrlen: Int): Int {
         val arg = constSockaddrArg(arena, sockaddr)
         return NativeH.bind(fd, arg, addrlen)
     }
 
     /** Send from a MemorySegment buffer (for netlink / raw protocols). */
-    @JvmStatic
     fun sendRaw(fd: Int, buf: MemorySegment, len: Long, flags: Int): Long =
         NativeH.send(fd, buf, len, flags)
 
     /** Receive into a MemorySegment buffer (for netlink / raw protocols). */
-    @JvmStatic
     fun recvRaw(fd: Int, buf: MemorySegment, len: Long, flags: Int): Long =
         NativeH.recv(fd, buf, len, flags)
 
-    @JvmStatic
     fun close(fd: Int): Int = NativeH.close(fd)
 
     /**
@@ -150,7 +136,6 @@ object PosixIO {
      * write of a large buffer costs no per-iteration heap copies.
      * Returns true on success, false on a write error (errno preserved).
      */
-    @JvmStatic
     fun writeAll(arena: Arena, fd: Int, buf: ByteArray): Boolean {
         val seg = arena.allocate(buf.size.toLong())
         MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.size)
@@ -167,30 +152,23 @@ object PosixIO {
         return true
     }
 
-    @JvmStatic
     fun unlink(arena: Arena, path: String): Int =
         NativeH.unlink(arena.allocateFrom(path))
 
-    @JvmStatic
     fun access(arena: Arena, path: String, mode: Int): Int =
         NativeH.access(arena.allocateFrom(path), mode)
 
-    @JvmStatic
     fun open(arena: Arena, path: String, flags: Int, mode: Int): Int =
         OPEN.apply(arena.allocateFrom(path), flags, mode)
 
-    @JvmStatic
     fun fchdir(fd: Int): Int = NativeH.fchdir(fd)
 
-    @JvmStatic
     fun fork(): Int = NativeH.fork()
 
-    @JvmStatic
     fun _exit(status: Int) {
         NativeH._exit(status)
     }
 
-    @JvmStatic
     fun invokeExecve(p: ExecvePayload): Int =
         NativeH.execve(p.path, p.argv, p.envp)
 
@@ -200,7 +178,6 @@ object PosixIO {
         val envp: MemorySegment,
     ) {
         companion object {
-            @JvmStatic
             fun build(arena: Arena, path: String, argv: Array<String>, envp: Array<String>): ExecvePayload {
                 val pathSeg = arena.allocateFrom(path)
                 val argvArr = cStringArray(arena, argv)
@@ -211,7 +188,6 @@ object PosixIO {
     }
 
     /** NULL-terminated array of C strings (argv/envp shape). Shared with [Libc.execvp]. */
-    @JvmStatic
     internal fun cStringArray(arena: Arena, strings: Array<String>): MemorySegment {
         val arr = arena.allocate(ValueLayout.ADDRESS, strings.size + 1L)
         for (i in strings.indices) {
@@ -221,10 +197,8 @@ object PosixIO {
         return arr
     }
 
-    @JvmStatic
     fun fcntl(fd: Int, op: Int, arg: Int): Int = FCNTL.apply(fd, op, arg)
 
-    @JvmStatic
     fun readlink(arena: Arena, path: String): String? {
         val p = arena.allocateFrom(path)
         val buf = arena.allocate(4096)

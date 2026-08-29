@@ -56,7 +56,6 @@ class Spec {
     }
 
     companion object {
-        @JvmStatic
         fun fromJson(node: Any?): Spec? {
             if (node == null) return null
             val o = JsonMap.asObject(node) ?: return null
@@ -88,7 +87,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Root? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -140,7 +138,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Process? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -192,7 +189,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): IOPriority? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -242,9 +238,9 @@ class Spec {
 
         /** Combine flag strings into a bitmask. */
         fun flagBits(): Long {
-            if (flags == null) return 0
+            val fl = flags ?: return 0
             var bits = 0L
-            for (f in flags!!) {
+            for (f in fl) {
                 bits = bits or when (f) {
                     "SCHED_FLAG_RESET_ON_FORK" -> 0x01L
                     "SCHED_FLAG_RECLAIM" -> 0x02L
@@ -260,7 +256,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Scheduler? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -289,7 +284,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): ExecCPUAffinity? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -300,7 +294,6 @@ class Spec {
             }
 
             /** Parse a Linux CPU list string (e.g. "0-3,5,7") into a bitmask. */
-            @JvmStatic
             fun parseCpuList(list: String?): Long {
                 if (list.isNullOrEmpty()) return 0
                 var mask = 0L
@@ -336,7 +329,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Box? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -364,7 +356,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Hook? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -398,7 +389,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Hooks? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -430,7 +420,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): User? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -458,7 +447,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): POSIXRlimit? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -489,7 +477,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxCapabilities? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -516,7 +503,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Namespace? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -542,7 +528,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): IdMapping? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -575,7 +560,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Mount? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -622,7 +606,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxResources? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -653,7 +636,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxHugepageLimit? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -688,7 +670,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxBlockIO? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -722,7 +703,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxThrottleDevice? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -751,7 +731,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxMemory? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -793,7 +772,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxCpu? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -822,7 +800,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxPids? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -849,7 +826,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): SeccompArg? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -879,7 +855,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxSyscall? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -924,7 +899,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxSeccomp? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -963,7 +937,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxDevice? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -998,7 +971,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): LinuxDeviceCgroup? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -1025,7 +997,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): TimeOffset? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -1085,7 +1056,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): Linux? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -1129,7 +1099,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): MemoryPolicy? {
                 if (node == null) return null
                 val o = JsonMap.asObject(node) ?: return null
@@ -1153,7 +1122,6 @@ class Spec {
         }
 
         companion object {
-            @JvmStatic
             fun fromJson(node: Any?): NetDevice? {
                 if (node == null) return NetDevice()
                 val o = JsonMap.asObject(node) ?: return null

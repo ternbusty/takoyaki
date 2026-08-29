@@ -10,6 +10,24 @@ import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
+enum class ContainerStatus(val value: String) {
+    CREATING("creating"),
+    CREATED("created"),
+    RUNNING("running"),
+    PAUSED("paused"),
+    STOPPED("stopped");
+
+    fun canStart(): Boolean = this == CREATED
+    fun canKill(): Boolean = this == CREATED || this == RUNNING || this == PAUSED
+    fun canDelete(): Boolean = this == STOPPED
+
+    companion object {
+        fun fromString(s: String): ContainerStatus =
+            entries.firstOrNull { it.value == s }
+                ?: throw IllegalArgumentException("Unknown status: $s")
+    }
+}
+
 class State(
     var ociVersion: String? = null,
     var id: String? = null,
@@ -35,7 +53,8 @@ class State(
 
     @Throws(IOException::class)
     fun save(rootPath: String) {
-        val dir = containerDir(rootPath, id!!)
+        val cid = id ?: throw IOException("cannot save state without container id")
+        val dir = containerDir(rootPath, cid)
         Files.createDirectories(dir)
         val p = dir.resolve("state.json")
         Logger.debug("saving state to $p")
@@ -58,7 +77,8 @@ class State(
     private fun isFrozen(): Boolean {
         val rootPath = loadedRootPath ?: return false
         return try {
-            val kc = com.ternbusty.takoyaki.config.KontainerConfig.load(rootPath, id!!)
+            val cid = id ?: return false
+            val kc = com.ternbusty.takoyaki.config.KontainerConfig.load(rootPath, cid)
             val cgroupPath = kc.cgroupPath ?: return false
             val freeze = com.ternbusty.takoyaki.cgroup.Cgroup.dir(cgroupPath)
                 .resolve("cgroup.freeze")
@@ -85,29 +105,25 @@ class State(
         private val CREATED_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
 
-        @JvmStatic
         fun containerDir(rootPath: String, containerId: String): Path =
             Path.of(rootPath, containerId)
 
-        @JvmStatic
         fun statePath(rootPath: String, containerId: String): Path =
             containerDir(rootPath, containerId).resolve("state.json")
 
-        @JvmStatic
         fun exists(rootPath: String, containerId: String): Boolean =
             Files.exists(statePath(rootPath, containerId))
 
-        @JvmStatic
         @Throws(IOException::class)
         fun load(rootPath: String, containerId: String): State {
             val p = statePath(rootPath, containerId)
             Logger.debug("loading state from $p")
-            val s = Json.readFile(p, ::fromJson)!!
+            val s = Json.readFile(p, ::fromJson)
+                ?: throw IOException("failed to parse state from $p")
             s.loadedRootPath = rootPath
             return s
         }
 
-        @JvmStatic
         fun create(
             ociVersion: String, containerId: String,
             status: ContainerStatus, pid: Int?, bundle: String,
