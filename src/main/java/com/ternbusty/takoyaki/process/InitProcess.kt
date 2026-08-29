@@ -473,15 +473,14 @@ object InitProcess {
                 val argv = process.args.toTypedArray()
                 Logger.info("executing: ${argv.joinToString(" ")}")
 
-                // Apply RLIMIT_AS LAST -- after the JVM has done all its heap
-                // and address-space provisioning. If we did this earlier, a low
-                // RLIMIT_AS (e.g. 1 GiB) would push the JVM's already-mapped heap
-                // over the limit and the very next allocation would OOM. The
-                // about-to-execve user process picks up the new limits.
-                // Other rlimits were already applied above (before cap drop).
+                // Apply ALL rlimits right before execve. RLIMIT_AS must be
+                // deferred to here (after the JVM has provisioned its heap).
+                // Other rlimits were already applied above (before cap drop),
+                // but we re-apply them here because GraalVM's runtime may
+                // adjust RLIMIT_NOFILE between the initial apply and exec.
                 process.rlimits?.let { rlimits ->
-                    com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(
-                        Libc.getpid(), rlimits, "RLIMIT_AS"
+                    com.ternbusty.takoyaki.syscall.Rlimit.apply(
+                        Libc.getpid(), rlimits
                     )
                 }
 

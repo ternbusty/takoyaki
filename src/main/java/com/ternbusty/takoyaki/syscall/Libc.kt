@@ -93,7 +93,7 @@ object Libc {
     }
 
     fun prlimit64(arena: Arena, pid: Int, resource: Int, softCur: Long, hardMax: Long): Int {
-        val newLim = arena.allocate(16)
+        val newLim = arena.allocate(16, 8)
         newLim.set(ValueLayout.JAVA_LONG, 0, softCur)
         newLim.set(ValueLayout.JAVA_LONG, 8, hardMax)
         return NativeH.prlimit64(pid, resource, newLim, MemorySegment.NULL)
