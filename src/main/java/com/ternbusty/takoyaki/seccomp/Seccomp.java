@@ -3,8 +3,8 @@ package com.ternbusty.takoyaki.seccomp;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
-import com.ternbusty.takoyaki.syscall.libseccomp.SeccompH;
-import com.ternbusty.takoyaki.syscall.libseccomp.scmp_arg_cmp;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
+import com.ternbusty.takoyaki.syscall.gen.scmp_arg_cmp;
 
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
@@ -14,7 +14,7 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 /**
- * libseccomp facade over the jextract-generated {@link SeccompH} bindings. The
+ * libseccomp facade over the jextract-generated {@link NativeH} bindings. The
  * plumbing moved from hand-written FFM downcalls to generated ones; the filter
  * semantics are unchanged.
  */
@@ -25,7 +25,7 @@ public final class Seccomp {
      * Force libseccomp to be dlopen'd now. Must run before pivot_root cuts the
      * process off from the host filesystem: the container rootfs does not ship
      * libseccomp and the C bootstrap only preloads libc/libm/libdl/libpthread/
-     * librt. Touching any SeccompH entry point triggers its class initializer,
+     * librt. Touching any NativeH entry point triggers its class initializer,
      * whose {@code libraryLookup("libseccomp.so.2")} loads the library.
      */
     public static boolean preload() {
@@ -34,9 +34,9 @@ public final class Seccomp {
 
     private static synchronized boolean ensureLoaded() {
         try (Arena arena = Arena.ofConfined()) {
-            // Harmless call — resolves a syscall name — that forces SeccompH's
+            // Harmless call — resolves a syscall name — that forces NativeH's
             // <clinit> (the library load) to run and surfaces a load failure.
-            SeccompH.seccomp_syscall_resolve_name(arena.allocateFrom("read"));
+            NativeH.seccomp_syscall_resolve_name(arena.allocateFrom("read"));
             return true;
         } catch (Throwable t) {
             Logger.warn("libseccomp not loadable: " + t.getMessage());
@@ -60,7 +60,7 @@ public final class Seccomp {
         }
         try (Arena arena = Arena.ofConfined()) {
             int defaultAction = actionToken(sec.defaultAction, sec.defaultErrnoRet);
-            MemorySegment ctx = SeccompH.seccomp_init(defaultAction);
+            MemorySegment ctx = NativeH.seccomp_init(defaultAction);
             if (ctx == null || ctx.address() == 0) {
                 Logger.error("seccomp_init returned NULL");
                 return;
@@ -72,7 +72,7 @@ public final class Seccomp {
                 // mask cases where the runtime is supposed to be in charge of NNP.
                 // Disable libseccomp's auto-NNP — the runtime sets NNP earlier
                 // based on spec.process.noNewPrivileges.
-                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_NNP(), 0);
+                NativeH.seccomp_attr_set(ctx, NativeH.SCMP_FLTATR_CTL_NNP(), 0);
 
                 // Translate the OCI spec's filter flags into the libseccomp
                 // attributes that back them. When no flags field is present in
@@ -89,20 +89,20 @@ public final class Seccomp {
                     for (String flag : sec.flags) {
                         switch (flag) {
                             case "SECCOMP_FILTER_FLAG_TSYNC" -> {
-                                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_TSYNC(), 1);
+                                NativeH.seccomp_attr_set(ctx, NativeH.SCMP_FLTATR_CTL_TSYNC(), 1);
                                 // TSYNC contributes 0 to the kernel flags
                             }
                             case "SECCOMP_FILTER_FLAG_LOG" -> {
-                                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_LOG(), 1);
+                                NativeH.seccomp_attr_set(ctx, NativeH.SCMP_FLTATR_CTL_LOG(), 1);
                                 filterFlagsValue |= 2;
                             }
                             case "SECCOMP_FILTER_FLAG_SPEC_ALLOW" -> {
-                                SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
+                                NativeH.seccomp_attr_set(ctx, NativeH.SCMP_FLTATR_CTL_SSB(), 1);
                                 filterFlagsValue |= 4;
                             }
                             case "SECCOMP_FILTER_FLAG_WAIT_KILLABLE_RECV" -> {
                                 // SCMP_FLTATR_CTL_WAITKILL = 10 (libseccomp 2.5.4+)
-                                int rc = SeccompH.seccomp_attr_set(ctx, 10, 1);
+                                int rc = NativeH.seccomp_attr_set(ctx, 10, 1);
                                 if (rc != 0) {
                                     throw new RuntimeException(
                                             "error adding WaitKill flag to seccomp filter: "
@@ -115,7 +115,7 @@ public final class Seccomp {
                     }
                 } else {
                     // No flags field in the spec: default to SPEC_ALLOW.
-                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_SSB(), 1);
+                    NativeH.seccomp_attr_set(ctx, NativeH.SCMP_FLTATR_CTL_SSB(), 1);
                     filterFlagsValue = 4;
                 }
                 // Ask libseccomp to compile the rule set into a binary tree
@@ -124,7 +124,7 @@ public final class Seccomp {
                 // this every allowed syscall pays for walking the whole list.
                 // runc uses the same 32-rule threshold.
                 if (sec.syscalls != null && countSyscalls(sec.syscalls) > 32) {
-                    SeccompH.seccomp_attr_set(ctx, SeccompH.SCMP_FLTATR_CTL_OPTIMIZE(), 2);
+                    NativeH.seccomp_attr_set(ctx, NativeH.SCMP_FLTATR_CTL_OPTIMIZE(), 2);
                 }
 
                 // architectures - libseccomp wants lowercase, no SCMP_ARCH_ prefix
@@ -134,12 +134,12 @@ public final class Seccomp {
                         if (n.startsWith("SCMP_ARCH_")) n = n.substring("SCMP_ARCH_".length());
                         n = n.toLowerCase();
                         MemorySegment nameSeg = arena.allocateFrom(n);
-                        int token = SeccompH.seccomp_arch_resolve_name(nameSeg);
+                        int token = NativeH.seccomp_arch_resolve_name(nameSeg);
                         if (token == 0) {
                             Logger.warn("unknown seccomp arch: " + archName);
                             continue;
                         }
-                        SeccompH.seccomp_arch_add(ctx, token);
+                        NativeH.seccomp_arch_add(ctx, token);
                     }
                 }
 
@@ -161,8 +161,8 @@ public final class Seccomp {
                         }
                         for (String name : sc.names) {
                             MemorySegment nameSeg = arena.allocateFrom(name);
-                            int nr = SeccompH.seccomp_syscall_resolve_name(nameSeg);
-                            if (nr == SeccompH.__NR_SCMP_ERROR()) {
+                            int nr = NativeH.seccomp_syscall_resolve_name(nameSeg);
+                            if (nr == NativeH.__NR_SCMP_ERROR()) {
                                 Logger.debug("syscall " + name + " unknown to libseccomp, skipping");
                                 continue;
                             }
@@ -181,7 +181,7 @@ public final class Seccomp {
                                 // notify state under Panama FFM (seccomp_notify_fd
                                 // returns -EFAULT afterwards), while the non-variadic
                                 // array variant works.
-                                int rc = SeccompH.seccomp_rule_add_array(
+                                int rc = NativeH.seccomp_rule_add_array(
                                         ctx, action, nr, 0, MemorySegment.NULL);
                                 if (rc != 0) {
                                     Logger.debug("rule_add " + name + " failed: " + rc);
@@ -208,7 +208,7 @@ public final class Seccomp {
                 }
                 Logger.debug("seccomp filter flags: " + reportedFlags);
 
-                int loadRc = SeccompH.seccomp_load(ctx);
+                int loadRc = NativeH.seccomp_load(ctx);
                 if (loadRc != 0) {
                     // Silently returning here would let the container come up
                     // with no filter at all, which is worse than failing to
@@ -237,7 +237,7 @@ public final class Seccomp {
                     Logger.debug("seccomp ctx address=0x"
                             + Long.toHexString(ctx.address())
                             + " (about to call seccomp_notify_fd)");
-                    int notifyFd = SeccompH.seccomp_notify_fd(ctx);
+                    int notifyFd = NativeH.seccomp_notify_fd(ctx);
                     if (notifyFd < 0) {
                         Logger.warn("seccomp_notify_fd returned " + notifyFd);
                     } else if (sec.listenerPath == null || sec.listenerPath.isEmpty()) {
@@ -252,7 +252,7 @@ public final class Seccomp {
                     }
                 }
             } finally {
-                SeccompH.seccomp_release(ctx);
+                NativeH.seccomp_release(ctx);
             }
         } catch (RuntimeException e) {
             // Rethrow runtime errors (validation failures like write+NOTIFY,
@@ -328,25 +328,25 @@ public final class Seccomp {
             scmp_arg_cmp.datum_a(e, a.value);
             scmp_arg_cmp.datum_b(e, a.valueTwo == null ? 0 : a.valueTwo);
         }
-        return SeccompH.seccomp_rule_add_array(ctx, action, nr, n, arr);
+        return NativeH.seccomp_rule_add_array(ctx, action, nr, n, arr);
     }
 
     private static int mapCompare(String op) {
         if (op == null) return 0;
         return switch (op) {
-            case "SCMP_CMP_NE" -> SeccompH.SCMP_CMP_NE();
-            case "SCMP_CMP_LT" -> SeccompH.SCMP_CMP_LT();
-            case "SCMP_CMP_LE" -> SeccompH.SCMP_CMP_LE();
-            case "SCMP_CMP_EQ" -> SeccompH.SCMP_CMP_EQ();
-            case "SCMP_CMP_GE" -> SeccompH.SCMP_CMP_GE();
-            case "SCMP_CMP_GT" -> SeccompH.SCMP_CMP_GT();
-            case "SCMP_CMP_MASKED_EQ" -> SeccompH.SCMP_CMP_MASKED_EQ();
+            case "SCMP_CMP_NE" -> NativeH.SCMP_CMP_NE();
+            case "SCMP_CMP_LT" -> NativeH.SCMP_CMP_LT();
+            case "SCMP_CMP_LE" -> NativeH.SCMP_CMP_LE();
+            case "SCMP_CMP_EQ" -> NativeH.SCMP_CMP_EQ();
+            case "SCMP_CMP_GE" -> NativeH.SCMP_CMP_GE();
+            case "SCMP_CMP_GT" -> NativeH.SCMP_CMP_GT();
+            case "SCMP_CMP_MASKED_EQ" -> NativeH.SCMP_CMP_MASKED_EQ();
             default -> 0;
         };
     }
 
     // libseccomp action code for SCMP_ACT_NOTIFY, from seccomp.h.
-    private static final int ACT_NOTIFY = SeccompH.SCMP_ACT_NOTIFY();
+    private static final int ACT_NOTIFY = NativeH.SCMP_ACT_NOTIFY();
 
     /**
      * Count the total number of rules (name × action pairs) the spec will
@@ -448,8 +448,8 @@ public final class Seccomp {
             for (Spec.LinuxSyscall sc : syscalls) {
                 if (sc.names == null) continue;
                 for (String name : sc.names) {
-                    int nr = SeccompH.seccomp_syscall_resolve_name(arena.allocateFrom(name));
-                    if (nr != SeccompH.__NR_SCMP_ERROR() && nr > 0 && nr > max) max = nr;
+                    int nr = NativeH.seccomp_syscall_resolve_name(arena.allocateFrom(name));
+                    if (nr != NativeH.__NR_SCMP_ERROR() && nr > 0 && nr > max) max = nr;
                 }
             }
         }
@@ -468,8 +468,8 @@ public final class Seccomp {
             "kcmp", "finit_module", "process_vm_writev", "process_vm_readv",
         };
         for (String name : probes) {
-            int nr = SeccompH.seccomp_syscall_resolve_name(arena.allocateFrom(name));
-            if (nr != SeccompH.__NR_SCMP_ERROR() && nr > 0 && nr > max) max = nr;
+            int nr = NativeH.seccomp_syscall_resolve_name(arena.allocateFrom(name));
+            if (nr != NativeH.__NR_SCMP_ERROR() && nr > 0 && nr > max) max = nr;
         }
         if (max < 100) max = 450; // safe fallback
         return max;
@@ -492,18 +492,18 @@ public final class Seccomp {
         }
         // libseccomp action codes from seccomp.h
         return switch (action == null ? "SCMP_ACT_ALLOW" : action) {
-            case "SCMP_ACT_KILL", "SCMP_ACT_KILL_THREAD" -> SeccompH.SCMP_ACT_KILL_THREAD();
-            case "SCMP_ACT_KILL_PROCESS" -> SeccompH.SCMP_ACT_KILL_PROCESS();
-            case "SCMP_ACT_TRAP" -> SeccompH.SCMP_ACT_TRAP();
+            case "SCMP_ACT_KILL", "SCMP_ACT_KILL_THREAD" -> NativeH.SCMP_ACT_KILL_THREAD();
+            case "SCMP_ACT_KILL_PROCESS" -> NativeH.SCMP_ACT_KILL_PROCESS();
+            case "SCMP_ACT_TRAP" -> NativeH.SCMP_ACT_TRAP();
             // ERRNO and TRACE carry their data in the low 16 bits. The macros
             // are function-like, so seccomp.h exposes their base values through
             // an enum that jextract can emit.
-            case "SCMP_ACT_ERRNO" -> SeccompH.TAKOYAKI_SCMP_ACT_ERRNO_BASE() | (errno & 0xffff);
-            case "SCMP_ACT_TRACE" -> SeccompH.TAKOYAKI_SCMP_ACT_TRACE_BASE() | (errno & 0xffff);
-            case "SCMP_ACT_LOG" -> SeccompH.SCMP_ACT_LOG();
-            case "SCMP_ACT_ALLOW" -> SeccompH.SCMP_ACT_ALLOW();
+            case "SCMP_ACT_ERRNO" -> NativeH.TAKOYAKI_SCMP_ACT_ERRNO_BASE() | (errno & 0xffff);
+            case "SCMP_ACT_TRACE" -> NativeH.TAKOYAKI_SCMP_ACT_TRACE_BASE() | (errno & 0xffff);
+            case "SCMP_ACT_LOG" -> NativeH.SCMP_ACT_LOG();
+            case "SCMP_ACT_ALLOW" -> NativeH.SCMP_ACT_ALLOW();
             case "SCMP_ACT_NOTIFY" -> ACT_NOTIFY;
-            default -> SeccompH.SCMP_ACT_ALLOW();
+            default -> NativeH.SCMP_ACT_ALLOW();
         };
     }
 }

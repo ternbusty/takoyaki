@@ -1,16 +1,16 @@
 package com.ternbusty.takoyaki.syscall;
 
-import com.ternbusty.takoyaki.syscall.posix.PosixH;
-import com.ternbusty.takoyaki.syscall.posix.__CONST_SOCKADDR_ARG;
-import com.ternbusty.takoyaki.syscall.posix.__SOCKADDR_ARG;
-import com.ternbusty.takoyaki.syscall.posix.sockaddr_un;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
+import com.ternbusty.takoyaki.syscall.gen.__CONST_SOCKADDR_ARG;
+import com.ternbusty.takoyaki.syscall.gen.__SOCKADDR_ARG;
+import com.ternbusty.takoyaki.syscall.gen.sockaddr_un;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
 /**
- * POSIX socket and file IO over the jextract-generated {@link PosixH} bindings.
+ * POSIX socket and file IO over the jextract-generated {@link NativeH} bindings.
  * Struct layouts (sockaddr_un) come from the generated accessors rather than
  * hand-written offsets.
  */
@@ -19,8 +19,8 @@ public final class PosixIO {
 
     // open(2) and fcntl(2) are variadic; jextract exposes them through an
     // invoker factory, so bind the fixed shapes takoyaki uses.
-    private static final PosixH.open OPEN = PosixH.open.makeInvoker(PosixH.C_INT);
-    private static final PosixH.fcntl FCNTL = PosixH.fcntl.makeInvoker(PosixH.C_INT);
+    private static final NativeH.open OPEN = NativeH.open.makeInvoker(NativeH.C_INT);
+    private static final NativeH.fcntl FCNTL = NativeH.fcntl.makeInvoker(NativeH.C_INT);
 
     /**
      * glibc declares bind/connect/accept with transparent unions over sockaddr*,
@@ -35,7 +35,7 @@ public final class PosixIO {
 
     public static int socketpair(Arena arena, int domain, int type, int protocol, int[] fds) {
         MemorySegment seg = arena.allocate(ValueLayout.JAVA_INT, 2);
-        int rc = PosixH.socketpair(domain, type, protocol, seg);
+        int rc = NativeH.socketpair(domain, type, protocol, seg);
         if (rc == 0) {
             fds[0] = seg.getAtIndex(ValueLayout.JAVA_INT, 0);
             fds[1] = seg.getAtIndex(ValueLayout.JAVA_INT, 1);
@@ -44,19 +44,19 @@ public final class PosixIO {
     }
 
     public static int socket(int domain, int type, int protocol) {
-        return PosixH.socket(domain, type, protocol);
+        return NativeH.socket(domain, type, protocol);
     }
 
     public static int bindUnix(Arena arena, int fd, String path) {
         byte[] pb = path.getBytes();
         MemorySegment arg = constSockaddrArg(arena, sockaddrUn(arena, pb));
-        return PosixH.bind(fd, arg, sockaddrUnLen(pb));
+        return NativeH.bind(fd, arg, sockaddrUnLen(pb));
     }
 
     public static int connectUnix(Arena arena, int fd, String path) {
         byte[] pb = path.getBytes();
         MemorySegment arg = constSockaddrArg(arena, sockaddrUn(arena, pb));
-        return PosixH.connect(fd, arg, sockaddrUnLen(pb));
+        return NativeH.connect(fd, arg, sockaddrUnLen(pb));
     }
 
     /** sun_family + the NUL-terminated path, which is what the kernel expects. */
@@ -66,7 +66,7 @@ public final class PosixIO {
 
     private static MemorySegment sockaddrUn(Arena arena, byte[] pathBytes) {
         MemorySegment addr = sockaddr_un.allocate(arena);
-        sockaddr_un.sun_family(addr, (short) PosixH.AF_UNIX());
+        sockaddr_un.sun_family(addr, (short) NativeH.AF_UNIX());
         MemorySegment sunPath = sockaddr_un.sun_path(addr);
         if (pathBytes.length >= sunPath.byteSize()) {
             throw new IllegalArgumentException("socket path too long");
@@ -77,7 +77,7 @@ public final class PosixIO {
     }
 
     public static int listen(int fd, int backlog) {
-        return PosixH.listen(fd, backlog);
+        return NativeH.listen(fd, backlog);
     }
 
     public static int accept(int fd) {
@@ -85,13 +85,13 @@ public final class PosixIO {
             // NULL addr/addrlen: we do not care who connected.
             MemorySegment arg = __SOCKADDR_ARG.allocate(arena);
             __SOCKADDR_ARG.__sockaddr_un__(arg, MemorySegment.NULL);
-            return PosixH.accept(fd, arg, MemorySegment.NULL);
+            return NativeH.accept(fd, arg, MemorySegment.NULL);
         }
     }
 
     public static long read(Arena arena, int fd, byte[] buf) {
         MemorySegment seg = arena.allocate(buf.length);
-        long n = PosixH.read(fd, seg, buf.length);
+        long n = NativeH.read(fd, seg, buf.length);
         if (n > 0) MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, buf, 0, (int) n);
         return n;
     }
@@ -99,18 +99,18 @@ public final class PosixIO {
     public static long write(Arena arena, int fd, byte[] buf) {
         MemorySegment seg = arena.allocate(buf.length);
         MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
-        return PosixH.write(fd, seg, buf.length);
+        return NativeH.write(fd, seg, buf.length);
     }
 
     public static long send(Arena arena, int fd, byte[] buf, int flags) {
         MemorySegment seg = arena.allocate(buf.length);
         MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
-        return PosixH.send(fd, seg, buf.length, flags);
+        return NativeH.send(fd, seg, buf.length, flags);
     }
 
     public static long recv(Arena arena, int fd, byte[] buf, int flags) {
         MemorySegment seg = arena.allocate(buf.length);
-        long n = PosixH.recv(fd, seg, buf.length, flags);
+        long n = NativeH.recv(fd, seg, buf.length, flags);
         if (n > 0) MemorySegment.copy(seg, ValueLayout.JAVA_BYTE, 0, buf, 0, (int) n);
         return n;
     }
@@ -122,21 +122,21 @@ public final class PosixIO {
      */
     public static int bindRaw(Arena arena, int fd, MemorySegment sockaddr, int addrlen) {
         MemorySegment arg = constSockaddrArg(arena, sockaddr);
-        return PosixH.bind(fd, arg, addrlen);
+        return NativeH.bind(fd, arg, addrlen);
     }
 
     /** Send from a MemorySegment buffer (for netlink / raw protocols). */
     public static long sendRaw(int fd, MemorySegment buf, long len, int flags) {
-        return PosixH.send(fd, buf, len, flags);
+        return NativeH.send(fd, buf, len, flags);
     }
 
     /** Receive into a MemorySegment buffer (for netlink / raw protocols). */
     public static long recvRaw(int fd, MemorySegment buf, long len, int flags) {
-        return PosixH.recv(fd, buf, len, flags);
+        return NativeH.recv(fd, buf, len, flags);
     }
 
     public static int close(int fd) {
-        return PosixH.close(fd);
+        return NativeH.close(fd);
     }
 
     /**
@@ -150,7 +150,7 @@ public final class PosixIO {
         MemorySegment.copy(buf, 0, seg, ValueLayout.JAVA_BYTE, 0, buf.length);
         long off = 0;
         while (off < buf.length) {
-            long n = PosixH.write(fd, seg.asSlice(off), buf.length - off);
+            long n = NativeH.write(fd, seg.asSlice(off), buf.length - off);
             if (n < 0) {
                 if (Libc.errno() == Constants.EINTR) continue;
                 return false;
@@ -162,11 +162,11 @@ public final class PosixIO {
     }
 
     public static int unlink(Arena arena, String path) {
-        return PosixH.unlink(arena.allocateFrom(path));
+        return NativeH.unlink(arena.allocateFrom(path));
     }
 
     public static int access(Arena arena, String path, int mode) {
-        return PosixH.access(arena.allocateFrom(path), mode);
+        return NativeH.access(arena.allocateFrom(path), mode);
     }
 
     public static int open(Arena arena, String path, int flags, int mode) {
@@ -174,19 +174,19 @@ public final class PosixIO {
     }
 
     public static int fchdir(int fd) {
-        return PosixH.fchdir(fd);
+        return NativeH.fchdir(fd);
     }
 
     public static int fork() {
-        return PosixH.fork();
+        return NativeH.fork();
     }
 
     public static void _exit(int status) {
-        PosixH._exit(status);
+        NativeH._exit(status);
     }
 
     public static int invokeExecve(ExecvePayload p) {
-        return PosixH.execve(p.path, p.argv, p.envp);
+        return NativeH.execve(p.path, p.argv, p.envp);
     }
 
     public static final class ExecvePayload {
@@ -221,7 +221,7 @@ public final class PosixIO {
     public static String readlink(Arena arena, String path) {
         MemorySegment p = arena.allocateFrom(path);
         MemorySegment buf = arena.allocate(4096);
-        long n = PosixH.readlink(p, buf, 4095L);
+        long n = NativeH.readlink(p, buf, 4095L);
         if (n < 0) return null;
         byte[] b = new byte[(int) n];
         MemorySegment.copy(buf, ValueLayout.JAVA_BYTE, 0, b, 0, (int) n);

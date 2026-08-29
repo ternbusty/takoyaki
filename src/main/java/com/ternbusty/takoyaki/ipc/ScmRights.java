@@ -2,10 +2,10 @@ package com.ternbusty.takoyaki.ipc;
 
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Libc;
-import com.ternbusty.takoyaki.syscall.posix.PosixH;
-import com.ternbusty.takoyaki.syscall.posix.cmsghdr;
-import com.ternbusty.takoyaki.syscall.posix.iovec;
-import com.ternbusty.takoyaki.syscall.posix.msghdr;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
+import com.ternbusty.takoyaki.syscall.gen.cmsghdr;
+import com.ternbusty.takoyaki.syscall.gen.iovec;
+import com.ternbusty.takoyaki.syscall.gen.msghdr;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -60,11 +60,11 @@ public final class ScmRights {
 
             MemorySegment cmsg = arena.allocate(CMSG_SPACE_ONE_FD);
             cmsghdr.cmsg_len(cmsg, CMSG_LEN_ONE_FD);
-            cmsghdr.cmsg_level(cmsg, PosixH.SOL_SOCKET());
-            cmsghdr.cmsg_type(cmsg, PosixH.SCM_RIGHTS());
+            cmsghdr.cmsg_level(cmsg, NativeH.SOL_SOCKET());
+            cmsghdr.cmsg_type(cmsg, NativeH.SCM_RIGHTS());
             cmsg.set(ValueLayout.JAVA_INT, CMSG_DATA_OFFSET, fd);
 
-            long rc = PosixH.sendmsg(sockFd, buildMsg(arena, iovBuf, cmsg), 0);
+            long rc = NativeH.sendmsg(sockFd, buildMsg(arena, iovBuf, cmsg), 0);
             if (rc < 0) {
                 Logger.warn("sendmsg failed: " + Libc.strerror(Libc.errno()));
                 return false;
@@ -93,8 +93,8 @@ public final class ScmRights {
 
             MemorySegment cmsg = arena.allocate(CMSG_SPACE_ONE_FD);
             cmsghdr.cmsg_len(cmsg, CMSG_LEN_ONE_FD);
-            cmsghdr.cmsg_level(cmsg, PosixH.SOL_SOCKET());
-            cmsghdr.cmsg_type(cmsg, PosixH.SCM_RIGHTS());
+            cmsghdr.cmsg_level(cmsg, NativeH.SOL_SOCKET());
+            cmsghdr.cmsg_type(cmsg, NativeH.SCM_RIGHTS());
             cmsg.set(ValueLayout.JAVA_INT, CMSG_DATA_OFFSET, fd);
 
             MemorySegment msg = msghdr.allocate(arena);
@@ -106,7 +106,7 @@ public final class ScmRights {
             msghdr.msg_controllen(msg, CMSG_SPACE_ONE_FD);
             msghdr.msg_flags(msg, 0);
 
-            long rc = PosixH.sendmsg(sockFd, msg, 0);
+            long rc = NativeH.sendmsg(sockFd, msg, 0);
             if (rc < 0) {
                 Logger.warn("sendmsg (with data) failed: " + Libc.strerror(Libc.errno()));
                 return false;
@@ -124,14 +124,14 @@ public final class ScmRights {
             MemorySegment iovBuf = arena.allocate(1);
             MemorySegment cmsg = arena.allocate(CMSG_SPACE_ONE_FD);
 
-            long rc = PosixH.recvmsg(sockFd, buildMsg(arena, iovBuf, cmsg), 0);
+            long rc = NativeH.recvmsg(sockFd, buildMsg(arena, iovBuf, cmsg), 0);
             if (rc < 0) {
                 Logger.warn("recvmsg failed: " + Libc.strerror(Libc.errno()));
                 return -1;
             }
             int level = cmsghdr.cmsg_level(cmsg);
             int type = cmsghdr.cmsg_type(cmsg);
-            if (level != PosixH.SOL_SOCKET() || type != PosixH.SCM_RIGHTS()) {
+            if (level != NativeH.SOL_SOCKET() || type != NativeH.SCM_RIGHTS()) {
                 Logger.warn("recvmsg returned unexpected cmsg level=" + level + " type=" + type);
                 return -1;
             }

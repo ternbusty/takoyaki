@@ -22,9 +22,7 @@ public final class GeneratedForeignFeature implements Feature {
      * that has not migrated a given library yet still builds.
      */
     private static final String[] HEADER_CLASSES = {
-            "com.ternbusty.takoyaki.syscall.posix.PosixH",
-            "com.ternbusty.takoyaki.syscall.libc.LibcH",
-            "com.ternbusty.takoyaki.syscall.libseccomp.SeccompH",
+            "com.ternbusty.takoyaki.syscall.gen.NativeH",
     };
 
     @Override

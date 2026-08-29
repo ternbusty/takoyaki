@@ -6,7 +6,7 @@ import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 
-import com.ternbusty.takoyaki.syscall.posix.PosixH;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -30,23 +30,23 @@ public final class ConsoleSocket {
 
     public static PtyPair openPty() {
         try (Arena arena = Arena.ofConfined()) {
-            int master = PosixH.posix_openpt(Constants.O_RDWR);
+            int master = NativeH.posix_openpt(Constants.O_RDWR);
             if (master < 0) {
                 Logger.warn("posix_openpt failed: " + Libc.strerror(Libc.errno()));
                 return null;
             }
-            if (PosixH.grantpt(master) != 0) {
+            if (NativeH.grantpt(master) != 0) {
                 Logger.warn("grantpt failed: " + Libc.strerror(Libc.errno()));
                 PosixIO.close(master);
                 return null;
             }
-            if (PosixH.unlockpt(master) != 0) {
+            if (NativeH.unlockpt(master) != 0) {
                 Logger.warn("unlockpt failed: " + Libc.strerror(Libc.errno()));
                 PosixIO.close(master);
                 return null;
             }
             MemorySegment nameBuf = arena.allocate(64);
-            if (PosixH.ptsname_r(master, nameBuf, 64L) != 0) {
+            if (NativeH.ptsname_r(master, nameBuf, 64L) != 0) {
                 Logger.warn("ptsname_r failed: " + Libc.strerror(Libc.errno()));
                 PosixIO.close(master);
                 return null;
@@ -130,16 +130,16 @@ public final class ConsoleSocket {
     public static void wireStdio(int slaveFd) {
         try {
             // setsid creates a new session and detaches from the current controlling tty.
-            PosixH.setsid();
+            NativeH.setsid();
             // Make the slave the controlling terminal for this session. Without
             // TIOCSCTTY the slave is just an open fd, not the controlling tty, so
             // `tty` / `stty size` and job control would not work.
             if (Libc.ioctl(slaveFd, Constants.TIOCSCTTY, MemorySegment.NULL) != 0) {
                 Logger.warn("TIOCSCTTY failed: " + Libc.strerror(Libc.errno()));
             }
-            PosixH.dup2(slaveFd, 0);
-            PosixH.dup2(slaveFd, 1);
-            PosixH.dup2(slaveFd, 2);
+            NativeH.dup2(slaveFd, 0);
+            NativeH.dup2(slaveFd, 1);
+            NativeH.dup2(slaveFd, 2);
             if (slaveFd > 2) PosixIO.close(slaveFd);
             Logger.debug("stdio wired to pty slave");
         } catch (Throwable t) {
