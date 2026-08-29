@@ -48,7 +48,7 @@ dependencies {
 }
 
 application {
-    mainClass = "com.ternbusty.takoyaki.Main"
+    mainClass = "com.ternbusty.takoyaki.MainKt"
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -192,7 +192,7 @@ graalvmNative {
     binaries {
         named("main") {
             imageName = "takoyaki"
-            mainClass = "com.ternbusty.takoyaki.Main"
+            mainClass = "com.ternbusty.takoyaki.MainKt"
             quickBuild = isQuick
             // Linker option for libseccomp. glibc build links the system
             // shared library; musl build pulls in the static archive we
@@ -238,6 +238,7 @@ graalvmNative {
                 // SubstrateVM forbids native lookups at build time. Those
                 // are listed via --initialize-at-run-time below.
                 "--initialize-at-build-time=com.ternbusty.takoyaki",
+                "--initialize-at-build-time=kotlin",
                 // Run-time init for FFM/native-using classes:
                 "--initialize-at-run-time=com.ternbusty.takoyaki.util.Json",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.command.Wait",
