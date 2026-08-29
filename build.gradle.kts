@@ -138,178 +138,41 @@ val buildBootstrap by tasks.registering(Exec::class) {
     )
 }
 
-// Generate the libseccomp bindings (SeccompH + scmp_arg_cmp) from the system
-// headers with jextract at build time. Not committed: the output is
-// regenerated per build, so it always matches the build machine's arch (syscall
-// numbers, struct layouts) instead of freezing one arch into the repo. Needs
-// jextract on PATH, at ~/.sdkman/candidates/jextract/current/bin, or -Pjextract=.
+// Generate FFM bindings from the system headers with jextract at build time.
+// Not committed: the output is regenerated per build, so it always matches
+// the build machine's arch (syscall numbers, struct layouts) instead of
+// freezing one arch into the repo. Needs jextract on PATH, at
+// ~/.sdkman/candidates/jextract/current/bin, or -Pjextract=.
 val jextractDir = layout.buildDirectory.dir("generated/jextract")
 val jextractBin = providers.gradleProperty("jextract").orElse(
     providers.provider {
         val sdk = file(System.getProperty("user.home") + "/.sdkman/candidates/jextract/current/bin/jextract")
         if (sdk.exists()) sdk.absolutePath else "jextract"
     })
-val jextractSeccomp by tasks.registering(Exec::class) {
-    val header = layout.projectDirectory.file("src/main/c/jextract/seccomp.h")
-    inputs.file(header)
-    inputs.property("jextract", jextractBin)
-    outputs.dir(jextractDir)
-    val functions = listOf(
-        "seccomp_init", "seccomp_release", "seccomp_rule_add", "seccomp_rule_add_array",
-        "seccomp_load", "seccomp_notify_fd", "seccomp_syscall_resolve_name",
-        "seccomp_arch_add", "seccomp_arch_remove", "seccomp_arch_resolve_name", "seccomp_attr_set",
-    )
-    // Filter attributes, actions and comparison ops. Taking these from the
-    // header matters: the enum has gaps (SCMP_FLTATR_API_TSKIP sits between
-    // CTL_TSYNC and CTL_LOG), which hand-counted values get wrong.
-    val constants = listOf(
-        "SCMP_FLTATR_CTL_NNP", "SCMP_FLTATR_CTL_TSYNC", "SCMP_FLTATR_CTL_LOG",
-        "SCMP_FLTATR_CTL_SSB", "SCMP_FLTATR_CTL_OPTIMIZE",
-        "SCMP_ACT_KILL_PROCESS", "SCMP_ACT_KILL_THREAD", "SCMP_ACT_KILL", "SCMP_ACT_TRAP",
-        "SCMP_ACT_NOTIFY", "SCMP_ACT_LOG", "SCMP_ACT_ALLOW",
-        "SCMP_CMP_NE", "SCMP_CMP_LT", "SCMP_CMP_LE", "SCMP_CMP_EQ", "SCMP_CMP_GE",
-        "SCMP_CMP_GT", "SCMP_CMP_MASKED_EQ",
-        "__NR_SCMP_ERROR",
-        // ERRNO/TRACE are function-like macros; seccomp.h wraps their zero-arg
-        // expansion in an enum so the base values stay header-derived.
-        "TAKOYAKI_SCMP_ACT_ERRNO_BASE", "TAKOYAKI_SCMP_ACT_TRACE_BASE",
-    )
-    commandLine(buildList {
-        add(jextractBin.get())
-        add("--output"); add(jextractDir.get().asFile.absolutePath)
-        add("-t"); add("com.ternbusty.takoyaki.syscall.libseccomp")
-        add("--header-class-name"); add("SeccompH")
-        add("-l"); add(":libseccomp.so.2")
-        functions.forEach { add("--include-function"); add(it) }
-        constants.forEach { add("--include-constant"); add(it) }
-        add("--include-struct"); add("scmp_arg_cmp")
-        add(header.asFile.absolutePath)
-    })
-}
 // The libc headers pull in arch-specific bits from /usr/include/<triplet>;
 // derive the triplet so the build works on aarch64 and x86_64 alike.
 val multiarch = providers.exec { commandLine("gcc", "-print-multiarch") }
     .standardOutput.asText.map(String::trim)
 
-val jextractLibc by tasks.registering(Exec::class) {
-    val header = layout.projectDirectory.file("src/main/c/jextract/libc.h")
+val jextractNative by tasks.registering(Exec::class) {
+    val header = layout.projectDirectory.file("src/main/c/jextract/native.h")
     inputs.file(header)
     inputs.property("jextract", jextractBin)
     inputs.property("multiarch", multiarch)
     outputs.dir(jextractDir)
-    val functions = listOf(
-        "unshare", "setns", "mount", "umount2", "chdir", "sethostname", "setdomainname",
-        "kill", "prctl", "umask", "getpid", "getppid", "__errno_location", "strerror",
-        "execvp", "clearenv", "setenv", "setgroups", "prlimit64", "syscall", "geteuid",
-        "getegid", "setresuid", "setresgid", "mknod", "ioctl", "waitpid", "chown",
-    )
     commandLine(buildList {
         add(jextractBin.get())
         add("--output"); add(jextractDir.get().asFile.absolutePath)
-        add("-t"); add("com.ternbusty.takoyaki.syscall.libc")
-        add("--header-class-name"); add("LibcH")
+        add("-t"); add("com.ternbusty.takoyaki.syscall.gen")
+        add("--header-class-name"); add("NativeH")
+        add("-l"); add(":libseccomp.so.2")
         add("-I"); add("/usr/include/" + multiarch.get())
-        functions.forEach { add("--include-function"); add(it) }
-        add(header.asFile.absolutePath)
-    })
-}
-
-val jextractConsts by tasks.registering(Exec::class) {
-    val header = layout.projectDirectory.file("src/main/c/jextract/consts.h")
-    inputs.file(header)
-    inputs.property("jextract", jextractBin)
-    outputs.dir(jextractDir)
-    val constants = listOf(
-        // syscall numbers
-        "SYS_capset", "SYS_chroot", "SYS_close_range", "SYS_pivot_root", "SYS_keyctl", "SYS_bpf",
-        "SYS_ioprio_set", "SYS_sched_setattr", "SYS_sched_setaffinity",
-        "SYS_pidfd_open", "SYS_set_mempolicy", "SYS_seccomp",
-        // exeseal syscall numbers (arch-dependent)
-        "SYS_openat", "SYS_sendfile", "SYS_memfd_create",
-        "SYS_fsopen", "SYS_fsconfig", "SYS_fsmount",
-        // namespaces
-        "CLONE_NEWNS", "CLONE_NEWUTS", "CLONE_NEWIPC", "CLONE_NEWUSER",
-        "CLONE_NEWPID", "CLONE_NEWNET", "CLONE_NEWCGROUP", "CLONE_NEWTIME",
-        // mount flags
-        "MS_RDONLY", "MS_NOSUID", "MS_NODEV", "MS_NOEXEC", "MS_REMOUNT", "MS_BIND",
-        "MS_REC", "MS_NOATIME", "MS_RELATIME", "MS_STRICTATIME", "MS_NOSYMFOLLOW",
-        "MS_PRIVATE", "MS_SLAVE", "MS_SHARED", "MS_UNBINDABLE", "MNT_DETACH",
-        // prctl
-        "PR_SET_DUMPABLE", "PR_SET_KEEPCAPS", "PR_SET_NO_NEW_PRIVS", "PR_CAPBSET_DROP",
-        "PR_CAP_AMBIENT", "PR_CAP_AMBIENT_RAISE", "PR_CAP_AMBIENT_CLEAR_ALL",
-        "PR_SET_CHILD_SUBREAPER",
-        // signals
-        "SIGHUP", "SIGINT", "SIGQUIT", "SIGILL", "SIGABRT", "SIGFPE", "SIGKILL",
-        "SIGSEGV", "SIGPIPE", "SIGALRM", "SIGTERM", "SIGUSR1", "SIGUSR2", "SIGCHLD",
-        "SIGCONT", "SIGSTOP", "SIGTSTP", "SIGTTIN", "SIGTTOU",
-        // errno
-        "EPERM", "ENOENT", "ESRCH", "EINTR", "EEXIST", "EBUSY", "EINVAL", "ENOSYS",
-        // sockets / files
-        "AF_UNIX", "AF_INET", "SOCK_STREAM", "SOCK_DGRAM",
-        "F_OK", "O_RDONLY", "O_RDWR", "O_CREAT", "O_DIRECTORY",
-        "F_GETFD", "F_SETFD", "FD_CLOEXEC",
-        // rlimits
-        "RLIMIT_CPU", "RLIMIT_FSIZE", "RLIMIT_DATA", "RLIMIT_STACK", "RLIMIT_CORE",
-        "RLIMIT_RSS", "RLIMIT_NPROC", "RLIMIT_NOFILE", "RLIMIT_MEMLOCK", "RLIMIT_AS",
-        "RLIMIT_LOCKS", "RLIMIT_SIGPENDING", "RLIMIT_MSGQUEUE", "RLIMIT_NICE",
-        "RLIMIT_RTPRIO", "RLIMIT_RTTIME",
-        // misc
-        "_LINUX_CAPABILITY_VERSION_3", "CLOSE_RANGE_CLOEXEC",
-        "SIOCGIFFLAGS", "SIOCSIFFLAGS", "IFF_UP",
-        "S_IFCHR", "S_IFBLK", "S_IFIFO",
-        "KEYCTL_JOIN_SESSION_KEYRING",
-    )
-    commandLine(buildList {
-        add(jextractBin.get())
-        add("--output"); add(jextractDir.get().asFile.absolutePath)
-        add("-t"); add("com.ternbusty.takoyaki.syscall.hdr")
-        add("--header-class-name"); add("Consts")
-        constants.forEach { add("--include-constant"); add(it) }
-        add(header.asFile.absolutePath)
-    })
-}
-
-val jextractPosix by tasks.registering(Exec::class) {
-    val header = layout.projectDirectory.file("src/main/c/jextract/posix.h")
-    inputs.file(header)
-    inputs.property("jextract", jextractBin)
-    inputs.property("multiarch", multiarch)
-    outputs.dir(jextractDir)
-    val functions = listOf(
-        "sendmsg", "recvmsg",
-        "socketpair", "socket", "listen", "bind", "connect", "accept",
-        "read", "write", "send", "recv", "close", "unlink", "access",
-        "fchdir", "fork", "_exit", "execve", "readlink",
-        // pty handling for --console-socket
-        "posix_openpt", "grantpt", "unlockpt", "ptsname_r", "dup2", "setsid",
-        // variadic; jextract emits an invoker factory for these
-        "open", "fcntl",
-    )
-    // struct msghdr / iovec / cmsghdr: ScmRights used to hand-compute these
-    // offsets (msghdr = 56 bytes, msg_iov at 16, ...). sockaddr_un likewise had
-    // sun_family/sun_path spelled out. Generated accessors take them from the
-    // headers instead.
-    val structs = listOf("msghdr", "iovec", "cmsghdr", "sockaddr_un")
-    // glibc declares bind/connect/accept with transparent unions over sockaddr*.
-    // The union is pointer-sized; callers wrap the sockaddr in it (see PosixIO).
-    val typedefs = listOf("__SOCKADDR_ARG", "__CONST_SOCKADDR_ARG")
-    val constants = listOf("SOL_SOCKET", "SCM_RIGHTS", "AF_UNIX")
-    commandLine(buildList {
-        add(jextractBin.get())
-        add("--output"); add(jextractDir.get().asFile.absolutePath)
-        add("-t"); add("com.ternbusty.takoyaki.syscall.posix")
-        add("--header-class-name"); add("PosixH")
-        add("-I"); add("/usr/include/" + multiarch.get())
-        functions.forEach { add("--include-function"); add(it) }
-        structs.forEach { add("--include-struct"); add(it) }
-        typedefs.forEach { add("--include-typedef"); add(it) }
-        constants.forEach { add("--include-constant"); add(it) }
         add(header.asFile.absolutePath)
     })
 }
 
 sourceSets["main"].java.srcDir(jextractDir)
-tasks.named<JavaCompile>("compileJava") { dependsOn(jextractSeccomp, jextractLibc, jextractConsts, jextractPosix) }
+tasks.named<JavaCompile>("compileJava") { dependsOn(jextractNative) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
@@ -370,7 +233,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.command.Wait",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.seccomp",
-                "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.libseccomp",
+                "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.gen",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
             )
