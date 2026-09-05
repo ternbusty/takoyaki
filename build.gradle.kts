@@ -4,6 +4,8 @@ import java.time.Duration
 plugins {
     application
     jacoco
+    kotlin("jvm") version "2.4.10"
+    kotlin("plugin.serialization") version "2.4.10"
     id("org.graalvm.buildtools.native") version "1.1.10"
 }
 
@@ -22,13 +24,15 @@ java {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_25)
+    }
+}
+
+
 dependencies {
-    // No CLI parsing framework — Main.java hand-parses argv. picocli's
-    // reflection-driven CommandSpec build cost ~80 ms on aarch64 native-image.
-    // No JSON library — util.json hand-parses into a Map/List tree and the
-    // Spec / State / KontainerConfig beans codec to/from it. jackson-databind
-    // pulled in ~3,000 reachable methods and transitively ~4.6 MB of java.xml
-    // at native-image build time, all for our small OCI schemas.
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
     compileOnly("org.graalvm.sdk:nativeimage:25.3.4.1")
 
     testImplementation(platform("org.junit:junit-bom:6.1.3"))
@@ -36,10 +40,11 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.mockito:mockito-core:5.23.0")
     testImplementation("org.mockito:mockito-junit-jupiter:5.23.0")
+    testImplementation("io.mockk:mockk:1.14.2")
 }
 
 application {
-    mainClass = "com.ternbusty.takoyaki.Main"
+    mainClass = "com.ternbusty.takoyaki.MainKt"
 }
 
 tasks.withType<JavaCompile>().configureEach {
@@ -213,6 +218,7 @@ val generateBuildInfo by tasks.registering {
 sourceSets["main"].java.srcDir(buildInfoDir)
 tasks.named<JavaCompile>("compileJava") { dependsOn(generateBuildInfo) }
 tasks.named<JavaCompile>("compileJava") { dependsOn(jextractNative) }
+tasks.named("compileKotlin") { dependsOn(jextractNative, generateBuildInfo) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
@@ -222,7 +228,7 @@ graalvmNative {
     binaries {
         named("main") {
             imageName = "takoyaki"
-            mainClass = "com.ternbusty.takoyaki.Main"
+            mainClass = "com.ternbusty.takoyaki.MainKt"
             quickBuild = isQuick
             // Linker option for libseccomp. glibc build links the system
             // shared library; musl build pulls in the static archive we
@@ -268,8 +274,9 @@ graalvmNative {
                 // SubstrateVM forbids native lookups at build time. Those
                 // are listed via --initialize-at-run-time below.
                 "--initialize-at-build-time=com.ternbusty.takoyaki",
+                "--initialize-at-build-time=kotlin",
+                "--initialize-at-build-time=kotlinx.serialization",
                 // Run-time init for FFM/native-using classes:
-                "--initialize-at-run-time=com.ternbusty.takoyaki.util.Json",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.command.Wait",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.seccomp",
