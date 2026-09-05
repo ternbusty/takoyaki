@@ -36,7 +36,7 @@ import kotlin.system.exitProcess
  */
 class Main {
     companion object {
-        private const val VERSION = "0.1.1"
+        private val VERSION = BuildInfo.VERSION
         /** OCI runtime-spec version this build targets. */
         private const val OCI_SPEC_VERSION = "1.0.2"
 
@@ -793,19 +793,29 @@ class Main {
         )
 
         private fun printVersion() {
-            println("runc version $VERSION")
-            println("commit: (none)")
+            println("takoyaki version $VERSION")
+            println("commit: ${BuildInfo.COMMIT}")
             println("spec: $OCI_SPEC_VERSION")
         }
 
+        private fun runtimeName(): String {
+            return try {
+                val exe = java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of("/proc/self/exe"))
+                val name = exe.fileName
+                if (name != null && name.toString().isNotEmpty()) name.toString() else "takoyaki"
+            } catch (_: Exception) {
+                "takoyaki"
+            }
+        }
+
         private fun printRootHelp() {
-            // runc-compatible NAME:/USAGE: format so bats tests match.
-            println("""
+            val name = runtimeName()
+            println(String.format("""
                 NAME:
-                   runc - Open Container Initiative runtime
+                   %1${'$'}s - Open Container Initiative runtime
 
                 USAGE:
-                   runc [global options] command [command options] [arguments...]
+                   %1${'$'}s [global options] command [command options] [arguments...]
 
                 COMMANDS:
                    checkpoint  checkpoint a running container
@@ -827,20 +837,21 @@ class Main {
 
                 GLOBAL OPTIONS:
                    --debug             enable debug logging
-                   --log value         set the log file to write runc logs to (default is '/dev/stderr')
+                   --log value         set the log file to write %1${'$'}s logs to (default is '/dev/stderr')
                    --log-format value  set the log format ('text' (default), or 'json') (default: "text")
-                   --root value        root directory for storage of container state (default: "/run/runc")
+                   --root value        root directory for storage of container state (default: "/run/takoyaki")
                    --systemd-cgroup    enable systemd cgroup support
                    --rootless value    (ignored)
                    --criu value        (ignored)
                    --help, -h          show help
-                   --version, -v       print the version""".trimIndent())
+                   --version, -v       print the version""".trimIndent(), name))
         }
 
         private fun printSubcommandHelp(sub: String) {
             val desc = SUBCOMMAND_DESCRIPTIONS[sub] ?: sub
+            val name = runtimeName()
             println("NAME:")
-            println("   runc $sub - $desc")
+            println("   $name $sub - $desc")
         }
     }
 }
