@@ -35,7 +35,7 @@ import java.util.List;
  * {@code takoyaki [root-opts...] SUBCOMMAND [sub-args...]}.
  */
 public final class Main {
-    private static final String VERSION = "0.1.1";
+    private static final String VERSION = BuildInfo.VERSION;
     /** OCI runtime-spec version this build targets. */
     private static final String OCI_SPEC_VERSION = "1.0.2";
 
@@ -763,9 +763,14 @@ public final class Main {
             java.util.Map.entry("features", "show the enabled features")
     );
 
+    /**
+     * runc-style three-line format. containerd's go-runc reads the "commit:" and
+     * "spec:" lines; the first line names this runtime truthfully rather than
+     * impersonating runc (only runc's own version.bats requires that prefix).
+     */
     private static void printVersion() {
-        System.out.println("runc version " + VERSION);
-        System.out.println("commit: (none)");
+        System.out.println("takoyaki version " + VERSION);
+        System.out.println("commit: " + BuildInfo.COMMIT);
         System.out.println("spec: " + OCI_SPEC_VERSION);
     }
 
