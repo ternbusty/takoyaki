@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1](https://github.com/ternbusty/takoyaki/compare/v0.4.0...v0.4.1) (2026-09-05)
+
+
+### 🐛 Bug Fixes
+
+* **cli:** report the real runtime name and version in --version and help ([#77](https://github.com/ternbusty/takoyaki/issues/77)) ([4d66e03](https://github.com/ternbusty/takoyaki/commit/4d66e0329a4dada4061175a03de001194e6b87b3))
+
+
+### 🔗 Dependencies
+
+* **deps:** bump gradle-wrapper from 9.7.0 to 9.7.1 ([#72](https://github.com/ternbusty/takoyaki/issues/72)) ([293e40f](https://github.com/ternbusty/takoyaki/commit/293e40f7465ff763dd3d156e2b4de09ca3f06637))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.9 to 1.1.10 ([#70](https://github.com/ternbusty/takoyaki/issues/70)) ([11bdb6e](https://github.com/ternbusty/takoyaki/commit/11bdb6ea3e73c1068334a789fdca0720cf907e4c))
+* **deps:** bump org.graalvm.sdk:nativeimage from 25.2.4 to 25.3.4.1 ([#76](https://github.com/ternbusty/takoyaki/issues/76)) ([5313945](https://github.com/ternbusty/takoyaki/commit/5313945e6431036e1b3591f7a2993ead677fb0c7))
+
 ## [0.4.0](https://github.com/ternbusty/takoyaki/compare/v0.3.2...v0.4.0) (2026-08-23)
 
 
