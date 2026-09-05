@@ -177,6 +177,10 @@ sourceSets["main"].java.srcDir(jextractDir)
 // project version (and the git commit) instead of a hand-maintained constant.
 val buildInfoDir = layout.buildDirectory.dir("generated/buildinfo")
 val generateBuildInfo by tasks.registering {
+    // Capture everything the action needs as locals: referencing script-level
+    // properties from doLast would drag the script object into the
+    // configuration cache, which Gradle rejects.
+    val outDir = buildInfoDir
     val projectVersion = project.version.toString()
     val gitCommit =
         try {
@@ -187,9 +191,9 @@ val generateBuildInfo by tasks.registering {
         }
     inputs.property("version", projectVersion)
     inputs.property("commit", gitCommit)
-    outputs.dir(buildInfoDir)
+    outputs.dir(outDir)
     doLast {
-        val dir = buildInfoDir.get().dir("com/ternbusty/takoyaki").asFile
+        val dir = outDir.get().dir("com/ternbusty/takoyaki").asFile
         dir.mkdirs()
         dir.resolve("BuildInfo.java").writeText(
             """
