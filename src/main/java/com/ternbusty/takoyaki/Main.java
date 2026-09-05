@@ -35,7 +35,7 @@ import java.util.List;
  * {@code takoyaki [root-opts...] SUBCOMMAND [sub-args...]}.
  */
 public final class Main {
-    private static final String VERSION = "0.1.1";
+    private static final String VERSION = BuildInfo.VERSION;
     /** OCI runtime-spec version this build targets. */
     private static final String OCI_SPEC_VERSION = "1.0.2";
 
@@ -763,20 +763,44 @@ public final class Main {
             java.util.Map.entry("features", "show the enabled features")
     );
 
+    /**
+     * runc-style three-line format. containerd's go-runc reads the "commit:" and
+     * "spec:" lines; the first line names this runtime truthfully rather than
+     * impersonating runc (only runc's own version.bats requires that prefix).
+     */
     private static void printVersion() {
-        System.out.println("runc version " + VERSION);
-        System.out.println("commit: (none)");
+        System.out.println("takoyaki version " + VERSION);
+        System.out.println("commit: " + BuildInfo.COMMIT);
         System.out.println("spec: " + OCI_SPEC_VERSION);
     }
 
+    /**
+     * Name to show in help output: the basename of the running executable
+     * (so a copy installed as "runc" reads naturally), falling back to "takoyaki".
+     */
+    private static String runtimeName() {
+        try {
+            java.nio.file.Path exe = java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of("/proc/self/exe"));
+            java.nio.file.Path name = exe.getFileName();
+            if (name != null && !name.toString().isEmpty()) {
+                return name.toString();
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return "takoyaki";
+    }
+
     private static void printRootHelp() {
-        // runc-compatible NAME:/USAGE: format so bats tests match.
+        // runc-compatible NAME:/USAGE: layout (the bats help tests match on it),
+        // but identified by this runtime's own name and defaults.
+        String name = runtimeName();
         System.out.println("""
                 NAME:
-                   runc - Open Container Initiative runtime
+                   %1$s - Open Container Initiative runtime
 
                 USAGE:
-                   runc [global options] command [command options] [arguments...]
+                   %1$s [global options] command [command options] [arguments...]
 
                 COMMANDS:
                    checkpoint  checkpoint a running container
@@ -798,19 +822,19 @@ public final class Main {
 
                 GLOBAL OPTIONS:
                    --debug             enable debug logging
-                   --log value         set the log file to write runc logs to (default is '/dev/stderr')
+                   --log value         set the log file to write %1$s logs to (default is '/dev/stderr')
                    --log-format value  set the log format ('text' (default), or 'json') (default: "text")
-                   --root value        root directory for storage of container state (default: "/run/runc")
+                   --root value        root directory for storage of container state (default: "/run/takoyaki")
                    --systemd-cgroup    enable systemd cgroup support
                    --rootless value    (ignored)
                    --criu value        (ignored)
                    --help, -h          show help
-                   --version, -v       print the version""");
+                   --version, -v       print the version""".formatted(name));
     }
 
     private static void printSubcommandHelp(String sub) {
         String desc = SUBCOMMAND_DESCRIPTIONS.getOrDefault(sub, sub);
         System.out.println("NAME:");
-        System.out.println("   runc " + sub + " - " + desc);
+        System.out.println("   " + runtimeName() + " " + sub + " - " + desc);
     }
 }
