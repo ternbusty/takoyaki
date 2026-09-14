@@ -6,12 +6,12 @@ plugins {
     jacoco
     kotlin("jvm") version "2.4.10"
     kotlin("plugin.serialization") version "2.4.10"
-    id("org.graalvm.buildtools.native") version "1.1.11"
+    id("org.graalvm.buildtools.native") version "1.1.12"
 }
 
 group = "com.ternbusty"
 // x-release-please-start-version
-version = "0.4.0"
+version = "0.4.1"
 // x-release-please-end
 
 repositories {
