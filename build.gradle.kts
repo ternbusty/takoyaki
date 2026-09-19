@@ -139,7 +139,11 @@ val buildBootstrap by tasks.registering(Exec::class) {
     commandLine(
         "sh", "-c",
         "$cc -c -fPIC -Wall -Wextra -O2 bootstrap.c -o ${outDir.absolutePath}/bootstrap.o " +
-            "&& ar rcs ${outDir.absolutePath}/libbootstrap.a ${outDir.absolutePath}/bootstrap.o",
+            (if (useMusl)
+                "&& $cc -c -fPIC -Wall -Wextra -O2 static_lookup.c -o ${outDir.absolutePath}/static_lookup.o " +
+                "&& ar rcs ${outDir.absolutePath}/libbootstrap.a ${outDir.absolutePath}/bootstrap.o ${outDir.absolutePath}/static_lookup.o"
+            else
+                "&& ar rcs ${outDir.absolutePath}/libbootstrap.a ${outDir.absolutePath}/bootstrap.o"),
     )
 }
 
@@ -174,6 +178,31 @@ val jextractNative by tasks.registering(Exec::class) {
         add("-I"); add("/usr/include/" + multiarch.get())
         add(header.asFile.absolutePath)
     })
+}
+
+// In the musl (fully-static) build, replace jextract's SYMBOL_LOOKUP with
+// StaticSymbolLookup which uses a C lookup table instead of dlopen/dlsym.
+// dlopen is non-functional in a static musl binary, so all three standard
+// FFM lookup paths (libraryLookup, loaderLookup, defaultLookup) fail.
+val patchJextractForMusl by tasks.registering {
+    dependsOn(jextractNative)
+    onlyIf { useMusl }
+    doLast {
+        val lookupFile = jextractDir.get().asFile.resolve(
+            "com/ternbusty/takoyaki/syscall/gen/NativeH_8.java"
+        )
+        if (lookupFile.exists()) {
+            val original = lookupFile.readText()
+            val patched = original.replace(
+                Regex("""static final SymbolLookup SYMBOL_LOOKUP = SymbolLookup\.libraryLookup\([^;]+;"""),
+                "static final SymbolLookup SYMBOL_LOOKUP = com.ternbusty.takoyaki.nativeimage.StaticSymbolLookup.INSTANCE;"
+            )
+            if (patched != original) {
+                lookupFile.writeText(patched)
+                logger.lifecycle("Patched NativeH_8.java SYMBOL_LOOKUP for static build")
+            }
+        }
+    }
 }
 
 sourceSets["main"].java.srcDir(jextractDir)
@@ -217,8 +246,8 @@ val generateBuildInfo by tasks.registering {
 }
 sourceSets["main"].java.srcDir(buildInfoDir)
 tasks.named<JavaCompile>("compileJava") { dependsOn(generateBuildInfo) }
-tasks.named<JavaCompile>("compileJava") { dependsOn(jextractNative) }
-tasks.named("compileKotlin") { dependsOn(jextractNative, generateBuildInfo) }
+tasks.named<JavaCompile>("compileJava") { dependsOn(jextractNative, patchJextractForMusl) }
+tasks.named("compileKotlin") { dependsOn(jextractNative, patchJextractForMusl, generateBuildInfo) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.
@@ -248,11 +277,12 @@ graalvmNative {
                 "-H:+UnlockExperimentalVMOptions",
                 "-H:+ForeignAPISupport",
                 "-H:+PrintImageHeapPartitionSizes",
-                // Mostly-static: pull java/nio/net/zip etc. into the binary
-                // statically. libc stays dynamic (musl static on aarch64 is
-                // not supported by GraalVM; see issue #10375). Saves a few
-                // ld.so DT_NEEDED resolutions at startup.
-                "--static-nolibc",
+                // Mostly-static (glibc) or fully static (musl): pull
+                // java/nio/net/zip etc. into the binary statically. With
+                // glibc, libc stays dynamic (musl static on aarch64 is not
+                // supported by GraalVM; see issue #10375). With musl, libc
+                // is also statically linked, eliminating all DT_NEEDED.
+                if (useMusl) "--static" else "--static-nolibc",
                 // Skip glibc system locale initialization at startup. With
                 // it on, SubstrateVM's LocaleSupport.initialize() calls into
                 // glibc which opens 28 LC_*/locale-archive files (~80 ms of
@@ -283,6 +313,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.gen",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
+                "--initialize-at-run-time=com.ternbusty.takoyaki.nativeimage.StaticSymbolLookup",
             )
             if (useMusl) {
                 // --libc=musl plus --static produces a fully static
@@ -295,7 +326,6 @@ graalvmNative {
                 // the linker step uses musl-gcc directly anyway.
                 buildArgs.addAll(
                     "--libc=musl",
-                    "--static",
                     "-H:-CheckToolchain",
                     "-H:CLibraryPath=$muslDepsDir/lib",
                 )
