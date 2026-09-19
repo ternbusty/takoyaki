@@ -121,7 +121,16 @@ val bootstrapBuildDir = layout.buildDirectory.dir("bootstrap")
 // loader work) at the cost of needing musl-tools, a musl-built libseccomp,
 // and (later) a musl-built libz on the build machine. Default OFF so a
 // stock Ubuntu + libseccomp-dev install still builds.
-val useMusl = providers.gradleProperty("musl").isPresent
+val arch = System.getProperty("os.arch")   // "amd64" or "aarch64"
+val useMusl = providers.gradleProperty("musl").isPresent.also {
+    if (it && arch == "aarch64") {
+        throw GradleException(
+            "-Pmusl is not supported on aarch64: GraalVM does not ship " +
+            "static JDK libraries for musl on this architecture (see oracle/graal#10375). " +
+            "Use the default glibc (--static-nolibc) build instead."
+        )
+    }
+}
 // Root of the musl prefix, ie. the --prefix passed to configure when
 // building libseccomp / libz against musl-gcc. Default matches the VM
 // layout documented in scripts/build-musl-deps.sh; override with
