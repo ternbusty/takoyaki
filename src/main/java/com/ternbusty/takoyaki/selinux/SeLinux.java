@@ -101,21 +101,15 @@ public final class SeLinux {
         }
         // FFM write failed — emit diagnostics to stderr for CI visibility
         String ctx = readProcSelfAttr("current");
-        System.err.println("[keycreate-diag] ctx=" + ctx + " pid=" + Libc.getpid());
-        // Try Java NIO as fallback to compare behavior
-        try {
-            Files.writeString(Path.of("/proc/self/attr/keycreate"), label,
-                    java.nio.file.StandardOpenOption.WRITE);
-            System.err.println("[keycreate-diag] NIO-WRITE-ONLY: OK");
-            return;
-        } catch (IOException e) {
-            System.err.println("[keycreate-diag] NIO-WRITE-ONLY: " + e);
-        }
-        try {
-            Files.writeString(Path.of("/proc/self/attr/keycreate"), label);
-            System.err.println("[keycreate-diag] NIO-DEFAULT: OK");
-        } catch (IOException e) {
-            System.err.println("[keycreate-diag] NIO-DEFAULT: " + e);
+        String kcVal = readProcSelfAttr("keycreate");
+        System.err.println("[keycreate-diag] ctx=" + ctx + " pid=" + Libc.getpid()
+                + " keycreate-cur=" + kcVal);
+        // Check if exec write works for comparison
+        if (writeProcAttr("/proc/self/attr/exec", data)) {
+            System.err.println("[keycreate-diag] exec-write: OK (keycreate fails but exec works)");
+            writeProcAttr("/proc/self/attr/exec", new byte[0]);
+        } else {
+            System.err.println("[keycreate-diag] exec-write: ALSO FAILS");
         }
     }
 
