@@ -238,6 +238,21 @@ public final class ExecProcess {
                         payload.process.rlimits);
             }
 
+            // Final RLIMIT_NOFILE restore via raw syscall (same as InitProcess).
+            if (payload.process.rlimits != null) {
+                for (var rl : payload.process.rlimits) {
+                    if ("RLIMIT_NOFILE".equals(rl.type)) {
+                        var seg = arena.allocate(16, 8);
+                        seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0, rl.soft);
+                        seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8, rl.hard);
+                        Libc.syscall(Constants.NR_prlimit64,
+                                0L, (long) Constants.RLIMIT_NOFILE,
+                                seg.address(), 0L, 0L);
+                        break;
+                    }
+                }
+            }
+
             Logger.debug("setns_init: about to exec");
             // Re-apply CLOEXEC right before exec to catch FDs opened by
             // rlimit or other code since the first closeAllAbove.

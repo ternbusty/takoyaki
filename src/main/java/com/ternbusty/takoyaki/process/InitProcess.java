@@ -493,6 +493,24 @@ public final class InitProcess {
                         "startContainer", hookEnv);
             }
 
+            // Final RLIMIT_NOFILE restore via raw syscall: GraalVM's
+            // runtime may raise RLIMIT_NOFILE.soft to match hard at any
+            // point. Use the raw prlimit64 syscall to restore the spec
+            // value as the very last step before execve, bypassing FFM.
+            if (spec.process.rlimits != null) {
+                for (var rl : spec.process.rlimits) {
+                    if ("RLIMIT_NOFILE".equals(rl.type)) {
+                        var seg = arena.allocate(16, 8);
+                        seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0, rl.soft);
+                        seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8, rl.hard);
+                        Libc.syscall(Constants.NR_prlimit64,
+                                0L, (long) Constants.RLIMIT_NOFILE,
+                                seg.address(), 0L, 0L);
+                        break;
+                    }
+                }
+            }
+
             // Re-apply CLOEXEC on all FDs >= 3. The first closeAllAbove(0)
             // ran earlier, but Java code between then and now may have opened
             // new FDs (e.g. Files.readString for /etc/passwd, FFM library

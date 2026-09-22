@@ -153,6 +153,7 @@ public final class Constants {
     public static final long NR_ioprio_set = NativeH.SYS_ioprio_set();
     public static final long NR_sched_setattr = NativeH.SYS_sched_setattr();
     public static final long NR_sched_setaffinity = NativeH.SYS_sched_setaffinity();
+    public static final long NR_prlimit64 = NativeH.SYS_prlimit64();
 
     // ioprio constants (from linux/ioprio.h)
     public static final int IOPRIO_WHO_PROCESS = 1;
