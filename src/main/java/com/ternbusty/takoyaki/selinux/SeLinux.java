@@ -5,6 +5,7 @@ import com.ternbusty.takoyaki.logger.Logger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 /**
  * Apply a SELinux exec context to the current thread.
@@ -25,7 +26,7 @@ public final class SeLinux {
             return;
         }
         try {
-            Files.writeString(Path.of("/proc/self/attr/exec"), label);
+            Files.writeString(Path.of("/proc/self/attr/exec"), label, StandardOpenOption.WRITE);
             Logger.debug("selinux exec label staged: " + label);
         } catch (IOException e) {
             Logger.warn("selinux exec label write failed (label=" + label + "): " + e.getMessage());
@@ -41,7 +42,7 @@ public final class SeLinux {
         if (label == null || label.isEmpty()) return;
         if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
         try {
-            Files.writeString(Path.of("/proc/self/attr/keycreate"), label);
+            Files.writeString(Path.of("/proc/self/attr/keycreate"), label, StandardOpenOption.WRITE);
             Logger.debug("selinux keycreate label set: " + label);
         } catch (IOException e) {
             Logger.warn("selinux keycreate label write failed (label=" + label + "): "
@@ -57,7 +58,7 @@ public final class SeLinux {
         Path p = Path.of("/proc/self/attr/keycreate");
         if (!Files.exists(p)) return;
         try {
-            Files.writeString(p, "");
+            Files.writeString(p, "", StandardOpenOption.WRITE);
         } catch (IOException ignored) {
             // Best effort: clearing may fail if SELinux is not active.
         }
