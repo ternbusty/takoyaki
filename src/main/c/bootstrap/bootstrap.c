@@ -288,6 +288,7 @@ static void exec_bootstrap(void) {
      * (busybox, distroless) has no glibc at all, but dlopen by soname returns
      * the already-loaded copy without touching the filesystem. */
     if (getenv("_TAKOYAKI_EXEC_STAGE2")) {
+#ifndef TAKOYAKI_STATIC
         static const char *const preload[] = {
             "libc.so.6", "libm.so.6", "libdl.so.2", "libpthread.so.0", "librt.so.1",
         };
@@ -297,6 +298,7 @@ static void exec_bootstrap(void) {
                         preload[i], dlerror());
             }
         }
+#endif
         if (ns_env && *ns_env) {
             exec_setns_pass(ns_env, 1);
         }

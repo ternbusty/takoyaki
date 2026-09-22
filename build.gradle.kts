@@ -142,7 +142,7 @@ val buildBootstrap by tasks.registering(Exec::class) {
     val cc = if (useMusl) "musl-gcc" else "gcc"
     commandLine(
         "sh", "-c",
-        "$cc -c -fPIC -Wall -Wextra -O2 bootstrap.c -o ${outDir.absolutePath}/bootstrap.o " +
+        "$cc -c -fPIC -Wall -Wextra -O2 ${if (useMusl) "-DTAKOYAKI_STATIC " else ""}bootstrap.c -o ${outDir.absolutePath}/bootstrap.o " +
             (if (useMusl)
                 "&& $cc -c -fPIC -Wall -Wextra -O2 static_lookup.c -o ${outDir.absolutePath}/static_lookup.o " +
                 "&& ar rcs ${outDir.absolutePath}/libbootstrap.a ${outDir.absolutePath}/bootstrap.o ${outDir.absolutePath}/static_lookup.o"
