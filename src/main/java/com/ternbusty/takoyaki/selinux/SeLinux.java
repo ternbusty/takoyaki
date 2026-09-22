@@ -5,21 +5,11 @@ import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
 
-import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/**
- * Apply a SELinux exec context to the current thread.
- *
- *   echo "container_t:s0:c1,c2" > /proc/self/attr/exec
- *
- * The next exec(2) loads the process with that label. Like AppArmor, the kernel
- * rejects further label changes after exec when PR_SET_NO_NEW_PRIVS is set, so we
- * must do this before seccomp + execvp.
- */
 public final class SeLinux {
     private SeLinux() {}
 
@@ -33,8 +23,6 @@ public final class SeLinux {
                 int err = Libc.errno();
                 Logger.warn("selinux open " + path + " failed (errno=" + err + "): "
                         + Libc.strerror(err));
-                diagLog("OPEN_FAIL path=" + path + " errno=" + err
-                        + " ctx=" + readProcSelfAttr("current"));
                 return false;
             }
             try {
@@ -45,33 +33,12 @@ public final class SeLinux {
                     int err = Libc.errno();
                     Logger.warn("selinux write " + path + " failed (errno=" + err + "): "
                             + Libc.strerror(err));
-                    diagLog("WRITE_FAIL path=" + path + " errno=" + err
-                            + " data=" + new String(data, StandardCharsets.UTF_8)
-                            + " ctx=" + readProcSelfAttr("current"));
                     return false;
                 }
                 return true;
             } finally {
                 NativeH.close(fd);
             }
-        }
-    }
-
-    private static String readProcSelfAttr(String attr) {
-        try {
-            return Files.readString(Path.of("/proc/self/attr/" + attr)).trim();
-        } catch (IOException e) {
-            return "<unreadable:" + e.getMessage() + ">";
-        }
-    }
-
-    private static void diagLog(String msg) {
-        try {
-            Files.writeString(Path.of("/tmp/takoyaki-selinux-diag.log"),
-                    msg + "\n",
-                    java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.APPEND);
-        } catch (IOException ignored) {
         }
     }
 
@@ -86,37 +53,15 @@ public final class SeLinux {
         }
     }
 
-    /**
-     * Write the SELinux keycreate label so that subsequently created kernel
-     * keys (e.g. session keyrings) inherit the container's label instead of
-     * the runtime's. No-op when label is null/empty or SELinux is off.
-     */
     public static void applyKeyCreate(String label) {
         if (label == null || label.isEmpty()) return;
         if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
         byte[] data = label.getBytes(StandardCharsets.UTF_8);
         if (writeProcAttr("/proc/self/attr/keycreate", data)) {
             Logger.debug("selinux keycreate label set: " + label);
-            return;
-        }
-        // FFM write failed — emit diagnostics to stderr for CI visibility
-        String ctx = readProcSelfAttr("current");
-        String kcVal = readProcSelfAttr("keycreate");
-        System.err.println("[keycreate-diag] ctx=" + ctx + " pid=" + Libc.getpid()
-                + " keycreate-cur=" + kcVal);
-        // Check if exec write works for comparison
-        if (writeProcAttr("/proc/self/attr/exec", data)) {
-            System.err.println("[keycreate-diag] exec-write: OK (keycreate fails but exec works)");
-            writeProcAttr("/proc/self/attr/exec", new byte[0]);
-        } else {
-            System.err.println("[keycreate-diag] exec-write: ALSO FAILS");
         }
     }
 
-    /**
-     * Clear the keycreate label so later key operations do not inherit the
-     * override. Writing an empty string resets to the default.
-     */
     public static void clearKeyCreate() {
         if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
         writeProcAttr("/proc/self/attr/keycreate", new byte[0]);

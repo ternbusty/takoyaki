@@ -256,6 +256,19 @@ public final class InitProcess {
                 }
             }
 
+            // Join a fresh kernel session keyring unless the caller opted out via
+            // --no-new-keyring (we propagate that via env var). Done BEFORE
+            // pivot_root so the keycreate label write goes to the host's
+            // /proc/self/attr/keycreate — writes to the container's procfs can
+            // fail in static musl builds (proc_pid_attr_write EACCES). This
+            // matches runc's ordering (keyring setup before prepareRootfs).
+            if (!"1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"))) {
+                String seLabel = spec.process != null ? spec.process.selinuxLabel : null;
+                SeLinux.applyKeyCreate(seLabel);
+                Keyring.joinNewSession("_ses." + containerId);
+                SeLinux.clearKeyCreate();
+            }
+
             if (spec.hasNamespace("mount")) {
                 Rootfs.prepare(rootfsPath, spec, idmapFds, idmapUsernsFds,
                         bindSourceFds);
@@ -339,24 +352,6 @@ public final class InitProcess {
 
             if (spec.root != null && spec.root.readonly) {
                 Rootfs.setRootReadonly();
-            }
-
-            // Join a fresh kernel session keyring unless the caller opted out via
-            // --no-new-keyring (we propagate that via env var). Must happen before
-            // the restriction sequence so no seccomp filter can veto keyctl.
-            //
-            // When a SELinux label is configured, write it to
-            // /proc/self/attr/keycreate BEFORE creating the keyring so the
-            // kernel stamps the correct label on the new key. Without this
-            // the keyring inherits the runtime's label and the container
-            // process (running under container_t) cannot access it.
-            // Clear keycreate afterwards so subsequent key operations do not
-            // inherit the override.
-            if (!"1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"))) {
-                String seLabel = spec.process != null ? spec.process.selinuxLabel : null;
-                SeLinux.applyKeyCreate(seLabel);
-                Keyring.joinNewSession("_ses." + containerId);
-                SeLinux.clearKeyCreate();
             }
 
             // Default umask 0022 for the init path (runc compat). The
