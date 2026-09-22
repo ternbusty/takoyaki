@@ -22,6 +22,8 @@ public final class Libc {
             NativeH.prctl.makeInvoker(NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG);
     private static final NativeH.syscall SYSCALL =
             NativeH.syscall.makeInvoker(NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG);
+    private static final NativeH.syscall SYSCALL_PTR2 =
+            NativeH.syscall.makeInvoker(NativeH.C_LONG, NativeH.C_POINTER, NativeH.C_LONG);
     private static final NativeH.ioctl IOCTL =
             NativeH.ioctl.makeInvoker(NativeH.C_POINTER);
 
@@ -125,6 +127,10 @@ public final class Libc {
 
     public static long syscall(long nr, long a1, long a2, long a3, long a4, long a5) {
         return SYSCALL.apply(nr, a1, a2, a3, a4, a5);
+    }
+
+    public static long syscall(long nr, long a1, MemorySegment a2, long a3) {
+        return SYSCALL_PTR2.apply(nr, a1, a2, a3);
     }
 
     public static int geteuid() {
