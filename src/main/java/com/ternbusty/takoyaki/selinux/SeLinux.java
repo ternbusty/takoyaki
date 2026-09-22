@@ -94,8 +94,28 @@ public final class SeLinux {
     public static void applyKeyCreate(String label) {
         if (label == null || label.isEmpty()) return;
         if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
-        if (writeProcAttr("/proc/self/attr/keycreate", label.getBytes(StandardCharsets.UTF_8))) {
+        byte[] data = label.getBytes(StandardCharsets.UTF_8);
+        if (writeProcAttr("/proc/self/attr/keycreate", data)) {
             Logger.debug("selinux keycreate label set: " + label);
+            return;
+        }
+        // FFM write failed — emit diagnostics to stderr for CI visibility
+        String ctx = readProcSelfAttr("current");
+        System.err.println("[keycreate-diag] ctx=" + ctx + " pid=" + Libc.getpid());
+        // Try Java NIO as fallback to compare behavior
+        try {
+            Files.writeString(Path.of("/proc/self/attr/keycreate"), label,
+                    java.nio.file.StandardOpenOption.WRITE);
+            System.err.println("[keycreate-diag] NIO-WRITE-ONLY: OK");
+            return;
+        } catch (IOException e) {
+            System.err.println("[keycreate-diag] NIO-WRITE-ONLY: " + e);
+        }
+        try {
+            Files.writeString(Path.of("/proc/self/attr/keycreate"), label);
+            System.err.println("[keycreate-diag] NIO-DEFAULT: OK");
+        } catch (IOException e) {
+            System.err.println("[keycreate-diag] NIO-DEFAULT: " + e);
         }
     }
 
