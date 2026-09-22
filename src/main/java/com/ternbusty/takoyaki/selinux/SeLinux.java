@@ -1,11 +1,15 @@
 package com.ternbusty.takoyaki.selinux;
 
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.syscall.Libc;
+import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 
 /**
  * Apply a SELinux exec context to the current thread.
@@ -19,17 +23,39 @@ import java.nio.file.StandardOpenOption;
 public final class SeLinux {
     private SeLinux() {}
 
+    private static final int O_WRONLY = NativeH.O_WRONLY();
+    private static final int O_CLOEXEC = NativeH.O_CLOEXEC();
+
+    private static boolean writeProcAttr(String path, byte[] data) {
+        try (Arena arena = Arena.ofConfined()) {
+            int fd = PosixIO.open(arena, path, O_WRONLY | O_CLOEXEC, 0);
+            if (fd < 0) {
+                Logger.warn("selinux open " + path + " failed: " + Libc.strerror(Libc.errno()));
+                return false;
+            }
+            try {
+                var buf = arena.allocate(data.length);
+                buf.copyFrom(java.lang.foreign.MemorySegment.ofArray(data));
+                long n = NativeH.write(fd, buf, data.length);
+                if (n < 0) {
+                    Logger.warn("selinux write " + path + " failed: " + Libc.strerror(Libc.errno()));
+                    return false;
+                }
+                return true;
+            } finally {
+                NativeH.close(fd);
+            }
+        }
+    }
+
     public static void apply(String label) {
         if (label == null || label.isEmpty()) return;
         if (!Files.exists(Path.of("/sys/fs/selinux")) && !Files.exists(Path.of("/sys/fs/selinuxfs"))) {
             Logger.debug("selinux not enabled, skipping label=" + label);
             return;
         }
-        try {
-            Files.writeString(Path.of("/proc/self/attr/exec"), label, StandardOpenOption.WRITE);
+        if (writeProcAttr("/proc/self/attr/exec", label.getBytes(StandardCharsets.UTF_8))) {
             Logger.debug("selinux exec label staged: " + label);
-        } catch (IOException e) {
-            Logger.warn("selinux exec label write failed (label=" + label + "): " + e.getMessage());
         }
     }
 
@@ -39,23 +65,10 @@ public final class SeLinux {
      * the runtime's. No-op when label is null/empty or SELinux is off.
      */
     public static void applyKeyCreate(String label) {
-        if (label == null || label.isEmpty()) {
-            System.err.println("[takoyaki-diag] applyKeyCreate: label null/empty, skipping");
-            return;
-        }
-        Path p = Path.of("/proc/self/attr/keycreate");
-        boolean exists = Files.exists(p);
-        System.err.println("[takoyaki-diag] applyKeyCreate: label=" + label
-                + " keycreate-exists=" + exists);
-        if (!exists) return;
-        try {
-            Files.writeString(p, label, StandardOpenOption.WRITE);
-            System.err.println("[takoyaki-diag] applyKeyCreate: write OK");
+        if (label == null || label.isEmpty()) return;
+        if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
+        if (writeProcAttr("/proc/self/attr/keycreate", label.getBytes(StandardCharsets.UTF_8))) {
             Logger.debug("selinux keycreate label set: " + label);
-        } catch (IOException e) {
-            System.err.println("[takoyaki-diag] applyKeyCreate: write FAILED: " + e);
-            Logger.warn("selinux keycreate label write failed (label=" + label + "): "
-                    + e.getMessage());
         }
     }
 
@@ -64,12 +77,7 @@ public final class SeLinux {
      * override. Writing an empty string resets to the default.
      */
     public static void clearKeyCreate() {
-        Path p = Path.of("/proc/self/attr/keycreate");
-        if (!Files.exists(p)) return;
-        try {
-            Files.writeString(p, "", StandardOpenOption.WRITE);
-        } catch (IOException ignored) {
-            // Best effort: clearing may fail if SELinux is not active.
-        }
+        if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
+        writeProcAttr("/proc/self/attr/keycreate", new byte[0]);
     }
 }
