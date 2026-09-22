@@ -139,6 +139,10 @@ public final class ForeignFeature implements Feature {
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
                         ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG),
                 Linker.Option.firstVariadicArg(1));
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG,
+                        ValueLayout.ADDRESS, ValueLayout.JAVA_LONG),
+                Linker.Option.firstVariadicArg(1));
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG, ValueLayout.ADDRESS),
                 Linker.Option.firstVariadicArg(2));
