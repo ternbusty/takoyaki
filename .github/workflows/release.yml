@@ -60,9 +60,14 @@ jobs:
       - name: Install build dependencies
         # libseccomp-dev for the link step (seccomp() filter installation).
         # gcc is preinstalled on ubuntu runners; bootstrap.c needs it.
+        # musl-tools is needed for the fully-static x86_64 build.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev
+          sudo apt-get install -y libseccomp-dev musl-tools
+
+      - name: Build musl dependencies (x86_64 only)
+        if: matrix.arch == 'x86_64'
+        run: ./scripts/build-musl-deps.sh
 
       - name: Install jextract
         run: |
@@ -81,7 +86,12 @@ jobs:
           cache: 'gradle'
 
       - name: Build native takoyaki
-        run: ./gradlew nativeCompile --no-daemon --no-configuration-cache
+        run: |
+          MUSL_FLAGS=""
+          if [ "$(uname -m)" = "x86_64" ]; then
+            MUSL_FLAGS="-Pmusl -PmuslDepsDir=$HOME/musl-deps/prefix"
+          fi
+          ./gradlew nativeCompile $MUSL_FLAGS --no-daemon --no-configuration-cache
 
       - name: Stage binary + checksum
         run: |

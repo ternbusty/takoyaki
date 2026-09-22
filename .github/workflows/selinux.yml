@@ -27,7 +27,10 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev jq
+          sudo apt-get install -y libseccomp-dev jq musl-tools
+
+      - name: Build musl dependencies
+        run: ./scripts/build-musl-deps.sh
 
       - name: Install GraalVM 25
         uses: graalvm/setup-graalvm@v1
@@ -50,7 +53,8 @@ jobs:
 
       - name: Build native takoyaki
         run: |
-          ./gradlew nativeCompile --no-daemon --no-configuration-cache
+          ./gradlew nativeCompile -Pmusl -PmuslDepsDir=$HOME/musl-deps/prefix \
+            --no-daemon --no-configuration-cache
           ls -lh build/native/nativeCompile/takoyaki
 
       # ── Lima VM ──────────────────────────────────────────────────
