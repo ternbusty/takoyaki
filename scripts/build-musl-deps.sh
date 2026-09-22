@@ -14,6 +14,7 @@ set -euo pipefail
 PREFIX="${1:-$HOME/musl-deps/prefix}"
 BUILD="$(dirname "$PREFIX")/build"
 LIBSECCOMP_VERSION=2.5.5
+ZLIB_VERSION=1.3.1
 ARCH="$(uname -m)"
 
 mkdir -p "$PREFIX/lib" "$PREFIX/include" "$BUILD"
@@ -33,6 +34,16 @@ else
   echo "ERROR: cannot find asm/ kernel headers; install linux-libc-dev" >&2
   exit 1
 fi
+
+# --- zlib (GraalVM links -lz for java.util.zip) ---
+cd "$BUILD"
+if [ ! -d "zlib-$ZLIB_VERSION" ]; then
+  curl -sL "https://github.com/madler/zlib/releases/download/v$ZLIB_VERSION/zlib-$ZLIB_VERSION.tar.gz" | tar xz
+fi
+cd "zlib-$ZLIB_VERSION"
+CC=musl-gcc ./configure --prefix="$PREFIX" --static > /dev/null
+make -j"$(nproc)" > /dev/null
+make install > /dev/null
 
 # --- libseccomp ---
 cd "$BUILD"
