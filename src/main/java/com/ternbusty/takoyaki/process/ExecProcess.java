@@ -113,8 +113,10 @@ public final class ExecProcess {
             // oom_score_adj first, while still privileged; inherited across execve.
             ProcessRestrictions.applyOomScoreAdj(payload.process.oomScoreAdj);
 
-            // I/O priority and scheduler before the restriction sequence.
+            // I/O priority and CPU affinity before scheduler: SCHED_DEADLINE
+            // requires the thread's affinity to include all CPUs.
             ProcessRestrictions.applyIOPriority(payload.process.ioPriority);
+            applyCpuAffinity(payload.process.execCPUAffinity);
             ProcessRestrictions.applyScheduler(payload.process.scheduler);
 
             // NUMA memory policy inherited from the container's linux config.
@@ -249,6 +251,46 @@ public final class ExecProcess {
             Logger.error("exec setup failed: " + e.getMessage());
         }
         PosixIO._exit(255);
+    }
+
+    /**
+     * Apply CPU affinity on the current process (self-targeted, pid=0).
+     * Done here rather than cross-process from ExecCommand because the
+     * parent's sched_setaffinity races with the workload's re-exec on
+     * musl-static x86_64.
+     */
+    private static void applyCpuAffinity(com.ternbusty.takoyaki.spec.Spec.ExecCPUAffinity affinity) {
+        if (affinity != null && affinity.fin != null && !affinity.fin.isEmpty()) {
+            long mask = com.ternbusty.takoyaki.spec.Spec.ExecCPUAffinity.parseCpuList(affinity.fin);
+            try (var a = java.lang.foreign.Arena.ofConfined()) {
+                int size = 128;
+                var seg = a.allocate(size);
+                seg.fill((byte) 0);
+                seg.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0, mask);
+                long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                        0L, (long) size, seg);
+                if (rc != 0) {
+                    Logger.debug("sched_setaffinity(self, " + affinity.fin + "): "
+                            + Libc.strerror(Libc.errno()));
+                } else {
+                    Logger.debug("set CPU affinity to " + affinity.fin);
+                }
+            }
+        } else if (affinity == null || affinity.initial == null || affinity.initial.isEmpty()) {
+            try (var a = java.lang.foreign.Arena.ofConfined()) {
+                int size = 128;
+                var seg = a.allocate(size);
+                seg.fill((byte) 0xFF);
+                long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                        0L, (long) size, seg);
+                if (rc != 0) {
+                    Logger.debug("reset sched_setaffinity(self): "
+                            + Libc.strerror(Libc.errno()));
+                } else {
+                    Logger.debug("reset CPU affinity to all CPUs");
+                }
+            }
+        }
     }
 
     /** Read fd to EOF (retrying EINTR) and return the content as a string. */

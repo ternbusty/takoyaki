@@ -253,10 +253,12 @@ static void exec_bootstrap(void) {
     }
 
     /* Apply initial CPU affinity before any namespace operations.
-     * This sets the affinity on our thread; the child inherits it via clone. */
+     * This sets the affinity on our thread; the child inherits it via clone.
+     * Skip in stage 2 (the re-exec'd workload): the parent sets the final
+     * affinity on us externally; re-applying initial here would overwrite it. */
     {
         const char *cpu_initial = getenv("_TAKOYAKI_EXEC_CPU_INITIAL");
-        if (cpu_initial) {
+        if (cpu_initial && !getenv("_TAKOYAKI_EXEC_STAGE2")) {
             unsigned int mask_val = parse_hex(cpu_initial);
             if (mask_val) {
                 cpu_set_t cpus;

@@ -142,6 +142,11 @@ public final class ExecCommand {
         if (effectiveAffinity == null && spec.process != null) {
             effectiveAffinity = spec.process.execCPUAffinity;
         }
+        // Ensure the payload carries the resolved value so ExecProcess can
+        // apply it self-targeted (avoids cross-process sched_setaffinity race).
+        if (effectiveAffinity != null && process.execCPUAffinity == null) {
+            process.execCPUAffinity = effectiveAffinity;
+        }
 
         ExecPayload payload = new ExecPayload();
         payload.containerId = containerId;
@@ -634,7 +639,10 @@ public final class ExecCommand {
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): "
                         + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): ok");
             }
+            logCpuAffinity(pid);
         }
     }
 
@@ -649,7 +657,24 @@ public final class ExecCommand {
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + "): "
                         + Libc.strerror(Libc.errno()));
+            } else {
+                Logger.debug("reset sched_setaffinity(" + pid + "): ok");
             }
+            logCpuAffinity(pid);
+        }
+    }
+
+    private static void logCpuAffinity(int pid) {
+        try {
+            String status = java.nio.file.Files.readString(
+                    java.nio.file.Path.of("/proc/" + pid + "/status"));
+            for (String line : status.split("\n")) {
+                if (line.startsWith("Cpus_allowed")) {
+                    Logger.debug("  /proc/" + pid + "/status: " + line.trim());
+                }
+            }
+        } catch (Exception e) {
+            Logger.debug("  /proc/" + pid + "/status unreadable: " + e.getMessage());
         }
     }
 }
