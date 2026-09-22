@@ -108,6 +108,18 @@ jobs:
             tests/integration/get-images.sh > /dev/null
           '
 
+      - name: Disable SELinux dontaudit rules
+        run: lima sudo semodule -DB
+
+      - name: Show SELinux context of procfs and binary
+        run: |
+          set -x
+          lima id -Z
+          lima ls -Z /proc/self/attr/keycreate /proc/self/attr/exec
+          lima ls -Z /usr/local/bin/takoyaki
+          lima sudo cat /proc/self/attr/current
+          lima sudo sh -c 'echo test 2>/dev/null > /proc/self/attr/keycreate && echo "write OK" || echo "write FAIL"'
+
       - name: Run runc SELinux bats tests
         run: |
           lima sudo bash -c '
