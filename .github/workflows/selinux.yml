@@ -27,7 +27,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev jq musl-tools
+          sudo apt-get install -y libseccomp-dev jq musl-tools linux-libc-dev
 
       - name: Build musl dependencies
         run: ./scripts/build-musl-deps.sh
