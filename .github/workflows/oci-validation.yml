@@ -28,7 +28,7 @@ jobs:
       - name: Install Go and TAP tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y golang-go make perl libseccomp-dev musl-tools linux-libc-dev
+          sudo apt-get install -y golang-go make perl libseccomp-dev musl-tools linux-libc-dev gperf
 
       - name: Build musl dependencies (x86_64 only)
         if: runner.arch == 'X64'

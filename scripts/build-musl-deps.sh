@@ -5,7 +5,7 @@ set -euo pipefail
 # native-image build.  The resulting prefix is passed to Gradle via
 # -PmuslDepsDir=<PREFIX>.
 #
-# Prerequisites: musl-tools, curl, make, gcc, linux-libc-dev
+# Prerequisites: musl-tools, curl, make, gcc, linux-libc-dev, gperf
 #
 # Usage:
 #   ./scripts/build-musl-deps.sh [PREFIX]

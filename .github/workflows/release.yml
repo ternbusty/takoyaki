@@ -63,7 +63,7 @@ jobs:
         # musl-tools is needed for the fully-static x86_64 build.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libseccomp-dev musl-tools linux-libc-dev
+          sudo apt-get install -y libseccomp-dev musl-tools linux-libc-dev gperf
 
       - name: Build musl dependencies (x86_64 only)
         if: matrix.arch == 'x86_64'
