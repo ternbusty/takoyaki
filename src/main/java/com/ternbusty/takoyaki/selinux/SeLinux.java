@@ -21,8 +21,8 @@ public final class SeLinux {
             int fd = PosixIO.open(arena, path, O_WRONLY | O_CLOEXEC, 0);
             if (fd < 0) {
                 int err = Libc.errno();
-                Logger.warn("selinux open " + path + " failed (errno=" + err + "): "
-                        + Libc.strerror(err));
+                System.err.println("[kc-diag] open FAIL path=" + path
+                        + " errno=" + err + " " + Libc.strerror(err));
                 return false;
             }
             try {
@@ -31,10 +31,14 @@ public final class SeLinux {
                 long n = NativeH.write(fd, buf, data.length);
                 if (n < 0) {
                     int err = Libc.errno();
-                    Logger.warn("selinux write " + path + " failed (errno=" + err + "): "
-                            + Libc.strerror(err));
+                    System.err.println("[kc-diag] write FAIL path=" + path
+                            + " fd=" + fd + " len=" + data.length
+                            + " errno=" + err + " " + Libc.strerror(err)
+                            + " n=" + n);
                     return false;
                 }
+                System.err.println("[kc-diag] write OK path=" + path
+                        + " fd=" + fd + " n=" + n);
                 return true;
             } finally {
                 NativeH.close(fd);
