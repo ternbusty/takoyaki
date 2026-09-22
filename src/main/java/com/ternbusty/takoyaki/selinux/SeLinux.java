@@ -39,12 +39,21 @@ public final class SeLinux {
      * the runtime's. No-op when label is null/empty or SELinux is off.
      */
     public static void applyKeyCreate(String label) {
-        if (label == null || label.isEmpty()) return;
-        if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
+        if (label == null || label.isEmpty()) {
+            System.err.println("[takoyaki-diag] applyKeyCreate: label null/empty, skipping");
+            return;
+        }
+        Path p = Path.of("/proc/self/attr/keycreate");
+        boolean exists = Files.exists(p);
+        System.err.println("[takoyaki-diag] applyKeyCreate: label=" + label
+                + " keycreate-exists=" + exists);
+        if (!exists) return;
         try {
-            Files.writeString(Path.of("/proc/self/attr/keycreate"), label, StandardOpenOption.WRITE);
+            Files.writeString(p, label, StandardOpenOption.WRITE);
+            System.err.println("[takoyaki-diag] applyKeyCreate: write OK");
             Logger.debug("selinux keycreate label set: " + label);
         } catch (IOException e) {
+            System.err.println("[takoyaki-diag] applyKeyCreate: write FAILED: " + e);
             Logger.warn("selinux keycreate label write failed (label=" + label + "): "
                     + e.getMessage());
         }
