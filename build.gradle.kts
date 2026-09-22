@@ -189,10 +189,12 @@ val jextractNative by tasks.registering(Exec::class) {
 // dlopen is non-functional in a static musl binary, so all three standard
 // FFM lookup paths (libraryLookup, loaderLookup, defaultLookup) fail.
 val patchJextractForMusl by tasks.registering {
+    val muslBuild = useMusl
+    val jextDir = jextractDir
     dependsOn(jextractNative)
-    onlyIf { useMusl }
+    onlyIf { muslBuild }
     doLast {
-        val lookupFile = jextractDir.get().asFile.resolve(
+        val lookupFile = jextDir.get().asFile.resolve(
             "com/ternbusty/takoyaki/syscall/gen/NativeH_8.java"
         )
         if (lookupFile.exists()) {
