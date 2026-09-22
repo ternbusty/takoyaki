@@ -628,10 +628,8 @@ public final class ExecCommand {
             int size = 128;
             java.lang.foreign.MemorySegment seg = arena.allocate(size);
             seg.fill((byte) 0);
-            // Write the mask in little-endian long order.
             seg.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0, mask);
-            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
-                    pid, size, seg.address(), 0L, 0L);
+            int rc = com.ternbusty.takoyaki.syscall.gen.NativeH.sched_setaffinity(pid, size, seg);
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): "
                         + Libc.strerror(Libc.errno()));
@@ -642,11 +640,10 @@ public final class ExecCommand {
     /** Reset CPU affinity of pid to all CPUs. See MainProcess.resetCpuAffinity. */
     private static void resetCpuAffinity(int pid) {
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
-            int size = 128; // cpu_set_t: 1024 bits
+            int size = 128;
             java.lang.foreign.MemorySegment mask = arena.allocate(size);
             mask.fill((byte) 0xFF);
-            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
-                    pid, size, mask.address(), 0L, 0L);
+            int rc = com.ternbusty.takoyaki.syscall.gen.NativeH.sched_setaffinity(pid, size, mask);
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + "): "
                         + Libc.strerror(Libc.errno()));

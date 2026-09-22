@@ -255,13 +255,10 @@ public final class MainProcess {
      */
     private static void resetCpuAffinity(int pid) {
         try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
-            // cpu_set_t on Linux is 1024 bits = 128 bytes. Fill it with all-ones.
             int size = 128;
             java.lang.foreign.MemorySegment mask = arena.allocate(size);
             mask.fill((byte) 0xFF);
-            long rc = Libc.syscall(
-                    com.ternbusty.takoyaki.syscall.Constants.NR_sched_setaffinity,
-                    pid, size, mask.address(), 0L, 0L);
+            int rc = com.ternbusty.takoyaki.syscall.gen.NativeH.sched_setaffinity(pid, size, mask);
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + ") failed: "
                         + Libc.strerror(Libc.errno()));
