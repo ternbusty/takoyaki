@@ -4,7 +4,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
 import java.nio.file.Files;
+import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.ArgumentMatchers.*;
@@ -34,7 +36,7 @@ class SeLinuxTest {
             fm.when(() -> Files.exists(any(Path.class))).thenReturn(false);
             SeLinux.apply("system_u:system_r:container_t:s0");
             // Skip path: nothing should have been written.
-            fm.verify(() -> Files.writeString(any(Path.class), anyString()), never());
+            fm.verify(() -> Files.writeString(any(Path.class), anyString(), any(OpenOption[].class)), never());
         }
     }
 
@@ -42,14 +44,15 @@ class SeLinuxTest {
     void labelIsWrittenToAttrExecWhenSelinuxIsMounted() {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.exists(eq(Path.of("/sys/fs/selinux")))).thenReturn(true);
-            fm.when(() -> Files.writeString(any(Path.class), anyString()))
+            fm.when(() -> Files.writeString(any(Path.class), anyString(), any(OpenOption[].class)))
                     .thenReturn(Path.of("/dev/null"));
 
             SeLinux.apply("system_u:system_r:container_t:s0");
 
             fm.verify(() -> Files.writeString(
                     eq(Path.of("/proc/self/attr/exec")),
-                    eq("system_u:system_r:container_t:s0")));
+                    eq("system_u:system_r:container_t:s0"),
+                    eq(StandardOpenOption.WRITE)));
         }
     }
 
@@ -57,7 +60,7 @@ class SeLinuxTest {
     void writeFailureIsLoggedNotPropagated() {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
             fm.when(() -> Files.exists(any(Path.class))).thenReturn(true);
-            fm.when(() -> Files.writeString(any(Path.class), anyString()))
+            fm.when(() -> Files.writeString(any(Path.class), anyString(), any(OpenOption[].class)))
                     .thenThrow(new java.io.IOException("EPERM"));
             assertDoesNotThrow(() -> SeLinux.apply("label"));
         }
