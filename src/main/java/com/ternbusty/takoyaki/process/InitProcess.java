@@ -493,19 +493,46 @@ public final class InitProcess {
                         "startContainer", hookEnv);
             }
 
-            // Final RLIMIT_NOFILE restore via raw syscall: GraalVM's
-            // runtime may raise RLIMIT_NOFILE.soft to match hard at any
-            // point. Use the raw prlimit64 syscall to restore the spec
-            // value as the very last step before execve, bypassing FFM.
+            // Final RLIMIT_NOFILE restore: read current, set via raw
+            // syscall, read back to verify.
             if (spec.process.rlimits != null) {
                 for (var rl : spec.process.rlimits) {
                     if ("RLIMIT_NOFILE".equals(rl.type)) {
+                        // Read BEFORE set
+                        var before = arena.allocate(16, 8);
+                        Libc.syscall(Constants.NR_prlimit64,
+                                0L, (long) Constants.RLIMIT_NOFILE,
+                                0L, before.address(), 0L);
+                        long bSoft = before.get(java.lang.foreign.ValueLayout.JAVA_LONG, 0);
+                        long bHard = before.get(java.lang.foreign.ValueLayout.JAVA_LONG, 8);
+                        // Set via raw syscall
                         var seg = arena.allocate(16, 8);
                         seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0, rl.soft);
                         seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8, rl.hard);
-                        Libc.syscall(Constants.NR_prlimit64,
+                        long setRc = Libc.syscall(Constants.NR_prlimit64,
                                 0L, (long) Constants.RLIMIT_NOFILE,
                                 seg.address(), 0L, 0L);
+                        // Also try via FFM prlimit64 binding
+                        int ffiRc = Libc.prlimit64(arena, 0,
+                                Constants.RLIMIT_NOFILE, rl.soft, rl.hard);
+                        // Read AFTER set
+                        var after = arena.allocate(16, 8);
+                        Libc.syscall(Constants.NR_prlimit64,
+                                0L, (long) Constants.RLIMIT_NOFILE,
+                                0L, after.address(), 0L);
+                        long aSoft = after.get(java.lang.foreign.ValueLayout.JAVA_LONG, 0);
+                        long aHard = after.get(java.lang.foreign.ValueLayout.JAVA_LONG, 8);
+                        int errno = Libc.errno();
+                        String dbg = "NOFILE_DEBUG init: before=" + bSoft + "/" + bHard
+                                + " raw_rc=" + setRc + " ffi_rc=" + ffiRc
+                                + " errno=" + errno
+                                + " RLIMIT_NOFILE=" + Constants.RLIMIT_NOFILE
+                                + " NR_prlimit64=" + Constants.NR_prlimit64
+                                + " wanted=" + rl.soft + "/" + rl.hard
+                                + " after=" + aSoft + "/" + aHard;
+                        Logger.warn(dbg);
+                        System.err.println(dbg);
+                        System.err.flush();
                         break;
                     }
                 }
