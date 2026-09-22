@@ -464,15 +464,14 @@ public final class InitProcess {
             String[] argv = spec.process.args.toArray(new String[0]);
             Logger.info("executing: " + String.join(" ", argv));
 
-            // Apply RLIMIT_AS LAST — after the JVM has done all its heap
-            // and address-space provisioning. If we did this earlier, a low
-            // RLIMIT_AS (e.g. 1 GiB) would push the JVM's already-mapped heap
-            // over the limit and the very next allocation would OOM. The
-            // about-to-execve user process picks up the new limits.
-            // Other rlimits were already applied above (before cap drop).
+            // Apply ALL rlimits right before execve. RLIMIT_AS must be
+            // deferred to here (after the JVM has provisioned its heap).
+            // Other rlimits were already applied above (before cap drop),
+            // but we re-apply them here because GraalVM's runtime may
+            // adjust RLIMIT_NOFILE between the initial apply and exec.
             if (spec.process.rlimits != null) {
-                com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(
-                        Libc.getpid(), spec.process.rlimits, "RLIMIT_AS");
+                com.ternbusty.takoyaki.syscall.Rlimit.apply(
+                        Libc.getpid(), spec.process.rlimits);
             }
 
             // startContainer hooks: last chance for the runtime to poke around

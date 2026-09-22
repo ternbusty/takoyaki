@@ -121,7 +121,7 @@ public final class Libc {
     }
 
     public static int prlimit64(Arena arena, int pid, int resource, long softCur, long hardMax) {
-        MemorySegment newLim = arena.allocate(16);
+        MemorySegment newLim = arena.allocate(16, 8);
         newLim.set(ValueLayout.JAVA_LONG, 0, softCur);
         newLim.set(ValueLayout.JAVA_LONG, 8, hardMax);
         return NativeH.prlimit64(pid, resource, newLim, MemorySegment.NULL);

@@ -228,13 +228,14 @@ public final class ExecProcess {
 
             String[] argv = payload.process.args.toArray(new String[0]);
 
-            // RLIMIT_AS dead-last: a low RLIMIT_AS applied any earlier could push
-            // the already-mapped SubstrateVM heap over the limit and abort us
-            // before execve. Other rlimits were already applied above (before
-            // cap drop). Same deferred pattern as InitProcess.
+            // Apply ALL rlimits right before execve. RLIMIT_AS must be
+            // deferred to here (after the JVM has provisioned its heap).
+            // Other rlimits were already applied above (before cap drop),
+            // but we re-apply them here because GraalVM's runtime may
+            // adjust RLIMIT_NOFILE between the initial apply and exec.
             if (payload.process.rlimits != null) {
-                com.ternbusty.takoyaki.syscall.Rlimit.applyOnly(Libc.getpid(),
-                        payload.process.rlimits, "RLIMIT_AS");
+                com.ternbusty.takoyaki.syscall.Rlimit.apply(Libc.getpid(),
+                        payload.process.rlimits);
             }
 
             Logger.debug("setns_init: about to exec");
