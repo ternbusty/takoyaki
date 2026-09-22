@@ -136,13 +136,24 @@ jobs:
           # v1 hierarchies (net_cls, blkio, hugetlb) that the kernel does not
           # expose. Ubuntu 22.04+ is cgroup-v2 only.
           SKIP_V1_PATTERN='^(linux_cgroups_(network|blkio|hugetlb|devices|pids|relative_(blkio|network|hugetlb|devices|pids))|linux_cgroups_relative_cpus|linux_cgroups_relative_memory|linux_cgroups_cpus|linux_cgroups_memory|delete_(only_create_)?resources)$'
-          # Known-broken upstream tests in runtime-tools itself. pidfile.t's
-          # PreDelete calls Kill on a container that has already exited (its
-          # process is `true`), then propagates the Kill error as the test
-          # result. The OCI spec REQUIRES Kill on a stopped container to error,
-          # so any spec-compliant runtime fails this test by construction. See
-          # https://github.com/opencontainers/runtime-tools/issues/805.
-          SKIP_BROKEN_PATTERN='^pidfile$'
+          # Known-broken upstream tests in runtime-tools itself.
+          #
+          # pidfile: PreDelete calls Kill on a container that has already
+          #   exited (its process is `true`), then propagates the Kill error
+          #   as the test result. The OCI spec REQUIRES Kill on a stopped
+          #   container to error, so any spec-compliant runtime fails this
+          #   test by construction. See
+          #   https://github.com/opencontainers/runtime-tools/issues/805.
+          #
+          # process_rlimits: The container process (runtimetest) is a Go
+          #   binary. Since Go 1.19, the Go runtime raises RLIMIT_NOFILE
+          #   soft to match hard at startup (see golang/go#46279). Go's
+          #   syscall.Getrlimit — which runtimetest uses — returns the
+          #   RAISED kernel value, not the original. No Go version
+          #   intercepts Getrlimit to restore the original soft limit, so
+          #   any spec with soft < hard for RLIMIT_NOFILE will always read
+          #   back soft == hard. This is a Go limitation, not a runtime bug.
+          SKIP_BROKEN_PATTERN='^(pidfile|process_rlimits)$'
           for t in validation/*/*.t; do
             name=$(basename "$t" .t)
             if echo "$name" | grep -qE "$SKIP_V1_PATTERN"; then

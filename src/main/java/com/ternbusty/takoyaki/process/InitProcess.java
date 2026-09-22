@@ -493,51 +493,6 @@ public final class InitProcess {
                         "startContainer", hookEnv);
             }
 
-            // Final RLIMIT_NOFILE restore: read current, set via raw
-            // syscall, read back to verify.
-            if (spec.process.rlimits != null) {
-                for (var rl : spec.process.rlimits) {
-                    if ("RLIMIT_NOFILE".equals(rl.type)) {
-                        // Read BEFORE set
-                        var before = arena.allocate(16, 8);
-                        Libc.syscall(Constants.NR_prlimit64,
-                                0L, (long) Constants.RLIMIT_NOFILE,
-                                0L, before.address(), 0L);
-                        long bSoft = before.get(java.lang.foreign.ValueLayout.JAVA_LONG, 0);
-                        long bHard = before.get(java.lang.foreign.ValueLayout.JAVA_LONG, 8);
-                        // Set via raw syscall
-                        var seg = arena.allocate(16, 8);
-                        seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0, rl.soft);
-                        seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8, rl.hard);
-                        long setRc = Libc.syscall(Constants.NR_prlimit64,
-                                0L, (long) Constants.RLIMIT_NOFILE,
-                                seg.address(), 0L, 0L);
-                        // Also try via FFM prlimit64 binding
-                        int ffiRc = Libc.prlimit64(arena, 0,
-                                Constants.RLIMIT_NOFILE, rl.soft, rl.hard);
-                        // Read AFTER set
-                        var after = arena.allocate(16, 8);
-                        Libc.syscall(Constants.NR_prlimit64,
-                                0L, (long) Constants.RLIMIT_NOFILE,
-                                0L, after.address(), 0L);
-                        long aSoft = after.get(java.lang.foreign.ValueLayout.JAVA_LONG, 0);
-                        long aHard = after.get(java.lang.foreign.ValueLayout.JAVA_LONG, 8);
-                        int errno = Libc.errno();
-                        String dbg = "NOFILE_DEBUG init: before=" + bSoft + "/" + bHard
-                                + " raw_rc=" + setRc + " ffi_rc=" + ffiRc
-                                + " errno=" + errno
-                                + " RLIMIT_NOFILE=" + Constants.RLIMIT_NOFILE
-                                + " NR_prlimit64=" + Constants.NR_prlimit64
-                                + " wanted=" + rl.soft + "/" + rl.hard
-                                + " after=" + aSoft + "/" + aHard;
-                        Logger.warn(dbg);
-                        System.err.println(dbg);
-                        System.err.flush();
-                        break;
-                    }
-                }
-            }
-
             // Re-apply CLOEXEC on all FDs >= 3. The first closeAllAbove(0)
             // ran earlier, but Java code between then and now may have opened
             // new FDs (e.g. Files.readString for /etc/passwd, FFM library
