@@ -19,7 +19,7 @@ import com.ternbusty.takoyaki.syscall.Libc;
  *
  * The caller is expected to be the single-threaded process (or forked child)
  * that will execve into the workload next: AppArmor/SELinux labels are staged
- * on the calling thread's /proc/self/attr files and only take effect at that
+ * on the calling thread's /proc/thread-self/attr files and only take effect at that
  * execve.
  */
 public final class ProcessRestrictions {

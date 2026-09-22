@@ -108,19 +108,8 @@ jobs:
             tests/integration/get-images.sh > /dev/null
           '
 
-      - name: Test procfs attr write from shell (before semodule -DB)
-        run: |
-          set -x
-          lima sudo sh -c 'echo "system_u:system_r:container_t:s0" > /proc/self/attr/keycreate && echo "keycreate write OK" || echo "keycreate write FAIL"'
-          lima sudo sh -c 'cat /proc/self/status | grep Threads'
-
       - name: Disable SELinux dontaudit rules
         run: lima sudo semodule -DB
-
-      - name: Test procfs attr write from shell (after semodule -DB)
-        run: |
-          set -x
-          lima sudo sh -c 'echo "system_u:system_r:container_t:s0" > /proc/self/attr/keycreate && echo "keycreate write OK" || echo "keycreate write FAIL"'
 
       - name: Run runc SELinux bats tests
         run: |
@@ -131,10 +120,6 @@ jobs:
             chmod +x ./runc
             bats -t tests/integration/selinux.bats
           '
-
-      - name: Show keycreate diagnostic log
-        if: always()
-        run: lima cat /tmp/takoyaki-keycreate-diag.log 2>/dev/null || echo "No diagnostic log."
 
       - name: Show AVC denials (if any)
         if: always()

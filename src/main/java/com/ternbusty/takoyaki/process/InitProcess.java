@@ -258,10 +258,8 @@ public final class InitProcess {
 
             // Join a fresh kernel session keyring unless the caller opted out via
             // --no-new-keyring (we propagate that via env var). Done BEFORE
-            // pivot_root so the keycreate label write goes to the host's
-            // /proc/self/attr/keycreate — writes to the container's procfs can
-            // fail in static musl builds (proc_pid_attr_write EACCES). This
-            // matches runc's ordering (keyring setup before prepareRootfs).
+            // pivot_root to match runc's ordering (keyring setup before
+            // prepareRootfs).
             if (!"1".equals(System.getenv("_TAKOYAKI_NO_NEW_KEYRING"))) {
                 String seLabel = spec.process != null ? spec.process.selinuxLabel : null;
                 SeLinux.applyKeyCreate(seLabel);

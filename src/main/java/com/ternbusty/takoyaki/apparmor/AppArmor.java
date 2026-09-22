@@ -9,8 +9,8 @@ import java.nio.file.Path;
 
 /**
  * Apply an AppArmor profile to the calling thread by writing to
- * {@code /proc/self/attr/apparmor/exec} (preferred, kernel >=5.8) or
- * {@code /proc/self/attr/exec} (legacy). The profile takes effect on the next
+ * {@code /proc/thread-self/attr/apparmor/exec} (preferred, kernel >=5.8) or
+ * {@code /proc/thread-self/attr/exec} (legacy). The profile takes effect on the next
  * exec(2) on this thread.
  *
  * Stage this before PR_SET_NO_NEW_PRIVS and before dropping privileges. It is
@@ -30,11 +30,11 @@ public final class AppArmor {
         byte[] command = ("exec " + profile).getBytes();
 
         // Prefer the newer per-LSM path; fall back to the legacy attr/exec.
-        if (writeAttr("/proc/self/attr/apparmor/exec", command)) {
+        if (writeAttr("/proc/thread-self/attr/apparmor/exec", command)) {
             Logger.debug("apparmor profile staged via attr/apparmor/exec: " + profile);
             return;
         }
-        if (writeAttr("/proc/self/attr/exec", command)) {
+        if (writeAttr("/proc/thread-self/attr/exec", command)) {
             Logger.debug("apparmor profile staged via attr/exec: " + profile);
             return;
         }

@@ -48,7 +48,7 @@ class SeLinuxTest {
     @Test
     void applyKeyCreateSkipsWhenFileNotExists() {
         try (MockedStatic<Files> fm = mockStatic(Files.class)) {
-            fm.when(() -> Files.exists(eq(Path.of("/proc/self/attr/keycreate")))).thenReturn(false);
+            fm.when(() -> Files.exists(eq(Path.of("/proc/thread-self/attr/keycreate")))).thenReturn(false);
             assertDoesNotThrow(() -> SeLinux.applyKeyCreate("system_u:system_r:container_t:s0"));
         }
     }
