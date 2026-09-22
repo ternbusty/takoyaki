@@ -46,11 +46,14 @@ public final class ExecProcess {
 
     public static void run() {
         Logger.setContext("exec");
-        // Inherit log file/format from the CLI so debug output goes to --log
-        // rather than leaking to stderr (same pattern as InitProcess).
         String execLogFile = System.getenv("_TAKOYAKI_LOG_FILE");
         if (execLogFile != null) {
             Logger.setLogFile(execLogFile);
+            if ("1".equals(System.getenv("_TAKOYAKI_EXEC_DEBUG"))) {
+                Logger.setLevel(Logger.Level.DEBUG);
+            } else {
+                Logger.setLevel(Logger.Level.WARN);
+            }
         }
         String execLogFormat = System.getenv("_TAKOYAKI_LOG_FORMAT");
         if ("json".equalsIgnoreCase(execLogFormat)) {
@@ -249,7 +252,11 @@ public final class ExecProcess {
             System.err.println("exec " + argv[0] + ": " + errMsg);
             Logger.error("execvp failed: " + errMsg);
         } catch (Exception e) {
-            Logger.error("exec setup failed: " + e.getMessage());
+            String msg = e.getMessage();
+            if (msg != null) {
+                System.err.println(msg);
+            }
+            Logger.error("exec setup failed: " + msg);
         }
         PosixIO._exit(255);
     }

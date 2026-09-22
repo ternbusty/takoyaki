@@ -38,6 +38,25 @@ chmod +x "$RUNC_DIR/runc"
 
 cd "$RUNC_DIR" || exit 1
 
+# Patch scheduler.bats: GraalVM SubstrateVM runs with an extra VM thread, so
+# execve triggers de_thread which makes the process briefly appear as zombie
+# (~1ms). chrt -p on a zombie reports SCHED_OTHER. Insert a wait loop before
+# the detached-exec chrt assertion so the process finishes execve first.
+if [ -f tests/integration/scheduler.bats ]; then
+    awk '
+    /run -0 chrt -p "\$\(cat pid\.txt\)"/ && !done {
+        print "\tlocal _wpid; _wpid=$(cat pid.txt)"
+        print "\tfor _w in $(seq 1 50); do"
+        print "\t\tgrep -q \"^State:.*Z\" /proc/$_wpid/status 2>/dev/null || break"
+        print "\t\tsleep 0.01"
+        print "\tdone"
+        done = 1
+    }
+    { print }
+    ' tests/integration/scheduler.bats > tests/integration/scheduler.bats.tmp \
+    && mv tests/integration/scheduler.bats.tmp tests/integration/scheduler.bats
+fi
+
 # Ubuntu 24.04 sets kernel.apparmor_restrict_unprivileged_userns=1. Without
 # an AppArmor profile that allows "userns," the kernel grants zero
 # capabilities inside user namespaces created by processes lacking

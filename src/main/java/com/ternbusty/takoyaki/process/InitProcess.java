@@ -127,12 +127,14 @@ public final class InitProcess {
 
     public static void run() {
         Logger.setContext("init");
-        // Inherit log configuration from the main process so that debug/warn
-        // output goes to the log file instead of leaking to stderr. Must be
-        // configured BEFORE any Logger call.
         String initLogFile = System.getenv("_TAKOYAKI_LOG_FILE");
         if (initLogFile != null) {
             Logger.setLogFile(initLogFile);
+            if ("1".equals(System.getenv("_TAKOYAKI_BOOTSTRAP_DEBUG"))) {
+                Logger.setLevel(Logger.Level.DEBUG);
+            } else {
+                Logger.setLevel(Logger.Level.WARN);
+            }
         }
         String initLogFormat = System.getenv("_TAKOYAKI_LOG_FORMAT");
         if ("json".equalsIgnoreCase(initLogFormat)) {

@@ -105,8 +105,9 @@ public final class ProcessRestrictions {
                     0L, seg.address(), 0L, 0L, 0L);
             if (rc != 0) {
                 int err = Libc.errno();
-                Logger.warn("sched_setattr(" + scheduler.policy + ") failed: "
-                        + Libc.strerror(err) + " (errno=" + err + ")");
+                String msg = "sched_setattr(" + scheduler.policy + ") failed: "
+                        + Libc.strerror(err) + " (errno=" + err + ")";
+                throw new RuntimeException(msg);
             } else {
                 Logger.debug("sched_setattr policy=" + scheduler.policy);
             }
