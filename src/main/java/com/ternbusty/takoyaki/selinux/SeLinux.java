@@ -60,19 +60,23 @@ public final class SeLinux {
     public static void applyKeyCreate(String label) {
         if (label == null || label.isEmpty()) return;
         if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
+        // Diagnostic: check thread count — kernel 6.2+ rejects procfs attr
+        // writes from multi-threaded processes (nr_threads > 1).
+        try {
+            String status = Files.readString(Path.of("/proc/self/status"));
+            for (String line : status.split("\n")) {
+                if (line.startsWith("Threads:")) {
+                    System.err.println("[kc-diag] " + line.trim());
+                    break;
+                }
+            }
+        } catch (Exception ignored) {}
         byte[] data = label.getBytes(StandardCharsets.UTF_8);
         if (writeProcAttr("/proc/self/attr/keycreate", data)) {
             Logger.debug("selinux keycreate label set: " + label);
             return;
         }
-        // FFM write failed — try FileOutputStream as fallback
-        try (var fos = new java.io.FileOutputStream("/proc/self/attr/keycreate")) {
-            fos.write(data);
-            System.err.println("[kc-diag] NIO fallback OK");
-            Logger.debug("selinux keycreate label set (nio): " + label);
-        } catch (Exception e) {
-            System.err.println("[kc-diag] NIO fallback FAIL: " + e);
-        }
+        System.err.println("[kc-diag] write failed, label=" + label);
     }
 
     public static void clearKeyCreate() {
