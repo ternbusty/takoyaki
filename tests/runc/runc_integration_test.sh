@@ -46,8 +46,8 @@ if [ -f tests/integration/scheduler.bats ]; then
     awk '
     /run -0 chrt -p "\$\(cat pid\.txt\)"/ && !done {
         print "\tlocal _wpid; _wpid=$(cat pid.txt)"
-        print "\tfor _w in $(seq 1 50); do"
-        print "\t\tgrep -q \"^State:.*Z\" /proc/$_wpid/status 2>/dev/null || break"
+        print "\tfor _w in $(seq 1 100); do"
+        print "\t\t[[ \"$(awk '"'"'/^Threads:/{print $2}'"'"' /proc/$_wpid/status 2>/dev/null)\" == \"1\" ]] && break"
         print "\t\tsleep 0.01"
         print "\tdone"
         done = 1
