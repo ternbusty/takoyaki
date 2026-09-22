@@ -118,6 +118,10 @@ jobs:
             bats -t tests/integration/selinux.bats
           '
 
+      - name: Show keycreate diagnostic log
+        if: always()
+        run: lima cat /tmp/takoyaki-keycreate-diag.log 2>/dev/null || echo "No diagnostic log."
+
       - name: Show AVC denials (if any)
         if: always()
         run: lima sudo ausearch -i -m avc,user_avc -ts boot 2>/dev/null || echo "No AVC denials found."

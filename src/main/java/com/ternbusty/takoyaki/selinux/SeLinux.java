@@ -54,12 +54,38 @@ public final class SeLinux {
     }
 
     public static void applyKeyCreate(String label) {
-        if (label == null || label.isEmpty()) return;
-        if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
+        if (label == null || label.isEmpty()) {
+            diagLog("applyKeyCreate: skipped (label=" + label + ")");
+            return;
+        }
+        if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) {
+            diagLog("applyKeyCreate: skipped (keycreate file not found)");
+            return;
+        }
         byte[] data = label.getBytes(StandardCharsets.UTF_8);
-        if (writeProcAttr("/proc/self/attr/keycreate", data)) {
+        boolean ok = writeProcAttr("/proc/self/attr/keycreate", data);
+        diagLog("applyKeyCreate: label=" + label + " ok=" + ok
+                + " verify=" + readProcSelfAttr("keycreate"));
+        if (ok) {
             Logger.debug("selinux keycreate label set: " + label);
         }
+    }
+
+    private static String readProcSelfAttr(String attr) {
+        try {
+            return Files.readString(Path.of("/proc/self/attr/" + attr)).trim();
+        } catch (Exception e) {
+            return "<err:" + e.getMessage() + ">";
+        }
+    }
+
+    private static void diagLog(String msg) {
+        try {
+            Files.writeString(Path.of("/tmp/takoyaki-keycreate-diag.log"),
+                    msg + "\n",
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception ignored) {}
     }
 
     public static void clearKeyCreate() {
