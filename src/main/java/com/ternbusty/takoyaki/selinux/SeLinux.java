@@ -30,7 +30,11 @@ public final class SeLinux {
         try (Arena arena = Arena.ofConfined()) {
             int fd = PosixIO.open(arena, path, O_WRONLY | O_CLOEXEC, 0);
             if (fd < 0) {
-                Logger.warn("selinux open " + path + " failed: " + Libc.strerror(Libc.errno()));
+                int err = Libc.errno();
+                Logger.warn("selinux open " + path + " failed (errno=" + err + "): "
+                        + Libc.strerror(err));
+                diagLog("OPEN_FAIL path=" + path + " errno=" + err
+                        + " ctx=" + readProcSelfAttr("current"));
                 return false;
             }
             try {
@@ -38,13 +42,36 @@ public final class SeLinux {
                 buf.copyFrom(java.lang.foreign.MemorySegment.ofArray(data));
                 long n = NativeH.write(fd, buf, data.length);
                 if (n < 0) {
-                    Logger.warn("selinux write " + path + " failed: " + Libc.strerror(Libc.errno()));
+                    int err = Libc.errno();
+                    Logger.warn("selinux write " + path + " failed (errno=" + err + "): "
+                            + Libc.strerror(err));
+                    diagLog("WRITE_FAIL path=" + path + " errno=" + err
+                            + " data=" + new String(data, StandardCharsets.UTF_8)
+                            + " ctx=" + readProcSelfAttr("current"));
                     return false;
                 }
                 return true;
             } finally {
                 NativeH.close(fd);
             }
+        }
+    }
+
+    private static String readProcSelfAttr(String attr) {
+        try {
+            return Files.readString(Path.of("/proc/self/attr/" + attr)).trim();
+        } catch (IOException e) {
+            return "<unreadable:" + e.getMessage() + ">";
+        }
+    }
+
+    private static void diagLog(String msg) {
+        try {
+            Files.writeString(Path.of("/tmp/takoyaki-selinux-diag.log"),
+                    msg + "\n",
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.APPEND);
+        } catch (IOException ignored) {
         }
     }
 
