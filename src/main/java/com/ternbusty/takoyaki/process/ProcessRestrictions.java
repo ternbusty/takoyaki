@@ -102,9 +102,11 @@ public final class ProcessRestrictions {
             seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 40,
                     scheduler.period != null ? scheduler.period : 0L);
             long rc = Libc.syscall(Constants.NR_sched_setattr,
-                    0L, seg, 0L);
+                    0L, seg.address(), 0L, 0L, 0L);
             if (rc != 0) {
-                Logger.warn("sched_setattr failed: " + Libc.strerror(Libc.errno()));
+                int err = Libc.errno();
+                Logger.warn("sched_setattr(" + scheduler.policy + ") failed: "
+                        + Libc.strerror(err) + " (errno=" + err + ")");
             } else {
                 Logger.debug("sched_setattr policy=" + scheduler.policy);
             }
