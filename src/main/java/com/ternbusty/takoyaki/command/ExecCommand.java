@@ -629,7 +629,8 @@ public final class ExecCommand {
             java.lang.foreign.MemorySegment seg = arena.allocate(size);
             seg.fill((byte) 0);
             seg.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0, mask);
-            int rc = com.ternbusty.takoyaki.syscall.gen.NativeH.sched_setaffinity(pid, size, seg);
+            long rc = Libc.syscall(com.ternbusty.takoyaki.syscall.Constants.NR_sched_setaffinity,
+                    (long) pid, (long) size, seg);
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): "
                         + Libc.strerror(Libc.errno()));
@@ -643,7 +644,8 @@ public final class ExecCommand {
             int size = 128;
             java.lang.foreign.MemorySegment mask = arena.allocate(size);
             mask.fill((byte) 0xFF);
-            int rc = com.ternbusty.takoyaki.syscall.gen.NativeH.sched_setaffinity(pid, size, mask);
+            long rc = Libc.syscall(com.ternbusty.takoyaki.syscall.Constants.NR_sched_setaffinity,
+                    (long) pid, (long) size, mask);
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + "): "
                         + Libc.strerror(Libc.errno()));

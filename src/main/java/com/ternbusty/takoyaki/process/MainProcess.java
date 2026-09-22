@@ -258,7 +258,9 @@ public final class MainProcess {
             int size = 128;
             java.lang.foreign.MemorySegment mask = arena.allocate(size);
             mask.fill((byte) 0xFF);
-            int rc = com.ternbusty.takoyaki.syscall.gen.NativeH.sched_setaffinity(pid, size, mask);
+            long rc = Libc.syscall(
+                    com.ternbusty.takoyaki.syscall.Constants.NR_sched_setaffinity,
+                    (long) pid, (long) size, mask);
             if (rc != 0) {
                 Logger.debug("sched_setaffinity(" + pid + ") failed: "
                         + Libc.strerror(Libc.errno()));
