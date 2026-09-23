@@ -28,6 +28,10 @@ public final class ForeignFeature implements Feature {
         // (int,int,int)->int  (socket)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
+        // (int,ptr,int,int)->int  (epoll_wait)
+        reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                ValueLayout.JAVA_INT, ValueLayout.ADDRESS,
+                ValueLayout.JAVA_INT, ValueLayout.JAVA_INT));
         // (int,int,int,ptr)->int  (socketpair)
         reg(FunctionDescriptor.of(ValueLayout.JAVA_INT,
                 ValueLayout.JAVA_INT, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT,
