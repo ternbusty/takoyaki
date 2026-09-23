@@ -276,6 +276,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.gen",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
+                "--initialize-at-run-time=com.ternbusty.takoyaki.ioloop",
             )
             if (useMusl) {
                 // --libc=musl plus --static produces a fully static

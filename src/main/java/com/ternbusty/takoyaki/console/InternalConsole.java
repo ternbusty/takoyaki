@@ -57,7 +57,9 @@ public final class InternalConsole {
      * {@link #startIOCopy()} to pick up.
      */
     public void startListening() {
-        listenerThread = new Thread(() -> {
+        listenerThread = Thread.ofVirtual()
+                .name("internal-console-listener")
+                .start(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 int listenFd = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
                 if (listenFd < 0) {
@@ -93,9 +95,7 @@ public final class InternalConsole {
                     Logger.warn("internal console: failed to receive master fd");
                 }
             }
-        }, "internal-console-listener");
-        listenerThread.setDaemon(true);
-        listenerThread.start();
+        });
     }
 
     /** Wait for the listener thread to complete (connection established). */
@@ -132,8 +132,10 @@ public final class InternalConsole {
      * Start I/O copying for a given master fd (used by both run and exec paths).
      */
     public static Thread startIOCopyForFd(int masterFd) {
-        // master → stdout thread (the important direction for bats tests).
-        Thread reader = new Thread(() -> {
+        // master → stdout (the important direction for bats tests).
+        Thread reader = Thread.ofVirtual()
+                .name("pty-to-stdout")
+                .start(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 byte[] buf = new byte[8192];
                 while (true) {
@@ -143,12 +145,12 @@ public final class InternalConsole {
                     System.out.flush();
                 }
             } catch (Exception ignored) {}
-        }, "pty-to-stdout");
-        reader.setDaemon(true);
-        reader.start();
+        });
 
-        // stdin → master thread (for interactive use).
-        Thread writer = new Thread(() -> {
+        // stdin → master (for interactive use).
+        Thread.ofVirtual()
+                .name("stdin-to-pty")
+                .start(() -> {
             try (Arena arena = Arena.ofConfined()) {
                 byte[] buf = new byte[4096];
                 while (true) {
@@ -158,9 +160,7 @@ public final class InternalConsole {
                     PosixIO.write(arena, masterFd, chunk);
                 }
             } catch (Exception ignored) {}
-        }, "stdin-to-pty");
-        writer.setDaemon(true);
-        writer.start();
+        });
 
         return reader;
     }

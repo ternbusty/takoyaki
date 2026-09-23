@@ -178,4 +178,24 @@ public final class Constants {
     public static final long MOUNT_ATTR_NOSYMFOLLOW  = 0x200000L;
     public static final long MOUNT_ATTR__ATIME       = 0x70L;
     public static final int  AT_RECURSIVE            = 0x8000;
+
+    // ── epoll(7) ─────────────────────────────────────────────────────────
+    public static final int EPOLL_CLOEXEC  = NativeH.EPOLL_CLOEXEC();
+    public static final int EPOLL_CTL_ADD  = NativeH.EPOLL_CTL_ADD();
+    public static final int EPOLL_CTL_DEL  = NativeH.EPOLL_CTL_DEL();
+    public static final int EPOLL_CTL_MOD  = NativeH.EPOLL_CTL_MOD();
+    public static final int EPOLLIN        = NativeH.EPOLLIN();
+    public static final int EPOLLOUT       = NativeH.EPOLLOUT();
+    public static final int EPOLLERR       = NativeH.EPOLLERR();
+    public static final int EPOLLHUP       = NativeH.EPOLLHUP();
+    public static final int EPOLLONESHOT   = NativeH.EPOLLONESHOT();
+
+    // ── fcntl / O_* ───────────────────────────────────────────────────────
+    public static final int O_NONBLOCK = NativeH.O_NONBLOCK();
+    public static final int F_GETFL    = NativeH.F_GETFL();
+    public static final int F_SETFL    = NativeH.F_SETFL();
+    public static final int EAGAIN     = NativeH.EAGAIN();
+
+    // ── signals ──────────────────────────────────────────────────────────
+    public static final int SIGWINCH   = NativeH.SIGWINCH();
 }

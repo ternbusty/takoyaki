@@ -24,6 +24,8 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/un.h>
+#include <sys/epoll.h>
+#include <sys/signalfd.h>
 #include <sys/wait.h>
 
 /* kernel / device / namespace constants */
