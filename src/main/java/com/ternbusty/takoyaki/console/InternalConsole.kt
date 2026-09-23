@@ -27,7 +27,8 @@ class InternalConsole private constructor(
     val socketPath: String,
 ) {
     @Volatile
-    private var masterFd: Int = -1
+    internal var masterFd: Int = -1
+        private set
 
     @Volatile
     private var stopped: Boolean = false
@@ -70,7 +71,7 @@ class InternalConsole private constructor(
          */
         fun startIOCopyForFd(masterFd: Int): Thread {
             // master -> stdout thread (the important direction for bats tests).
-            val reader = Thread({
+            val reader = Thread.ofVirtual().name("pty-to-stdout").start {
                 try {
                     Arena.ofConfined().use { arena ->
                         val buf = ByteArray(8192)
@@ -83,12 +84,10 @@ class InternalConsole private constructor(
                     }
                 } catch (_: Exception) {
                 }
-            }, "pty-to-stdout")
-            reader.isDaemon = true
-            reader.start()
+            }
 
             // stdin -> master thread (for interactive use).
-            val writer = Thread({
+            Thread.ofVirtual().name("stdin-to-pty").start {
                 try {
                     Arena.ofConfined().use { arena ->
                         val buf = ByteArray(4096)
@@ -101,9 +100,7 @@ class InternalConsole private constructor(
                     }
                 } catch (_: Exception) {
                 }
-            }, "stdin-to-pty")
-            writer.isDaemon = true
-            writer.start()
+            }
 
             return reader
         }
@@ -136,10 +133,10 @@ class InternalConsole private constructor(
     /**
      * Start a thread that listens on the socket, accepts one connection, and
      * receives the PTY master fd via SCM_RIGHTS. The master fd is stashed for
-     * [startIOCopy] to pick up.
+     * [masterFd] to return.
      */
     fun startListening() {
-        listenerThread = Thread({
+        listenerThread = Thread.ofVirtual().name("internal-console-listener").start {
             Arena.ofConfined().use { arena ->
                 val listenFd = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0)
                 if (listenFd < 0) {
@@ -178,9 +175,6 @@ class InternalConsole private constructor(
                     Logger.warn("internal console: failed to receive master fd")
                 }
             }
-        }, "internal-console-listener").also {
-            it.isDaemon = true
-            it.start()
         }
     }
 
@@ -194,15 +188,8 @@ class InternalConsole private constructor(
         return masterFd >= 0
     }
 
-    /**
-     * Start I/O copying between the PTY master and the caller's stdin/stdout.
-     * Returns immediately; copying runs in background threads. Call
-     * [stop] after the container exits to clean up.
-     */
-    fun startIOCopy() {
-        if (masterFd < 0) return
-        ioThread = startIOCopyForFd(masterFd)
-    }
+    /** Return the master fd received from init, or -1 if not yet available. */
+    fun masterFd(): Int = masterFd
 
     /** Clean up: wait for I/O threads to drain, close master fd, remove socket file. */
     fun stop() {

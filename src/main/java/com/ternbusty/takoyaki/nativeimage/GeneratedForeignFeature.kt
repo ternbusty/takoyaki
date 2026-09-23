@@ -19,39 +19,45 @@ class GeneratedForeignFeature : Feature {
 
     override fun duringSetup(access: DuringSetupAccess) {
         var registered = 0
-        for (name in HEADER_CLASSES) {
+        // jextract may split a large header into NativeH, NativeH_1, NativeH_2, ...
+        // Iterate until we hit a class that does not exist.
+        var i = 0
+        while (true) {
+            val name = if (i == 0) BASE_CLASS else "${BASE_CLASS}_$i"
             val header = try {
                 Class.forName(name, false, javaClass.classLoader)
             } catch (_: ClassNotFoundException) {
-                continue
+                break
             }
-            for (fn in header.declaredClasses) {
-                for (f in fn.declaredFields) {
-                    if (f.type != FunctionDescriptor::class.java
-                        || !Modifier.isStatic(f.modifiers)
-                    ) {
-                        continue
-                    }
-                    try {
-                        f.isAccessible = true
-                        RuntimeForeignAccess.registerForDowncall(f.get(null) as FunctionDescriptor)
-                        registered++
-                    } catch (_: Throwable) {
-                        // A descriptor we cannot read is left to ForeignFeature.
-                    }
-                }
-            }
+            registered += scanHeader(header)
+            i++
         }
         println("[GeneratedForeignFeature] registered $registered downcalls")
     }
 
+    private fun scanHeader(header: Class<*>): Int {
+        var count = 0
+        for (fn in header.declaredClasses) {
+            for (f in fn.declaredFields) {
+                if (f.type != FunctionDescriptor::class.java
+                    || !Modifier.isStatic(f.modifiers)
+                ) {
+                    continue
+                }
+                try {
+                    f.isAccessible = true
+                    RuntimeForeignAccess.registerForDowncall(f.get(null) as FunctionDescriptor)
+                    count++
+                } catch (_: Throwable) {
+                    // A descriptor we cannot read is left to ForeignFeature.
+                }
+            }
+        }
+        return count
+    }
+
     companion object {
-        /**
-         * Generated header classes to scan. Missing ones are skipped, so a branch
-         * that has not migrated a given library yet still builds.
-         */
-        private val HEADER_CLASSES = arrayOf(
-            "com.ternbusty.takoyaki.syscall.gen.NativeH",
-        )
+        /** Base class name for jextract-generated headers. */
+        private const val BASE_CLASS = "com.ternbusty.takoyaki.syscall.gen.NativeH"
     }
 }

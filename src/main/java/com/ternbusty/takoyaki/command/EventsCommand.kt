@@ -61,7 +61,7 @@ object EventsCommand {
     private fun startOomWatcher(cg: Path, containerId: String): Thread? {
         val memEvents = cg.resolve("memory.events")
         if (!Files.exists(memEvents)) return null
-        val t = Thread({
+        val t = Thread.ofVirtual().name("oom-watcher").start {
             var lastOomKill = readOomKillCount(memEvents)
             try {
                 cg.fileSystem.newWatchService().use { ws: WatchService ->
@@ -89,9 +89,7 @@ object EventsCommand {
             } catch (_: IOException) {
                 // memory.events not watchable, give up silently
             }
-        }, "oom-watcher")
-        t.isDaemon = true
-        t.start()
+        }
         return t
     }
 

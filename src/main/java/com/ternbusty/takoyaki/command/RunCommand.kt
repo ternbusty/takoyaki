@@ -1,6 +1,7 @@
 package com.ternbusty.takoyaki.command
 
 import com.ternbusty.takoyaki.console.InternalConsole
+import com.ternbusty.takoyaki.ioloop.Foreground
 import com.ternbusty.takoyaki.logger.Logger
 import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
@@ -75,9 +76,10 @@ object RunCommand {
         }
 
         // Wait for the listener thread to receive the master fd from init.
+        var masterFd = -1
         internalConsole?.apply {
             awaitMaster(10_000)
-            startIOCopy()
+            masterFd = masterFd()
         }
 
         // Foreground path. Snapshot the init pid BEFORE start because the
@@ -105,11 +107,7 @@ object RunCommand {
 
         var exitCode = 0
         if (initPid > 0) {
-            // Blocks until stage2 exits. Stage2 is our direct child because
-            // bootstrap.c clones it with CLONE_PARENT. The returned status is
-            // already shell-style (WEXITSTATUS for normal exit, 128+sig for
-            // signal termination).
-            exitCode = Wait.waitForChild(initPid)
+            exitCode = Foreground.supervise(masterFd, initPid)
         }
 
         internalConsole?.stop()

@@ -176,4 +176,24 @@ object Constants {
     const val MOUNT_ATTR_NOSYMFOLLOW: Long  = 0x200000L
     const val MOUNT_ATTR__ATIME: Long       = 0x70L
     const val AT_RECURSIVE: Int             = 0x8000
+
+    // epoll
+    val EPOLL_CLOEXEC: Int = NativeH.EPOLL_CLOEXEC()
+    val EPOLL_CTL_ADD: Int = NativeH.EPOLL_CTL_ADD()
+    val EPOLL_CTL_DEL: Int = NativeH.EPOLL_CTL_DEL()
+    val EPOLL_CTL_MOD: Int = NativeH.EPOLL_CTL_MOD()
+    val EPOLLIN: Int = NativeH.EPOLLIN()
+    val EPOLLOUT: Int = NativeH.EPOLLOUT()
+    val EPOLLERR: Int = NativeH.EPOLLERR()
+    val EPOLLHUP: Int = NativeH.EPOLLHUP()
+    val EPOLLONESHOT: Int = NativeH.EPOLLONESHOT()
+
+    // fcntl
+    val O_NONBLOCK: Int = NativeH.O_NONBLOCK()
+    val F_GETFL: Int = NativeH.F_GETFL()
+    val F_SETFL: Int = NativeH.F_SETFL()
+    val EAGAIN: Int = NativeH.EAGAIN()
+
+    // signals
+    val SIGWINCH: Int = NativeH.SIGWINCH()
 }
