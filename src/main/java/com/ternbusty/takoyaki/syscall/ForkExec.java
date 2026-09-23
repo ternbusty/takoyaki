@@ -14,9 +14,9 @@ public final class ForkExec {
 
     public static int forkExec(PosixIO.ExecvePayload payload, int closeFd1, int closeFd2) {
         return nativeForkExec(
-                WordFactory.pointer(payload.path.address()),
-                WordFactory.pointer(payload.argv.address()),
-                WordFactory.pointer(payload.envp.address()),
+                WordFactory.pointer(payload.getPath().address()),
+                WordFactory.pointer(payload.getArgv().address()),
+                WordFactory.pointer(payload.getEnvp().address()),
                 closeFd1, closeFd2);
     }
 }
