@@ -17,40 +17,44 @@ import java.lang.reflect.Modifier;
  */
 public final class GeneratedForeignFeature implements Feature {
 
-    /**
-     * Generated header classes to scan. Missing ones are skipped, so a branch
-     * that has not migrated a given library yet still builds.
-     */
-    private static final String[] HEADER_CLASSES = {
-            "com.ternbusty.takoyaki.syscall.gen.NativeH",
-    };
+    private static final String BASE_CLASS = "com.ternbusty.takoyaki.syscall.gen.NativeH";
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
         int registered = 0;
-        for (String name : HEADER_CLASSES) {
+        ClassLoader cl = getClass().getClassLoader();
+
+        for (int i = 0; ; i++) {
+            String name = (i == 0) ? BASE_CLASS : BASE_CLASS + "_" + i;
             Class<?> header;
             try {
-                header = Class.forName(name, false, getClass().getClassLoader());
+                header = Class.forName(name, false, cl);
             } catch (ClassNotFoundException e) {
-                continue;
+                if (i == 0) throw new RuntimeException("base header class not found: " + BASE_CLASS, e);
+                break;
             }
-            for (Class<?> fn : header.getDeclaredClasses()) {
-                for (Field f : fn.getDeclaredFields()) {
-                    if (f.getType() != FunctionDescriptor.class
-                            || !Modifier.isStatic(f.getModifiers())) {
-                        continue;
-                    }
-                    try {
-                        f.setAccessible(true);
-                        RuntimeForeignAccess.registerForDowncall((FunctionDescriptor) f.get(null));
-                        registered++;
-                    } catch (Throwable t) {
-                        // A descriptor we cannot read is left to ForeignFeature.
-                    }
+            registered += scanHeader(header);
+        }
+        System.out.println("[GeneratedForeignFeature] registered " + registered + " downcalls");
+    }
+
+    private static int scanHeader(Class<?> header) {
+        int count = 0;
+        for (Class<?> fn : header.getDeclaredClasses()) {
+            for (Field f : fn.getDeclaredFields()) {
+                if (f.getType() != FunctionDescriptor.class
+                        || !Modifier.isStatic(f.getModifiers())) {
+                    continue;
+                }
+                try {
+                    f.setAccessible(true);
+                    RuntimeForeignAccess.registerForDowncall((FunctionDescriptor) f.get(null));
+                    count++;
+                } catch (Throwable t) {
+                    // A descriptor we cannot read is left to ForeignFeature.
                 }
             }
         }
-        System.out.println("[GeneratedForeignFeature] registered " + registered + " downcalls");
+        return count;
     }
 }
