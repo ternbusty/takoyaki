@@ -485,7 +485,12 @@ public final class Main {
     private static String readStdinToTempFile() {
         try {
             byte[] data = System.in.readAllBytes();
-            java.nio.file.Path tmp = java.nio.file.Files.createTempFile("takoyaki-update-", ".json");
+            // Avoid Files.createTempFile — it pulls in SecureRandom → SHA-1
+            // MessageDigest, which requires the security providers we exclude
+            // with -H:-EnableSecurityServicesFeature.
+            java.nio.file.Path tmp = java.nio.file.Path.of(
+                    System.getProperty("java.io.tmpdir"),
+                    "takoyaki-update-" + ProcessHandle.current().pid() + ".json");
             java.nio.file.Files.write(tmp, data);
             return tmp.toString();
         } catch (java.io.IOException e) {
