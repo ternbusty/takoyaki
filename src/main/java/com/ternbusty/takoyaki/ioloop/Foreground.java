@@ -14,13 +14,10 @@ import java.util.concurrent.StructuredTaskScope;
 import java.util.concurrent.StructuredTaskScope.Joiner;
 
 /**
- * Foreground supervision for run/exec, mirroring runc's concurrent
- * architecture: while waiting for the container process to exit, the PTY
- * I/O relay and the signal forwarder (terminal resize + signal delivery to
- * the container) run as concurrent virtual threads under one
- * {@link StructuredTaskScope} — the Java equivalent of runc's goroutines
- * in {@code tty.go} / {@code signals.go} and kontainer-runtime's
- * coroutines in {@code Foreground.kt}.
+ * Foreground supervision for run/exec.  The calling platform thread drives
+ * the IoLoop ({@code epoll_wait} loop) while virtual threads handle PTY
+ * relay, signal forwarding, and process exit wait under a
+ * {@link StructuredTaskScope}.  No additional platform thread is spawned.
  *
  * @see IoLoop
  * @see SignalRelay
@@ -29,11 +26,10 @@ public final class Foreground {
     private Foreground() {}
 
     /**
-     * Supervise a foreground container: relay PTY I/O, forward signals,
-     * and wait for the container process to exit.
+     * Supervise a foreground container.  The calling thread runs the IoLoop
+     * driver; all I/O tasks run on virtual threads.
      *
-     * @param masterFd PTY master to relay to our stdio, or -1 when the
-     *   container inherits stdio directly (terminal=false)
+     * @param masterFd PTY master fd, or -1 for non-terminal
      * @param targetPid the container process to supervise
      * @return the container process's exit code
      */
@@ -41,7 +37,6 @@ public final class Foreground {
     public static int supervise(int masterFd, int targetPid) {
         try (var io = IoLoop.create();
              var sigRelay = SignalRelay.install()) {
-            io.startDriver();
             return runScoped(io, sigRelay, masterFd, targetPid);
         }
     }
@@ -53,21 +48,23 @@ public final class Foreground {
                 Joiner.awaitAll(),
                 cf -> cf.withTimeout(Duration.ofHours(24)))) {
 
-            // PTY relay: two virtual threads for bidirectional copy.
-            var relayTask = (masterFd >= 0)
-                    ? scope.fork(() -> { relayPtyIO(io, masterFd); return null; })
-                    : null;
+            if (masterFd >= 0) {
+                scope.fork(() -> { relayPtyIO(io, masterFd); return null; });
+            }
+            if (sigRelay != null) {
+                scope.fork(() -> {
+                    sigRelay.drainAndForward(io, targetPid, masterFd);
+                    return null;
+                });
+            }
+            var exitTask = scope.fork(() -> {
+                int code = awaitProcessExit(io, targetPid);
+                io.shutdown();
+                return code;
+            });
 
-            // Signal forwarding: SIGWINCH → resize, others → kill(targetPid).
-            var sigTask = (sigRelay != null)
-                    ? scope.fork(() -> {
-                        sigRelay.drainAndForward(io, targetPid, masterFd);
-                        return null;
-                    })
-                    : null;
-
-            // Process exit: wait via pidfd or fallback polling.
-            var exitTask = scope.fork(() -> awaitProcessExit(io, targetPid));
+            // The calling thread drives epoll_wait until shutdown.
+            io.run();
 
             scope.join();
             return exitTask.get();
@@ -78,12 +75,6 @@ public final class Foreground {
         }
     }
 
-    /**
-     * Wait for {@code pid} to exit.  Uses {@code pidfd_open(2)} so the wait
-     * is a plain readable-fd event on the IoLoop (like kontainer-runtime's
-     * approach).  Falls back to {@code waitpid(WNOHANG)} polling on kernels
-     * without pidfd ({@literal <} 5.3).
-     */
     private static int awaitProcessExit(IoLoop io, int pid) {
         long pidfd = Libc.syscall(Constants.NR_pidfd_open, pid, 0, 0, 0, 0);
         if (pidfd >= 0) {
@@ -107,15 +98,13 @@ public final class Foreground {
         }
     }
 
-    /** Relay PTY master ↔ stdio until the master closes. */
     private static void relayPtyIO(IoLoop io, int masterFd) {
         IoLoop.setNonBlocking(masterFd);
-        IoLoop.setNonBlocking(0); // stdin
-        IoLoop.setNonBlocking(1); // stdout
+        IoLoop.setNonBlocking(0);
+        IoLoop.setNonBlocking(1);
         try (var scope = StructuredTaskScope.open(
                 Joiner.awaitAll())) {
 
-            // stdin → master
             scope.fork(() -> {
                 try (var arena = Arena.ofConfined()) {
                     byte[] buf = new byte[8192];
@@ -129,7 +118,6 @@ public final class Foreground {
                 return null;
             });
 
-            // master → stdout
             scope.fork(() -> {
                 try (var arena = Arena.ofConfined()) {
                     byte[] buf = new byte[8192];
@@ -152,10 +140,6 @@ public final class Foreground {
         }
     }
 
-    /**
-     * Write all {@code len} bytes from {@code buf} to a non-blocking
-     * {@code fd}, suspending on the IoLoop when the kernel buffer is full.
-     */
     private static boolean writeAll(IoLoop io, int fd, byte[] buf, int len) {
         try (var arena = Arena.ofConfined()) {
             MemorySegment seg = arena.allocate(len);
@@ -177,7 +161,6 @@ public final class Foreground {
         return true;
     }
 
-    /** Reap a child and decode its status; returns 0 if not our child. */
     private static int reapChild(int pid) {
         try (var arena = Arena.ofConfined()) {
             MemorySegment status = arena.allocate(ValueLayout.JAVA_INT);
@@ -189,7 +172,6 @@ public final class Foreground {
         return 0;
     }
 
-    /** Non-blocking reap attempt; returns -1 if the child is still running. */
     private static int tryReapChild(int pid) {
         try (var arena = Arena.ofConfined()) {
             MemorySegment status = arena.allocate(ValueLayout.JAVA_INT);
@@ -198,7 +180,7 @@ public final class Foreground {
                 return decodeStatus(status.get(ValueLayout.JAVA_INT, 0));
             }
             if (rc < 0 && Libc.kill(pid, 0) != 0) {
-                return 0; // process gone, no longer our child
+                return 0;
             }
         }
         return -1;

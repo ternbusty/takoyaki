@@ -16,12 +16,12 @@ import java.util.concurrent.locks.LockSupport;
 
 /**
  * Epoll-backed I/O loop that suspends virtual threads instead of blocking
- * platform threads — a miniature equivalent of Go's netpoller and
- * kontainer-runtime's coroutine-based {@code IoLoop}.
+ * platform threads.
  *
  * <p>Each {@code awaitReadable}/{@code awaitWritable} call parks the (virtual)
- * calling thread.  A single driver thread loops over {@code epoll_wait} and
- * unparks waiters as their fds become ready.
+ * calling thread.  The caller's platform thread drives the loop via
+ * {@link #run()}, calling {@code epoll_wait} and unparking waiters as their
+ * fds become ready — no extra thread is spawned.
  *
  * <p>Thread safety: {@link #awaitReadable}/{@link #awaitWritable} may be called
  * from any thread; the waiter map is a {@link ConcurrentHashMap} and
@@ -41,7 +41,6 @@ public final class IoLoop implements AutoCloseable {
     private final int epfd;
     private final Map<Integer, FdWaiters> waiters = new ConcurrentHashMap<>();
     private volatile boolean closed;
-    private Thread driverThread;
 
     private IoLoop(int epfd) {
         this.epfd = epfd;
@@ -58,85 +57,10 @@ public final class IoLoop implements AutoCloseable {
     }
 
     /**
-     * Start the driver thread that runs {@code epoll_wait} in a loop and
-     * unparks virtual threads whose fds are ready.
+     * Run the driver loop on the calling thread.  Blocks until
+     * {@link #shutdown()} is called, then returns.
      */
-    public void startDriver() {
-        driverThread = Thread.ofPlatform()
-                .name("ioloop-driver")
-                .daemon(true)
-                .start(this::driverLoop);
-    }
-
-    /** Park the calling virtual thread until {@code fd} is readable. */
-    public void awaitReadable(int fd) {
-        awaitEvent(fd, false);
-    }
-
-    /** Park the calling virtual thread until {@code fd} is writable. */
-    public void awaitWritable(int fd) {
-        awaitEvent(fd, true);
-    }
-
-    private void awaitEvent(int fd, boolean wantWrite) {
-        var w = waiters.computeIfAbsent(fd, k -> new FdWaiters());
-        if (wantWrite) {
-            w.writer = Thread.currentThread();
-        } else {
-            w.reader = Thread.currentThread();
-        }
-        int rc = arm(fd, w);
-        if (rc != 0) {
-            if (wantWrite) w.writer = null; else w.reader = null;
-            if (w.reader == null && w.writer == null) waiters.remove(fd);
-            if (rc == Constants.EPERM) {
-                // fd doesn't support epoll (regular file). Treat as ready.
-                return;
-            }
-            throw new IllegalStateException(
-                    "epoll_ctl failed for fd=" + fd + " (errno=" + rc + ")");
-        }
-        LockSupport.park(this);
-    }
-
-    /**
-     * (Re-)register {@code fd} with EPOLLONESHOT and the interest set implied
-     * by its current waiters.
-     *
-     * @return 0 on success, errno on failure
-     */
-    private int arm(int fd, FdWaiters w) {
-        try (var arena = Arena.ofConfined()) {
-            MemorySegment ev = epoll_event.allocate(arena);
-            int interest = Constants.EPOLLONESHOT;
-            if (w.reader != null) interest |= Constants.EPOLLIN;
-            if (w.writer != null) interest |= Constants.EPOLLOUT;
-            epoll_event.events(ev, interest);
-            epoll_data.fd(epoll_event.data(ev), fd);
-
-            int rc = NativeH.epoll_ctl(epfd, Constants.EPOLL_CTL_ADD, fd, ev);
-            if (rc == 0) return 0;
-            int err = Libc.errno();
-            if (err == Constants.EEXIST) {
-                rc = NativeH.epoll_ctl(epfd, Constants.EPOLL_CTL_MOD, fd, ev);
-                if (rc == 0) return 0;
-                err = Libc.errno();
-            }
-            return err;
-        }
-    }
-
-    /** Remove {@code fd} from the epoll interest set. */
-    public void remove(int fd) {
-        waiters.remove(fd);
-        NativeH.epoll_ctl(epfd, Constants.EPOLL_CTL_DEL, fd, MemorySegment.NULL);
-    }
-
-    /**
-     * The driver loop — runs on a dedicated platform thread, calling
-     * {@code epoll_wait} and unparking virtual threads.
-     */
-    private void driverLoop() {
+    public void run() {
         try (var arena = Arena.ofConfined()) {
             long eventSize = epoll_event.layout().byteSize();
             MemorySegment events = arena.allocate(eventSize * MAX_EVENTS);
@@ -185,8 +109,71 @@ public final class IoLoop implements AutoCloseable {
         }
     }
 
-    @Override
-    public void close() {
+    /** Park the calling virtual thread until {@code fd} is readable. */
+    public void awaitReadable(int fd) {
+        awaitEvent(fd, false);
+    }
+
+    /** Park the calling virtual thread until {@code fd} is writable. */
+    public void awaitWritable(int fd) {
+        awaitEvent(fd, true);
+    }
+
+    private void awaitEvent(int fd, boolean wantWrite) {
+        var w = waiters.computeIfAbsent(fd, k -> new FdWaiters());
+        if (wantWrite) {
+            w.writer = Thread.currentThread();
+        } else {
+            w.reader = Thread.currentThread();
+        }
+        int rc = arm(fd, w);
+        if (rc != 0) {
+            if (wantWrite) w.writer = null; else w.reader = null;
+            if (w.reader == null && w.writer == null) waiters.remove(fd);
+            if (rc == Constants.EPERM) {
+                return;
+            }
+            throw new IllegalStateException(
+                    "epoll_ctl failed for fd=" + fd + " (errno=" + rc + ")");
+        }
+        LockSupport.park(this);
+    }
+
+    /**
+     * (Re-)register {@code fd} with EPOLLONESHOT and the interest set implied
+     * by its current waiters.
+     *
+     * @return 0 on success, errno on failure
+     */
+    private int arm(int fd, FdWaiters w) {
+        try (var arena = Arena.ofConfined()) {
+            MemorySegment ev = epoll_event.allocate(arena);
+            int interest = Constants.EPOLLONESHOT;
+            if (w.reader != null) interest |= Constants.EPOLLIN;
+            if (w.writer != null) interest |= Constants.EPOLLOUT;
+            epoll_event.events(ev, interest);
+            epoll_data.fd(epoll_event.data(ev), fd);
+
+            int rc = NativeH.epoll_ctl(epfd, Constants.EPOLL_CTL_ADD, fd, ev);
+            if (rc == 0) return 0;
+            int err = Libc.errno();
+            if (err == Constants.EEXIST) {
+                rc = NativeH.epoll_ctl(epfd, Constants.EPOLL_CTL_MOD, fd, ev);
+                if (rc == 0) return 0;
+                err = Libc.errno();
+            }
+            return err;
+        }
+    }
+
+    /** Remove {@code fd} from the epoll interest set. */
+    public void remove(int fd) {
+        waiters.remove(fd);
+        NativeH.epoll_ctl(epfd, Constants.EPOLL_CTL_DEL, fd, MemorySegment.NULL);
+    }
+
+    /** Signal the driver loop to exit. Does not close the epoll fd. */
+    public void shutdown() {
         closed = true;
         for (var w : waiters.values()) {
             Thread t = w.reader;
@@ -195,9 +182,11 @@ public final class IoLoop implements AutoCloseable {
             if (t != null) LockSupport.unpark(t);
         }
         waiters.clear();
-        if (driverThread != null) {
-            try { driverThread.join(500); } catch (InterruptedException ignored) {}
-        }
+    }
+
+    @Override
+    public void close() {
+        shutdown();
         PosixIO.close(epfd);
     }
 
