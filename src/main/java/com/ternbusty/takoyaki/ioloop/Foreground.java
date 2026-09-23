@@ -150,6 +150,7 @@ public final class Foreground {
                 if (n < 0) {
                     int err = Libc.errno();
                     if (err == Constants.EAGAIN) {
+                        if (io.isClosed()) return false;
                         io.awaitWritable(fd);
                         continue;
                     }
