@@ -901,3 +901,27 @@ void takoyaki_bootstrap(void) {
 }
 
 
+
+/* ── fork + exec helper ─────────────────────────────────────────────
+ * SubstrateVM's safepoint mechanism can deadlock after fork() when a VM
+ * thread held an internal lock at fork time.  All FFM downcalls in the
+ * child process trigger a safepoint check, so close() and execve() via
+ * the generated Java bindings race against the GC / reference handler.
+ *
+ * This helper keeps the entire child path in C: the fork happens inside
+ * a native function, and the child calls close + execve without ever
+ * returning to managed code.  The FFM call to THIS function happens
+ * before the fork, when SubstrateVM is still in a consistent state.
+ *
+ * Returns the child pid to the caller (parent), or -1 on fork failure. */
+int takoyaki_fork_exec(const char *path, char *const argv[], char *const envp[],
+                       int close_fd1, int close_fd2) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;   /* parent: return child pid (or -1) */
+
+    /* child — pure C, no managed runtime interaction */
+    if (close_fd1 >= 0) close(close_fd1);
+    if (close_fd2 >= 0) close(close_fd2);
+    execve(path, argv, envp);
+    _exit(127);
+}

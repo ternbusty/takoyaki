@@ -318,6 +318,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.nativeimage.StaticSymbolLookup",
+                "-H:-EnableSecurityServicesFeature",
             )
             if (useMusl) {
                 // --libc=musl plus --static produces a fully static
