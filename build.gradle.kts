@@ -283,6 +283,7 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.syscall.gen",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
+                "-H:-EnableSecurityServicesFeature",
             )
             if (useMusl) {
                 // --libc=musl plus --static produces a fully static

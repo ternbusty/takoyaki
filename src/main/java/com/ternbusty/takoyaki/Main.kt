@@ -503,7 +503,10 @@ class Main {
         private fun readStdinToTempFile(): String? {
             return try {
                 val data = System.`in`.readAllBytes()
-                val tmp = Files.createTempFile("takoyaki-update-", ".json")
+                val tmp = java.nio.file.Path.of(
+                    System.getProperty("java.io.tmpdir"),
+                    "takoyaki-update-${ProcessHandle.current().pid()}.json"
+                )
                 Files.write(tmp, data)
                 tmp.toString()
             } catch (e: IOException) {
