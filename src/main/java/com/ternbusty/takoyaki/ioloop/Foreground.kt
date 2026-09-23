@@ -50,7 +50,7 @@ object Foreground {
         targetPid: Int,
     ): Int {
         try {
-            StructuredTaskScope.open<Any>(
+            StructuredTaskScope.open<Any, Void?>(
                 Joiner.awaitAll(),
             ) { cf -> cf.withTimeout(Duration.ofHours(24)) }.use { scope ->
 
@@ -110,7 +110,7 @@ object Foreground {
         IoLoop.setNonBlocking(0)
         IoLoop.setNonBlocking(1)
         try {
-            StructuredTaskScope.open<Any>(Joiner.awaitAll()).use { scope ->
+            StructuredTaskScope.open<Any, Void?>(Joiner.awaitAll()).use { scope ->
 
                 scope.fork(Callable {
                     Arena.ofConfined().use { arena ->
