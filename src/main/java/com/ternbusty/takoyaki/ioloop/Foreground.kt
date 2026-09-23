@@ -9,6 +9,7 @@ import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout
 import java.time.Duration
+import java.util.concurrent.Callable
 import java.util.concurrent.StructuredTaskScope
 import java.util.concurrent.StructuredTaskScope.Joiner
 
@@ -49,30 +50,30 @@ object Foreground {
         targetPid: Int,
     ): Int {
         try {
-            StructuredTaskScope.open(
+            StructuredTaskScope.open<Any>(
                 Joiner.awaitAll(),
             ) { cf -> cf.withTimeout(Duration.ofHours(24)) }.use { scope ->
 
                 if (masterFd >= 0) {
-                    scope.fork { relayPtyIO(io, masterFd); null }
+                    scope.fork(Callable { relayPtyIO(io, masterFd); null })
                 }
                 if (sigRelay != null) {
-                    scope.fork {
+                    scope.fork(Callable {
                         sigRelay.drainAndForward(io, targetPid, masterFd)
                         null
-                    }
+                    })
                 }
-                val exitTask = scope.fork {
+                val exitTask = scope.fork(Callable {
                     val code = awaitProcessExit(io, targetPid)
                     io.shutdown()
                     code
-                }
+                })
 
                 // The calling thread drives epoll_wait until shutdown.
                 io.run()
 
                 scope.join()
-                return exitTask.get()
+                return exitTask.get() as Int
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -109,9 +110,9 @@ object Foreground {
         IoLoop.setNonBlocking(0)
         IoLoop.setNonBlocking(1)
         try {
-            StructuredTaskScope.open(Joiner.awaitAll()).use { scope ->
+            StructuredTaskScope.open<Any>(Joiner.awaitAll()).use { scope ->
 
-                scope.fork {
+                scope.fork(Callable {
                     Arena.ofConfined().use { arena ->
                         val buf = ByteArray(8192)
                         while (!Thread.currentThread().isInterrupted) {
@@ -122,9 +123,9 @@ object Foreground {
                         }
                     }
                     null
-                }
+                })
 
-                scope.fork {
+                scope.fork(Callable {
                     Arena.ofConfined().use { arena ->
                         val buf = ByteArray(8192)
                         while (!Thread.currentThread().isInterrupted) {
@@ -135,7 +136,7 @@ object Foreground {
                         }
                     }
                     null
-                }
+                })
 
                 scope.join()
             }
