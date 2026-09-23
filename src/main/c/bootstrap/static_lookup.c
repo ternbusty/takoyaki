@@ -23,6 +23,7 @@
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/epoll.h>
 #include <sys/syscall.h>
 #include <sys/un.h>
 #include <sys/wait.h>
@@ -54,6 +55,9 @@ static const struct takoyaki_sym sym_table[] = {
     {"close",            (void *)close},
     {"connect",          (void *)connect},
     {"dup2",             (void *)dup2},
+    {"epoll_create1",    (void *)epoll_create1},
+    {"epoll_ctl",        (void *)epoll_ctl},
+    {"epoll_wait",       (void *)epoll_wait},
     {"execve",           (void *)execve},
     {"execvp",           (void *)execvp},
     {"fchdir",           (void *)fchdir},
@@ -70,6 +74,7 @@ static const struct takoyaki_sym sym_table[] = {
     {"mknod",            (void *)mknod},
     {"mount",            (void *)mount},
     {"open",             (void *)open},
+    {"pipe",             (void *)pipe},
     {"posix_openpt",     (void *)posix_openpt},
     {"prctl",            (void *)prctl},
     {"prlimit64",        (void *)prlimit64},
