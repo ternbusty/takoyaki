@@ -318,6 +318,8 @@ graalvmNative {
                 "--initialize-at-run-time=com.ternbusty.takoyaki.ipc",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.console",
                 "--initialize-at-run-time=com.ternbusty.takoyaki.nativeimage.StaticSymbolLookup",
+                "--initialize-at-run-time=com.ternbusty.takoyaki.ioloop",
+                "-Djdk.virtualThreadScheduler.parallelism=1",
                 "-H:-EnableSecurityServicesFeature",
             )
             if (useMusl) {

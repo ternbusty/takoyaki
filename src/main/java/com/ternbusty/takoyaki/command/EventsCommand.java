@@ -62,7 +62,9 @@ public final class EventsCommand {
     private static Thread startOomWatcher(Path cg, String containerId) {
         Path memEvents = cg.resolve("memory.events");
         if (!Files.exists(memEvents)) return null;
-        Thread t = new Thread(() -> {
+        Thread t = Thread.ofVirtual()
+                .name("oom-watcher")
+                .start(() -> {
             long lastOomKill = readOomKillCount(memEvents);
             try (java.nio.file.WatchService ws = cg.getFileSystem().newWatchService()) {
                 cg.register(ws, java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY);
@@ -87,9 +89,7 @@ public final class EventsCommand {
             } catch (IOException e) {
                 // memory.events not watchable, give up silently
             }
-        }, "oom-watcher");
-        t.setDaemon(true);
-        t.start();
+        });
         return t;
     }
 

@@ -1,6 +1,7 @@
 package com.ternbusty.takoyaki.command;
 
 import com.ternbusty.takoyaki.console.InternalConsole;
+import com.ternbusty.takoyaki.ioloop.Foreground;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
@@ -67,14 +68,14 @@ public final class RunCommand {
         }
 
         // Wait for the listener thread to receive the master fd from init.
+        int masterFd = -1;
         if (internalConsole != null) {
             internalConsole.awaitMaster(10_000);
-            internalConsole.startIOCopy();
+            masterFd = internalConsole.masterFd();
         }
 
-        // Foreground path. Snapshot the init pid BEFORE start because the
-        // container can race to "stopped" and have its state torn down if
-        // process.args is trivial (e.g. /bin/echo).
+        // Snapshot the init pid BEFORE start because the container can race
+        // to "stopped" if process.args is trivial (e.g. /bin/echo).
         int initPid;
         try {
             State st = State.load(rootPath, containerId);
@@ -88,8 +89,6 @@ public final class RunCommand {
 
         rc = StartCommand.run(rootPath, containerId);
         if (rc != 0) {
-            // Best-effort cleanup. Force because the container may be in a
-            // partial state that canDelete rejects.
             if (internalConsole != null) internalConsole.stop();
             DeleteCommand.run(rootPath, containerId, true);
             return rc;
@@ -97,11 +96,7 @@ public final class RunCommand {
 
         int exitCode = 0;
         if (initPid > 0) {
-            // Blocks until stage2 exits. Stage2 is our direct child because
-            // bootstrap.c clones it with CLONE_PARENT. The returned status is
-            // already shell-style (WEXITSTATUS for normal exit, 128+sig for
-            // signal termination).
-            exitCode = Wait.waitForChild(initPid);
+            exitCode = Foreground.supervise(masterFd, initPid);
         }
 
         if (internalConsole != null) internalConsole.stop();
