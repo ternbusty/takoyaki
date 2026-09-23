@@ -48,3 +48,7 @@ enum takoyaki_scmp_action_base {
     TAKOYAKI_SCMP_ACT_ERRNO_BASE = SCMP_ACT_ERRNO(0),
     TAKOYAKI_SCMP_ACT_TRACE_BASE = SCMP_ACT_TRACE(0),
 };
+
+/* bootstrap.c: fork+exec in pure C to avoid SubstrateVM safepoint deadlock */
+int takoyaki_fork_exec(const char *path, char *const argv[], char *const envp[],
+                       int close_fd1, int close_fd2);
