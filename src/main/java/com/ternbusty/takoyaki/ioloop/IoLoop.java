@@ -120,6 +120,7 @@ public final class IoLoop implements AutoCloseable {
     }
 
     private void awaitEvent(int fd, boolean wantWrite) {
+        if (closed) return;
         var w = waiters.computeIfAbsent(fd, k -> new FdWaiters());
         if (wantWrite) {
             w.writer = Thread.currentThread();
