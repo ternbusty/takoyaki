@@ -14,6 +14,7 @@ import com.ternbusty.takoyaki.seccomp.SeccompListener
 import com.ternbusty.takoyaki.spec.*
 import com.ternbusty.takoyaki.state.State
 import com.ternbusty.takoyaki.syscall.Constants
+import com.ternbusty.takoyaki.syscall.ForkExec
 import com.ternbusty.takoyaki.syscall.Libc
 import com.ternbusty.takoyaki.syscall.PosixIO
 import com.ternbusty.takoyaki.util.JsonCodec
@@ -471,16 +472,9 @@ object CreateCommand {
         val execArena = Arena.ofShared()
         val payload = PosixIO.ExecvePayload.build(execArena, exePath, argv, envp)
 
-        val forkPid = PosixIO.fork()
+        val forkPid = ForkExec.forkExec(payload, syncFds[0], mainParentFd)
         if (forkPid < 0) {
             System.err.println("fork failed: ${Libc.strerror(Libc.errno())}")
-            return 1
-        }
-        if (forkPid == 0) {
-            PosixIO.close(syncFds[0])
-            PosixIO.close(mainParentFd)
-            PosixIO.invokeExecve(payload)
-            PosixIO._exit(1)
             return 1
         }
 
