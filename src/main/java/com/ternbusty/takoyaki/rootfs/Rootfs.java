@@ -61,19 +61,10 @@ public final class Rootfs {
             // there would be no peer to slave to.
 
             mountProc(arena, rootfsPath);
-            // runc compat: pass the spec's /dev mount options (if any) so that
-            // "ro" in the spec actually makes /dev read-only.
-            long devExtraFlags = 0;
-            if (spec.mounts != null) {
-                for (Spec.Mount sm : spec.mounts) {
-                    if ("/dev".equals(sm.destination)) {
-                        MountOptions.Parsed dp = MountOptions.parse(sm.options);
-                        devExtraFlags = dp.flags;
-                        break;
-                    }
-                }
-            }
-            mountDev(arena, rootfsPath, devExtraFlags);
+            // runc compat: pass the spec's /dev mount options (if any). "ro" is
+            // held back until the devices, default symlinks and devpts are in
+            // place; remountDevReadonly applies it after pivot_root.
+            mountDev(arena, rootfsPath, devMountFlags(spec) & ~Constants.MS_RDONLY);
             mountSys(arena, rootfsPath, spec);
 
             if (spec.mounts != null) {
@@ -742,6 +733,38 @@ public final class Rootfs {
                 }
             }
             Logger.debug("msMoveRoot completed");
+        }
+    }
+
+    /** Flags parsed from the options of the spec's /dev mount, or 0. */
+    static long devMountFlags(Spec spec) {
+        if (spec.mounts != null) {
+            for (Spec.Mount sm : spec.mounts) {
+                if ("/dev".equals(sm.destination)) {
+                    return MountOptions.parse(sm.options).flags;
+                }
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * runc compat (finalizeRootfs): make /dev read-only if the spec's /dev
+     * mount asks for "ro". Called after pivot_root, once the devices, the
+     * default symlinks and devpts have been set up on the writable tmpfs.
+     */
+    public static void remountDevReadonly(Spec spec) {
+        long devFlags = devMountFlags(spec);
+        if ((devFlags & Constants.MS_RDONLY) == 0) return;
+        try (Arena arena = Arena.ofConfined()) {
+            // MS_REMOUNT|MS_BIND only changes the per-mount flags, which also
+            // works inside a user namespace. Keep nosuid/noexec from mountDev.
+            long flags = Constants.MS_BIND | Constants.MS_REMOUNT | Constants.MS_RDONLY
+                    | Constants.MS_NOSUID | Constants.MS_NOEXEC | devFlags;
+            if (Libc.mount(arena, null, "/dev", null, flags, null) != 0) {
+                throw new RuntimeException("remount /dev readonly: " + Libc.strerror(Libc.errno()));
+            }
+            Logger.debug("/dev remounted readonly");
         }
     }
 

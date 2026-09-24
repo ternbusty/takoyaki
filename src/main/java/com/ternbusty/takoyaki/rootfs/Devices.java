@@ -28,6 +28,15 @@ public final class Devices {
         try (Arena arena = Arena.ofConfined()) {
             for (Spec.LinuxDevice d : devices) {
                 if (d.path == null || d.type == null) continue;
+                // runc compat: /dev/ptmx is always the pts/ptmx symlink set up
+                // with the other /dev defaults. A device node (or a bind of the
+                // host's ptmx, which would land on /dev/pts/ptmx through that
+                // symlink) would hand out ptys from the host's devpts instance,
+                // which the container cannot see.
+                if (Path.of(d.path).normalize().toString().equals("/dev/ptmx")) {
+                    Logger.debug("skipping /dev/ptmx device, kept as pts/ptmx symlink");
+                    continue;
+                }
                 String target = rootfsPath + d.path;
                 try { Files.createDirectories(Path.of(target).getParent()); }
                 catch (Exception ignored) {}
