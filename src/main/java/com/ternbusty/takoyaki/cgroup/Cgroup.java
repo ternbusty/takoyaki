@@ -49,13 +49,23 @@ public final class Cgroup {
     }
 
     public static void setup(int pid, String cgroupPath, Spec.Linux linux) {
-        if (cgroupPath == null) return;
+        if (prepare(cgroupPath, linux)) addPid(cgroupPath, pid);
+    }
+
+    /**
+     * Everything {@link #setup} does except moving a pid in: create the
+     * directory, check that it is empty and not frozen, enable controllers
+     * and apply limits. Returns false when there is no cgroup to join (no
+     * path, or the directory could not be created).
+     */
+    public static boolean prepare(String cgroupPath, Spec.Linux linux) {
+        if (cgroupPath == null) return false;
         Path full = dir(cgroupPath);
         try {
             Files.createDirectories(full);
         } catch (IOException e) {
             Logger.warn("create cgroup dir failed: " + e.getMessage());
-            return;
+            return false;
         }
 
         // Reject if the cgroup already has processes (runc compat: error for
@@ -90,8 +100,6 @@ public final class Cgroup {
         // threads needed for GraalVM startup without hitting a low pids limit.
         applyLimits(full, linux != null ? linux.resources : null, true, true);
 
-        addPid(cgroupPath, pid);
-
         // The eBPF device program is NOT attached here. It is deferred to
         // applyDeferredDevices() which MainProcess calls after INIT_READY.
         // The init process needs to create device nodes (mknod) during
@@ -99,6 +107,7 @@ public final class Cgroup {
         // block mknod for devices not in the allow list. This matches
         // runc's ordering: cgroupManager.Set (which includes devices) runs
         // after SYNC_READY, not during Apply.
+        return true;
     }
 
     /**
