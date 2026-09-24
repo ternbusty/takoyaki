@@ -35,6 +35,9 @@ jobs:
         with:
           java-version: '25'
           distribution: 'graalvm-community'
+          # GraalVM 25.3 (innovation release) or later: the 25.0 line cannot
+          # compile the constant downcall handles in ffi.Downcalls.
+          version: '25.3'
           cache: 'gradle'
 
       # jextract generates the libseccomp bindings at build time (not committed,
@@ -135,6 +138,15 @@ jobs:
           # so any spec-compliant runtime fails this test by construction. See
           # https://github.com/opencontainers/runtime-tools/issues/805.
           SKIP_BROKEN_PATTERN='^pidfile$'
+          # Known-broken individual assertions, excluded from the not-ok count
+          # while the rest of the file still counts. process_rlimits checks
+          # the soft RLIMIT_NOFILE from inside runtimetest, but runtimetest is
+          # a Go program and Go's runtime raises its own soft NOFILE to
+          # hard-1 at startup, before the check runs. runc and crun fail the
+          # same assertion. It only started running here once the container
+          # init stopped hitting the test's 1 GiB RLIMIT_AS (GraalVM 25.3). See
+          # https://github.com/opencontainers/runtime-tools/issues/806.
+          BROKEN_ASSERTIONS='^not ok [0-9]+ - has expected soft RLIMIT_NOFILE$'
           for t in validation/*/*.t; do
             name=$(basename "$t" .t)
             if echo "$name" | grep -qE "$SKIP_V1_PATTERN"; then
@@ -162,7 +174,7 @@ jobs:
               continue
             fi
             n_ok=$(grep -c "^ok " "$out" 2>/dev/null)
-            n_notok=$(grep -c "^not ok " "$out" 2>/dev/null)
+            n_notok=$(grep "^not ok " "$out" 2>/dev/null | grep -cvE "$BROKEN_ASSERTIONS")
             n_ok=${n_ok:-0}; n_notok=${n_notok:-0}
             if [ "$n_notok" -gt 0 ]; then
               FAIL=$((FAIL+1))
