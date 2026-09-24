@@ -43,10 +43,11 @@ public final class RunCommand {
                 String bundle = Path.of(bundleIn).toAbsolutePath().normalize().toString();
                 Spec spec = Json.readFile(Path.of(bundle, "config.json"), Spec::fromJson);
                 if (spec.process != null && Boolean.TRUE.equals(spec.process.terminal)) {
-                    internalConsole = InternalConsole.createForRun(bundle);
-                    internalConsole.startListening();
-                    effectiveConsoleSocket = internalConsole.socketPath();
-                    Logger.debug("internal console socket at " + effectiveConsoleSocket);
+                    internalConsole = InternalConsole.listenForRun(bundle);
+                    if (internalConsole != null) {
+                        effectiveConsoleSocket = internalConsole.socketPath();
+                        Logger.debug("internal console socket at " + effectiveConsoleSocket);
+                    }
                 }
             } catch (Exception e) {
                 // Config parse will be retried by CreateCommand; just skip internal console.
@@ -67,12 +68,8 @@ public final class RunCommand {
             return StartCommand.run(rootPath, containerId);
         }
 
-        // Wait for the listener thread to receive the master fd from init.
-        int masterFd = -1;
-        if (internalConsole != null) {
-            internalConsole.awaitMaster(10_000);
-            masterFd = internalConsole.masterFd();
-        }
+        // The init has sent the master fd (or given up) before create returned.
+        int masterFd = internalConsole != null ? internalConsole.receiveMaster() : -1;
 
         // Snapshot the init pid BEFORE start because the container can race
         // to "stopped" if process.args is trivial (e.g. /bin/echo).
