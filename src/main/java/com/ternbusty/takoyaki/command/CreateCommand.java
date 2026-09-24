@@ -456,6 +456,11 @@ public final class CreateCommand {
 
         PosixIO.close(syncFds[1]);
         PosixIO.close(mainChildFd);
+        // The init has its own copy of the console socket now. Keeping ours
+        // open would hide an init that never sends the pty master (e.g. when
+        // it cannot open a pty): the receiver would wait for data forever
+        // instead of seeing EOF once the init closes its end.
+        if (consoleSocketFd >= 0) PosixIO.close(consoleSocketFd);
 
         MainProcess.run(forkPid, syncFds[0], spec, containerId,
                 bundle, rootPath, pidFile, notifyListenerFd, mainParentFd,
