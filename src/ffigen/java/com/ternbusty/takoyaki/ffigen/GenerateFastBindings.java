@@ -48,6 +48,10 @@ import java.util.TreeMap;
  * {@code firstVariadicArg} handle and a static method taking the fixed and the
  * variadic arguments, e.g. {@code NativeH.syscall(long, long, long, ...)}.
  *
+ * <p>Compiling constant downcall handles needs native-image from GraalVM 25.3
+ * (innovation release) or later; 25.0.x fails with "unexpected input could
+ * not be handled: linkToNative".
+ *
  * <p>Usage: {@code GenerateFastBindings <output source dir> [name:LAYOUT,...]...}
  */
 public final class GenerateFastBindings {
