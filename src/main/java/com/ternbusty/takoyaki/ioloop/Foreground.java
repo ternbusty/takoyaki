@@ -9,7 +9,6 @@ import com.ternbusty.takoyaki.syscall.gen.NativeH;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.time.Duration;
 import java.util.concurrent.StructuredTaskScope;
 import java.util.concurrent.StructuredTaskScope.Joiner;
 
@@ -44,9 +43,7 @@ public final class Foreground {
     @SuppressWarnings("preview")
     private static int runScoped(IoLoop io, SignalRelay sigRelay,
                                  int masterFd, int targetPid) {
-        try (var scope = StructuredTaskScope.open(
-                Joiner.awaitAll(),
-                cf -> cf.withTimeout(Duration.ofHours(24)))) {
+        try (var scope = StructuredTaskScope.open(Joiner.awaitAll())) {
 
             if (masterFd >= 0) {
                 scope.fork(() -> { relayPtyIO(io, masterFd); return null; });
