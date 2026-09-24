@@ -5,7 +5,6 @@ import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.NativeH_3;
 import com.ternbusty.takoyaki.syscall.gen.epoll_data;
 import com.ternbusty.takoyaki.syscall.gen.epoll_event;
 
@@ -83,7 +82,7 @@ public final class IoLoop implements AutoCloseable {
     private static int[] createPipe() {
         try (var arena = Arena.ofConfined()) {
             MemorySegment fds = arena.allocate(ValueLayout.JAVA_INT, 2);
-            int rc = NativeH_3.pipe(fds);
+            int rc = NativeH.pipe(fds);
             if (rc != 0) {
                 throw new IllegalStateException(
                         "pipe() failed (errno=" + Libc.errno() + ")");

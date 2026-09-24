@@ -414,7 +414,6 @@ write to an idmap mount [userns]
 Check mount source fds are cleaned up with idmapped mounts [userns]
 
 # --- userns ---
-runc run [joining existing container namespaces]
 userns join external namespaces [wrong userns owner]
 userns join other container userns
 userns join other container userns [bind-mounted nsfd]

@@ -17,11 +17,6 @@ import java.lang.foreign.ValueLayout;
 public final class PosixIO {
     private PosixIO() {}
 
-    // open(2) and fcntl(2) are variadic; jextract exposes them through an
-    // invoker factory, so bind the fixed shapes takoyaki uses.
-    private static final NativeH.open OPEN = NativeH.open.makeInvoker(NativeH.C_INT);
-    private static final NativeH.fcntl FCNTL = NativeH.fcntl.makeInvoker(NativeH.C_INT);
-
     /**
      * glibc declares bind/connect/accept with transparent unions over sockaddr*,
      * so the generated bindings take the union by value. It is a single pointer
@@ -170,7 +165,7 @@ public final class PosixIO {
     }
 
     public static int open(Arena arena, String path, int flags, int mode) {
-        return OPEN.apply(arena.allocateFrom(path), flags, mode);
+        return NativeH.open(arena.allocateFrom(path), flags, mode);
     }
 
     public static int fchdir(int fd) {
@@ -215,7 +210,7 @@ public final class PosixIO {
     }
 
     public static int fcntl(int fd, int op, int arg) {
-        return FCNTL.apply(fd, op, arg);
+        return NativeH.fcntl(fd, op, arg);
     }
 
     public static String readlink(Arena arena, String path) {

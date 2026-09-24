@@ -40,6 +40,10 @@ public final class Main {
     private static final String OCI_SPEC_VERSION = "1.0.2";
 
     public static void main(String[] args) {
+        // One carrier thread is enough for the foreground I/O tasks, which
+        // are parked almost all the time. This has to be set at run time: a
+        // -D passed to native-image only applies while the image is built.
+        System.setProperty("jdk.virtualThreadScheduler.parallelism", "1");
         boolean trace = "1".equals(System.getenv("_TAKOYAKI_TRACE_STARTUP"));
         // Capture monotonic time AS EARLY AS POSSIBLE. We print all trace
         // lines together at the end of main() so warm-up of PrintStream /

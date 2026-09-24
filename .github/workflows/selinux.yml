@@ -37,6 +37,9 @@ jobs:
         with:
           java-version: '25'
           distribution: 'graalvm-community'
+          # GraalVM 25.3 (innovation release) or later: the 25.0 line cannot
+          # compile the constant downcall handles in ffi.Downcalls.
+          version: '25.3'
           cache: 'gradle'
 
       - name: Install jextract

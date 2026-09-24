@@ -17,7 +17,7 @@ import java.lang.reflect.Modifier;
  */
 public final class GeneratedForeignFeature implements Feature {
 
-    private static final String BASE_CLASS = "com.ternbusty.takoyaki.syscall.gen.NativeH";
+    private static final String BASE_CLASS = "com.ternbusty.takoyaki.syscall.gen.NativeHRaw";
 
     @Override
     public void duringSetup(DuringSetupAccess access) {

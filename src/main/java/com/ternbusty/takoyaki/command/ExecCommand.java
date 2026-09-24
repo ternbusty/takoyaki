@@ -572,7 +572,7 @@ public final class ExecCommand {
         // pty in the container's devpts and sends the master back via
         // SCM_RIGHTS on the console socketpair.
         int masterFd = -1;
-        Thread ioThread = null;
+        boolean relayPty = false;
         if (consoleReadFd >= 0) {
             masterFd = com.ternbusty.takoyaki.console.InternalConsole
                     .receiveMasterFromSocket(consoleReadFd);
@@ -584,8 +584,7 @@ public final class ExecCommand {
                 com.ternbusty.takoyaki.console.ConsoleSocket
                         .sendMasterTo(consoleSocket, masterFd);
             } else if (masterFd >= 0 && !detach) {
-                ioThread = com.ternbusty.takoyaki.console.InternalConsole
-                        .startIOCopyForFd(masterFd);
+                relayPty = true;
             }
         }
 
@@ -614,14 +613,12 @@ public final class ExecCommand {
             if (masterFd >= 0) PosixIO.close(masterFd);
             return 0;
         }
-        int code = Wait.waitForChild(workloadPid);
-        // Join the ioThread BEFORE closing masterFd so it can drain remaining
-        // PTY output. Once the container exits the slave side closes, causing
-        // read on the master to return EOF; closing the master prematurely
-        // races with the reader and can lose the last chunk of output.
-        if (ioThread != null) {
-            try { ioThread.join(5_000); } catch (InterruptedException ignored) {}
-        }
+        // With a pty, relay it and wait for the workload the same way a
+        // foreground run does (IoLoop-driven, no blocking reads on virtual
+        // threads).
+        int code = relayPty
+                ? com.ternbusty.takoyaki.ioloop.Foreground.supervise(masterFd, workloadPid)
+                : Wait.waitForChild(workloadPid);
         if (masterFd >= 0) PosixIO.close(masterFd);
         return written ? code : EXIT_RUNTIME_ERROR;
     }

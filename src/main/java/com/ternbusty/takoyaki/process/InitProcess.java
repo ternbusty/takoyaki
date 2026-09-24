@@ -344,6 +344,7 @@ public final class InitProcess {
                 Rootfs.maskPaths(spec.linux.maskedPaths);
                 Rootfs.readonlyRemount(spec.linux.readonlyPaths);
             }
+            Rootfs.remountDevReadonly(spec);
 
             // Generate /etc/passwd and /etc/group entries while still writable.
             if (spec.process != null) {
