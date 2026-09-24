@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.console;
 
+import com.ternbusty.takoyaki.ioloop.IoLoop;
 import com.ternbusty.takoyaki.ipc.ScmRights;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Constants;
@@ -15,21 +16,25 @@ import java.nio.file.Path;
 
 /**
  * Internal PTY proxy for foreground {@code runc run} and {@code runc exec -t}
- * when no external {@code --console-socket} is given. Creates a temporary unix
- * socket, accepts one connection from the container init (which sends the PTY
- * master fd via SCM_RIGHTS), then copies I/O between the master and the
- * caller's stdin/stdout until the master closes (container exits).
+ * when no external {@code --console-socket} is given. The container side
+ * opens the pty and sends the master fd back via SCM_RIGHTS; the I/O between
+ * the master and the caller's stdin/stdout is then relayed by
+ * {@link com.ternbusty.takoyaki.ioloop.Foreground}.
  *
- * <p>For exec, a pre-connected socketpair is used instead of a path-based
- * socket because the exec process has already entered the container mount
- * namespace (so a host path is unreachable).
+ * <p>For run, a unix socket is bound at a temporary path in the bundle. For
+ * exec, a pre-connected socketpair is used instead because the exec process
+ * has already entered the container mount namespace (so a host path is
+ * unreachable).
+ *
+ * <p>Nothing here waits on another thread. The runtime connects to the socket
+ * itself before starting the init, and the init sends the master (or gives
+ * up and closes its end) before it reports ready, so once create has
+ * returned the master is either queued on the socket or never coming.
  */
 public final class InternalConsole {
     private final String socketPath;
-    volatile int masterFd = -1;
-    private volatile boolean stopped;
-    private Thread listenerThread;
-    private Thread ioThread;
+    private int listenFd = -1;
+    private int masterFd = -1;
 
     private InternalConsole(String socketPath) {
         this.socketPath = socketPath;
@@ -38,79 +43,78 @@ public final class InternalConsole {
     /** Console socket path that should be passed to CreateCommand. */
     public String socketPath() { return socketPath; }
 
-    /** The PTY master fd received via SCM_RIGHTS, or -1 if not yet received. */
+    /** The PTY master fd received via SCM_RIGHTS, or -1 if none was received. */
     public int masterFd() { return masterFd; }
 
     /**
-     * Create an internal console socket for foreground {@code runc run}. The
-     * returned object owns a unix listener socket at a temporary path; call
-     * {@link #startListening()} before the container init starts so the socket
-     * is ready.
+     * Create the internal console socket for foreground {@code runc run}: a
+     * non-blocking unix listener at a temporary path in the bundle. Call this
+     * before the container init starts, then {@link #receiveMaster()} after
+     * create has returned.
+     *
+     * @return the console, or null if the socket could not be set up
      */
-    public static InternalConsole createForRun(String bundlePath) {
+    public static InternalConsole listenForRun(String bundlePath) {
         String path = bundlePath + "/internal-console.sock";
         // Remove stale socket from a previous run (unlink is idempotent).
         try { Files.deleteIfExists(Path.of(path)); } catch (IOException ignored) {}
-        return new InternalConsole(path);
+        InternalConsole console = new InternalConsole(path);
+        try (Arena arena = Arena.ofConfined()) {
+            int fd = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
+            if (fd < 0) {
+                Logger.warn("internal console: socket failed: " + Libc.strerror(Libc.errno()));
+                return null;
+            }
+            console.listenFd = fd;
+            if (PosixIO.bindUnix(arena, fd, path) < 0) {
+                Logger.warn("internal console: bind " + path + " failed: " + Libc.strerror(Libc.errno()));
+                console.stop();
+                return null;
+            }
+            if (PosixIO.listen(fd, 1) < 0) {
+                Logger.warn("internal console: listen failed: " + Libc.strerror(Libc.errno()));
+                console.stop();
+                return null;
+            }
+            IoLoop.setNonBlocking(fd);
+        }
+        Logger.debug("internal console: listening on " + path);
+        return console;
     }
 
     /**
-     * Start a thread that listens on the socket, accepts one connection, and
-     * receives the PTY master fd via SCM_RIGHTS. The master fd is stashed in
-     * {@link #masterFd}.
+     * Take the PTY master fd the init sent, without blocking. Must be called
+     * after create has returned; a missing connection or message means the
+     * init could not set up a pty.
+     *
+     * @return the master fd, or -1
      */
-    public void startListening() {
-        listenerThread = Thread.ofVirtual()
-                .name("internal-console-listener")
-                .start(() -> {
-            try (Arena arena = Arena.ofConfined()) {
-                int listenFd = PosixIO.socket(Constants.AF_UNIX, Constants.SOCK_STREAM, 0);
-                if (listenFd < 0) {
-                    Logger.warn("internal console: socket failed: " + Libc.strerror(Libc.errno()));
-                    return;
-                }
-                if (PosixIO.bindUnix(arena, listenFd, socketPath) < 0) {
-                    Logger.warn("internal console: bind " + socketPath + " failed: "
-                            + Libc.strerror(Libc.errno()));
-                    PosixIO.close(listenFd);
-                    return;
-                }
-                if (PosixIO.listen(listenFd, 1) < 0) {
-                    Logger.warn("internal console: listen failed: " + Libc.strerror(Libc.errno()));
-                    PosixIO.close(listenFd);
-                    return;
-                }
-                Logger.debug("internal console: waiting for connection on " + socketPath);
-                int connFd = PosixIO.accept(listenFd);
-                PosixIO.close(listenFd);
-                if (connFd < 0) {
-                    if (!stopped) {
-                        Logger.warn("internal console: accept failed: " + Libc.strerror(Libc.errno()));
-                    }
-                    return;
-                }
-                masterFd = ScmRights.recvFd(connFd);
-                PosixIO.close(connFd);
-                if (masterFd >= 0) {
-                    clearONLCR(masterFd);
-                    Logger.debug("internal console: received master fd " + masterFd);
-                } else {
-                    Logger.warn("internal console: failed to receive master fd");
-                }
-            }
-        });
-    }
-
-    /** Wait for the listener thread to complete (connection established). */
-    public boolean awaitMaster(long timeoutMs) {
-        if (listenerThread == null) return false;
-        try { listenerThread.join(timeoutMs); } catch (InterruptedException ignored) {}
-        return masterFd >= 0;
+    public int receiveMaster() {
+        if (listenFd < 0) return -1;
+        int connFd = PosixIO.accept(listenFd);
+        PosixIO.close(listenFd);
+        listenFd = -1;
+        if (connFd < 0) {
+            Logger.warn("internal console: no connection from init: " + Libc.strerror(Libc.errno()));
+            return -1;
+        }
+        IoLoop.setNonBlocking(connFd);
+        int fd = ScmRights.recvFd(connFd);
+        PosixIO.close(connFd);
+        if (fd < 0) {
+            Logger.warn("internal console: init did not send a pty master");
+            return -1;
+        }
+        clearONLCR(fd);
+        Logger.debug("internal console: received master fd " + fd);
+        masterFd = fd;
+        return fd;
     }
 
     /**
      * Receive the PTY master fd from a pre-connected socketpair (exec path).
-     * Blocks until the fd arrives or the peer closes.
+     * Blocks until the fd arrives or the peer closes; the caller must already
+     * have closed its copy of the peer end.
      */
     public static int receiveMasterFromSocket(int sockFd) {
         int fd = ScmRights.recvFd(sockFd);
@@ -119,41 +123,6 @@ public final class InternalConsole {
             Logger.debug("internal console (exec): received master fd " + fd);
         }
         return fd;
-    }
-
-    /**
-     * Start I/O copying for a given master fd (used by exec path).
-     */
-    public static Thread startIOCopyForFd(int masterFd) {
-        Thread reader = Thread.ofVirtual()
-                .name("pty-to-stdout")
-                .start(() -> {
-            try (Arena arena = Arena.ofConfined()) {
-                byte[] buf = new byte[8192];
-                while (true) {
-                    long n = PosixIO.read(arena, masterFd, buf);
-                    if (n <= 0) break;
-                    System.out.write(buf, 0, (int) n);
-                    System.out.flush();
-                }
-            } catch (Exception ignored) {}
-        });
-
-        Thread.ofVirtual()
-                .name("stdin-to-pty")
-                .start(() -> {
-            try (Arena arena = Arena.ofConfined()) {
-                byte[] buf = new byte[4096];
-                while (true) {
-                    int n = System.in.read(buf);
-                    if (n <= 0) break;
-                    byte[] chunk = n == buf.length ? buf : java.util.Arrays.copyOf(buf, n);
-                    PosixIO.write(arena, masterFd, chunk);
-                }
-            } catch (Exception ignored) {}
-        });
-
-        return reader;
     }
 
     /**
@@ -180,21 +149,16 @@ public final class InternalConsole {
         }
     }
 
-    /** Clean up: wait for I/O threads to drain, close master fd, remove socket file. */
+    /** Clean up: close the listener and the master fd, remove the socket file. */
     public void stop() {
-        stopped = true;
-        // Let the reader thread drain remaining PTY data before closing the fd.
-        // Without this, a race between waitForChild returning and the reader
-        // reaching EOF can lose the last chunk of container output.
-        if (ioThread != null) {
-            try { ioThread.join(5_000); } catch (InterruptedException ignored) {}
+        if (listenFd >= 0) {
+            PosixIO.close(listenFd);
+            listenFd = -1;
         }
         if (masterFd >= 0) {
             PosixIO.close(masterFd);
             masterFd = -1;
         }
-        if (socketPath != null) {
-            try { Files.deleteIfExists(Path.of(socketPath)); } catch (IOException ignored) {}
-        }
+        try { Files.deleteIfExists(Path.of(socketPath)); } catch (IOException ignored) {}
     }
 }
