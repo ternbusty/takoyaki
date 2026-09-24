@@ -12,18 +12,12 @@ import java.lang.foreign.ValueLayout;
  * {@code MockedStatic<Libc>} unit tests are unaffected; only the plumbing moved
  * from hand-written FFM downcalls to generated ones.
  *
- * Variadic functions (prctl, syscall, ioctl) are called through jextract's
- * {@code makeInvoker} factory with the fixed argument layouts takoyaki uses.
+ * Variadic functions (prctl, syscall, ioctl) are called through the fixed
+ * argument shapes generated into {@link NativeH} (see generateFastBindings in
+ * build.gradle.kts).
  */
 public final class Libc {
     private Libc() {}
-
-    private static final NativeH.prctl PRCTL =
-            NativeH.prctl.makeInvoker(NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG);
-    private static final NativeH.syscall SYSCALL =
-            NativeH.syscall.makeInvoker(NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG, NativeH.C_LONG);
-    private static final NativeH.ioctl IOCTL =
-            NativeH.ioctl.makeInvoker(NativeH.C_POINTER);
 
     public static int unshare(int flags) {
         return NativeH.unshare(flags);
@@ -75,7 +69,7 @@ public final class Libc {
     }
 
     public static int prctl(int op, long a, long b, long c, long d) {
-        return PRCTL.apply(op, a, b, c, d);
+        return NativeH.prctl(op, a, b, c, d);
     }
 
     public static int umask(int mask) {
@@ -124,7 +118,7 @@ public final class Libc {
     }
 
     public static long syscall(long nr, long a1, long a2, long a3, long a4, long a5) {
-        return SYSCALL.apply(nr, a1, a2, a3, a4, a5);
+        return NativeH.syscall(nr, a1, a2, a3, a4, a5);
     }
 
     public static int geteuid() {
@@ -152,7 +146,7 @@ public final class Libc {
     }
 
     public static int ioctl(int fd, long request, MemorySegment arg) {
-        return IOCTL.apply(fd, request, arg);
+        return NativeH.ioctl(fd, request, arg);
     }
 
     public static int waitpid(int pid, MemorySegment status, int options) {
