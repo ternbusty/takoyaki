@@ -28,11 +28,17 @@ fi
 # Copy the takoyaki binary into the runc tree as "runc" so that
 # helpers.bash's default RUNC path (../../runc relative to
 # tests/integration/) resolves to it without any code changes.
-# Kill stale processes holding the old binary before copying.
+# Kill stale processes holding the old binary before copying; they run as
+# root, so fuser needs sudo. Refuse to go on with anything but a fresh copy:
+# testing a stale binary silently is worse than failing.
 if ! cp "$RUNTIME" "$RUNC_DIR/runc" 2>/dev/null; then
-    fuser -k "$RUNC_DIR/runc" 2>/dev/null || true
+    sudo fuser -k -KILL "$RUNC_DIR/runc" 2>/dev/null || true
     sleep 0.5
     cp "$RUNTIME" "$RUNC_DIR/runc"
+fi
+if ! cmp -s "$RUNTIME" "$RUNC_DIR/runc"; then
+    echo "error: could not copy $RUNTIME to $RUNC_DIR/runc" >&2
+    exit 1
 fi
 chmod +x "$RUNC_DIR/runc"
 
@@ -58,6 +64,10 @@ ERRORS=""
 
 # Clean up stale state left by timed-out or crashed tests.
 cleanup_stale_state() {
+    # A runtime left hanging by a timed-out test survives the timeout (it is
+    # not in the killed process group once bats is gone) and keeps the
+    # binary busy; kill whatever still executes it.
+    sudo fuser -k -KILL "$RUNC_DIR/runc" >/dev/null 2>&1 || true
     sudo rm -f /tmp/takoyaki-*.sock 2>/dev/null || true
     sudo rm -rf /run/takoyaki/* 2>/dev/null || true
     # Remove leftover dummy network devices (netdev.bats).
