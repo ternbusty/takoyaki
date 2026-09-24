@@ -44,6 +44,40 @@ class CgroupTest {
     }
 
     @Test
+    void prepareConfiguresTheCgroupWithoutMovingAnyPid() {
+        // prepare runs before stage-1 exists, which is then created directly
+        // in the cgroup (clone3 CLONE_INTO_CGROUP). It must not write
+        // cgroup.procs: that is what waits for an RCU grace period.
+        Spec.LinuxResources r = resources();
+        r.memory = new Spec.LinuxMemory();
+        r.memory.limit = 67108864L;
+
+        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+            fm.when(() -> Files.createDirectories(any())).thenReturn(null);
+            fm.when(() -> Files.writeString(any(), anyString())).thenReturn(Path.of("/dev/null"));
+            fm.when(() -> Files.readString(any())).thenReturn("");
+            Spec.Linux linux = new Spec.Linux();
+            linux.resources = r;
+
+            assertTrue(Cgroup.prepare("/takoyaki-prep", linux));
+            fm.verify(() -> Files.writeString(
+                    eq(Path.of("/sys/fs/cgroup/takoyaki-prep/memory.max")),
+                    eq("67108864")));
+            fm.verify(() -> Files.writeString(
+                    eq(Path.of("/sys/fs/cgroup/takoyaki-prep/cgroup.procs")),
+                    anyString()), never());
+        }
+    }
+
+    @Test
+    void prepareWithoutCgroupPathHasNothingToJoin() {
+        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+            assertFalse(Cgroup.prepare(null, null));
+            fm.verifyNoInteractions();
+        }
+    }
+
+    @Test
     void memoryLimitWritesMemoryMax() {
         // Confirm spec.linux.resources.memory.limit lands at memory.max with
         // the exact value (or "max" sentinel for -1).

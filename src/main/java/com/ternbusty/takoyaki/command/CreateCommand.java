@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.command;
 
+import com.ternbusty.takoyaki.cgroup.Cgroup;
 import com.ternbusty.takoyaki.exeseal.ExeSeal;
 import com.ternbusty.takoyaki.ipc.NotifySocket;
 import com.ternbusty.takoyaki.logger.Logger;
@@ -14,6 +15,7 @@ import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.util.Json;
 
 import java.lang.foreign.Arena;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -448,7 +450,33 @@ public final class CreateCommand {
         Arena execArena = Arena.ofShared();
         PosixIO.ExecvePayload payload = PosixIO.ExecvePayload.build(execArena, exePath, argv, envp);
 
-        int forkPid = ForkExec.forkExec(payload, syncFds[0], mainParentFd);
+        // Create and configure the cgroup before spawning stage-1 so that it
+        // can be born in it (clone3 CLONE_INTO_CGROUP). Moving it in later by
+        // writing cgroup.procs waits for an RCU grace period, several ms on
+        // every run that does not closely follow another. If the cgroup
+        // cannot be prepared here (e.g. a non-empty or frozen cgroup), fall
+        // back to the old path: MainProcess sets it up and reports the error.
+        String cgroupsPath = MainProcess.effectiveCgroupsPath(spec, containerId);
+        boolean cgroupPreExisted = Files.exists(Cgroup.dir(cgroupsPath).resolve("cgroup.procs"));
+        boolean cgroupPrepared;
+        try {
+            cgroupPrepared = Cgroup.prepare(cgroupsPath, spec.linux);
+        } catch (RuntimeException e) {
+            Logger.debug("cgroup not prepared before spawn: " + e.getMessage());
+            cgroupPrepared = false;
+        }
+        int forkPid = -1;
+        if (cgroupPrepared) {
+            forkPid = ForkExec.forkExecIntoCgroup(payload, syncFds[0], mainParentFd,
+                    execArena.allocateFrom(Cgroup.dir(cgroupsPath).toString()));
+            if (forkPid < 0) {
+                Logger.debug("clone3 into cgroup failed: " + Libc.strerror(Libc.errno()));
+            }
+        }
+        boolean cgroupJoined = forkPid >= 0;
+        if (!cgroupJoined) {
+            forkPid = ForkExec.forkExec(payload, syncFds[0], mainParentFd);
+        }
         if (forkPid < 0) {
             System.err.println("fork failed: " + Libc.strerror(Libc.errno()));
             return 1;
@@ -464,7 +492,8 @@ public final class CreateCommand {
 
         MainProcess.run(forkPid, syncFds[0], spec, containerId,
                 bundle, rootPath, pidFile, notifyListenerFd, mainParentFd,
-                pidfdSocket);
+                pidfdSocket,
+                new MainProcess.CgroupJoin(cgroupsPath, cgroupPreExisted, cgroupJoined));
         return 0;
     }
 }

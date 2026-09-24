@@ -125,6 +125,10 @@ struct takoyaki_clone_args {
     unsigned long cgroup;
 };
 
+#ifndef CLONE_INTO_CGROUP
+# define CLONE_INTO_CGROUP 0x200000000ULL
+#endif
+
 #ifndef __NR_clone3
 # if defined(__aarch64__)
 #  define __NR_clone3 435
@@ -133,19 +137,11 @@ struct takoyaki_clone_args {
 # endif
 #endif
 
-/* Try clone3 first (provides CLONE_PIDFD and a tidy interface) and fall back to clone
- * if the kernel is too old. The returned pidfd is currently unused but the migration
- * to clone3 is cheap and brings us in line with modern runtimes. */
+/* Create a sibling of the caller, like runc's nsexec clone_parent. This uses
+ * clone(2), not clone3: clone3 rejects CLONE_PARENT with a non-zero
+ * exit_signal (EINVAL), while clone ignores the signal and the child takes
+ * the caller's exit signal (SIGCHLD) either way. */
 static pid_t clone_parent(void) {
-    struct takoyaki_clone_args ca = {0};
-    ca.flags = CLONE_PARENT;
-    ca.exit_signal = SIGCHLD;
-    long rc = syscall(__NR_clone3, &ca, sizeof(ca));
-    if (rc >= 0) return (pid_t) rc;
-    if (errno != ENOSYS && errno != EINVAL) {
-        fprintf(stderr, "[clone_parent] clone3 failed: %s, falling back to clone\n",
-                strerror(errno));
-    }
     pid_t pid = syscall(SYS_clone, SIGCHLD | CLONE_PARENT, NULL, NULL, NULL, NULL);
     if (pid < 0) {
         fprintf(stderr, "[clone_parent] clone failed: %s\n", strerror(errno));
@@ -910,14 +906,43 @@ void takoyaki_bootstrap(void) {
  * before the fork, when SubstrateVM is still in a consistent state.
  *
  * Returns the child pid to the caller (parent), or -1 on fork failure. */
-int takoyaki_fork_exec(const char *path, char *const argv[], char *const envp[],
-                       int close_fd1, int close_fd2) {
-    pid_t pid = fork();
-    if (pid != 0) return pid;   /* parent: return child pid (or -1) */
-
+static void fork_exec_child(const char *path, char *const argv[], char *const envp[],
+                            int close_fd1, int close_fd2) {
     /* child — pure C, no managed runtime interaction */
     if (close_fd1 >= 0) close(close_fd1);
     if (close_fd2 >= 0) close(close_fd2);
     execve(path, argv, envp);
     _exit(127);
+}
+
+int takoyaki_fork_exec(const char *path, char *const argv[], char *const envp[],
+                       int close_fd1, int close_fd2) {
+    pid_t pid = fork();
+    if (pid != 0) return pid;   /* parent: return child pid (or -1) */
+    fork_exec_child(path, argv, envp, close_fd1, close_fd2);
+    return -1;
+}
+
+/* Like takoyaki_fork_exec, but the child is created directly in the cgroup
+ * at cgroup_dir with clone3(CLONE_INTO_CGROUP). Moving a process by writing
+ * cgroup.procs takes cgroup_threadgroup_rwsem for writing, which waits for an
+ * RCU grace period (several ms) unless another writer ran just before;
+ * joining at clone time only takes it for reading.
+ *
+ * Returns the child pid, or -1 with errno set if the cgroup cannot be opened
+ * or clone3 fails (old kernel, cgroup v1); no child exists in that case. */
+int takoyaki_fork_exec_into_cgroup(const char *path, char *const argv[], char *const envp[],
+                                   int close_fd1, int close_fd2, const char *cgroup_dir) {
+    int cgroup_fd = open(cgroup_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (cgroup_fd < 0) return -1;
+    struct takoyaki_clone_args ca = {0};
+    ca.flags = CLONE_INTO_CGROUP;
+    ca.exit_signal = SIGCHLD;
+    ca.cgroup = (unsigned long) cgroup_fd;
+    long rc = syscall(__NR_clone3, &ca, sizeof(ca));
+    if (rc == 0) fork_exec_child(path, argv, envp, close_fd1, close_fd2);
+    int saved = errno;
+    close(cgroup_fd);
+    errno = saved;
+    return (int) rc;
 }

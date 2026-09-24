@@ -52,3 +52,5 @@ enum takoyaki_scmp_action_base {
 /* bootstrap.c: fork+exec in pure C to avoid SubstrateVM safepoint deadlock */
 int takoyaki_fork_exec(const char *path, char *const argv[], char *const envp[],
                        int close_fd1, int close_fd2);
+int takoyaki_fork_exec_into_cgroup(const char *path, char *const argv[], char *const envp[],
+                                   int close_fd1, int close_fd2, const char *cgroup_dir);

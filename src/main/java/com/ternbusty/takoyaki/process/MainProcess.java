@@ -23,7 +23,7 @@ public final class MainProcess {
     public static void run(int stage1Pid, int syncFd, Spec spec, String containerId,
                            String bundlePath, String rootPath, String pidFile,
                            int notifyListenerFd, int mainSenderFd,
-                           String pidfdSocket) {
+                           String pidfdSocket, CgroupJoin cgroupJoin) {
         Logger.setContext("main");
         Logger.debug("main proc started; stage1=" + stage1Pid);
         if (Logger.isDebugEnabled()) {
@@ -33,24 +33,16 @@ public final class MainProcess {
             } catch (Exception e) {}
         }
 
-        // runc compat: assign a default cgroup path when none is specified.
-        // Many bats tests (pause, events, update, cpu_affinity) rely on the
-        // container having a cgroup without explicitly setting cgroupsPath.
-        String effectiveCgroupsPath = spec.linux != null ? spec.linux.cgroupsPath : null;
-        if (effectiveCgroupsPath == null) {
-            effectiveCgroupsPath = "takoyaki/" + containerId;
-            Logger.debug("no cgroupsPath in spec, defaulting to " + effectiveCgroupsPath);
-        }
+        String effectiveCgroupsPath = cgroupJoin.path();
+        boolean cgroupPreExisted = cgroupJoin.preExisted();
 
         int stage2Pid = -1;
-        // Track whether the cgroup existed before we tried to create it.
-        // On failure we must NOT clean up a pre-existing cgroup: doing so
-        // would kill another container's processes (e.g. ct1 in the runc
-        // "non-empty cgroup" test) and remove a frozen cgroup the test set up.
-        boolean cgroupPreExisted = Files.exists(
-                Cgroup.dir(effectiveCgroupsPath).resolve("cgroup.procs"));
         try {
-            Cgroup.setup(stage1Pid, effectiveCgroupsPath, spec.linux);
+            // Stage-1 was either born in the cgroup (clone3 CLONE_INTO_CGROUP)
+            // or still has to be moved in here.
+            if (!cgroupJoin.joined()) {
+                Cgroup.setup(stage1Pid, effectiveCgroupsPath, spec.linux);
+            }
             // rlimits are NOT applied to the bootstrap pid from here — doing so
             // forces them on the freshly-spawned Java init, and a low RLIMIT_AS
             // (e.g. the OCI runtime-tools process_rlimits test sets 1 GiB soft)
@@ -126,8 +118,12 @@ public final class MainProcess {
             // directory, enabled controllers, applied limits, and attached
             // the device BPF program for this same cgroupPath. Re-running
             // setup would stack a second identical device filter, so only
-            // move the final init pid into the cgroup here.
-            Cgroup.addPid(effectiveCgroupsPath, stage2Pid);
+            // move the final init pid into the cgroup here. When stage-1 was
+            // born in the cgroup, stage-2 (cloned from it) already is too,
+            // and writing cgroup.procs would only cost an RCU grace period.
+            if (!cgroupJoin.joined()) {
+                Cgroup.addPid(effectiveCgroupsPath, stage2Pid);
+            }
             // runc compat: reset CPU affinity to all CPUs after cgroup
             // assignment, so the container inherits the cpuset mask rather
             // than the parent's (potentially restricted) affinity.
@@ -245,6 +241,34 @@ public final class MainProcess {
             PosixIO.close(notifyListenerFd);
             PosixIO._exit(1);
         }
+    }
+
+    /**
+     * The container's cgroup as decided before stage-1 was spawned.
+     *
+     * @param path       cgroup path relative to the cgroup v2 mount
+     * @param preExisted whether the cgroup existed before this create. On
+     *                   failure a pre-existing cgroup must NOT be cleaned up:
+     *                   doing so would kill another container's processes
+     *                   (e.g. ct1 in the runc "non-empty cgroup" test) and
+     *                   remove a frozen cgroup the test set up.
+     * @param joined     whether stage-1 was created directly in the cgroup,
+     *                   which is then already set up
+     */
+    public record CgroupJoin(String path, boolean preExisted, boolean joined) {}
+
+    /**
+     * runc compat: assign a default cgroup path when none is specified.
+     * Many bats tests (pause, events, update, cpu_affinity) rely on the
+     * container having a cgroup without explicitly setting cgroupsPath.
+     */
+    public static String effectiveCgroupsPath(Spec spec, String containerId) {
+        String path = spec.linux != null ? spec.linux.cgroupsPath : null;
+        if (path == null) {
+            path = "takoyaki/" + containerId;
+            Logger.debug("no cgroupsPath in spec, defaulting to " + path);
+        }
+        return path;
     }
 
     /**
