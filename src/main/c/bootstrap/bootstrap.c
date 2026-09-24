@@ -137,19 +137,11 @@ struct takoyaki_clone_args {
 # endif
 #endif
 
-/* Try clone3 first (provides CLONE_PIDFD and a tidy interface) and fall back to clone
- * if the kernel is too old. The returned pidfd is currently unused but the migration
- * to clone3 is cheap and brings us in line with modern runtimes. */
+/* Create a sibling of the caller, like runc's nsexec clone_parent. This uses
+ * clone(2), not clone3: clone3 rejects CLONE_PARENT with a non-zero
+ * exit_signal (EINVAL), while clone ignores the signal and the child takes
+ * the caller's exit signal (SIGCHLD) either way. */
 static pid_t clone_parent(void) {
-    struct takoyaki_clone_args ca = {0};
-    ca.flags = CLONE_PARENT;
-    ca.exit_signal = SIGCHLD;
-    long rc = syscall(__NR_clone3, &ca, sizeof(ca));
-    if (rc >= 0) return (pid_t) rc;
-    if (errno != ENOSYS && errno != EINVAL) {
-        fprintf(stderr, "[clone_parent] clone3 failed: %s, falling back to clone\n",
-                strerror(errno));
-    }
     pid_t pid = syscall(SYS_clone, SIGCHLD | CLONE_PARENT, NULL, NULL, NULL, NULL);
     if (pid < 0) {
         fprintf(stderr, "[clone_parent] clone failed: %s\n", strerror(errno));
