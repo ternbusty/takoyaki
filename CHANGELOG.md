@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.0](https://github.com/ternbusty/takoyaki/compare/v0.4.1...v0.5.0) (2026-09-24)
+
+
+### 🎉 Features
+
+* **ioloop:** replace platform threads with epoll IoLoop + virtual threads ([#84](https://github.com/ternbusty/takoyaki/issues/84)) ([4356c5e](https://github.com/ternbusty/takoyaki/commit/4356c5e93cbbf8fc256f25c3536eaf2b32176f8d))
+
+
+### 🐛 Bug Fixes
+
+* **console:** stop blocking on the pty master from virtual threads ([#90](https://github.com/ternbusty/takoyaki/issues/90)) ([30319d7](https://github.com/ternbusty/takoyaki/commit/30319d7508175a64a998fd20b8bfa4a1a890c3d9))
+* **create:** avoid SubstrateVM safepoint deadlock after fork ([#85](https://github.com/ternbusty/takoyaki/issues/85)) ([901a289](https://github.com/ternbusty/takoyaki/commit/901a28959c4402a4f0e73b426134ab341496e347))
+* **ioloop:** keep the virtual thread scheduler to one carrier at run time ([#87](https://github.com/ternbusty/takoyaki/issues/87)) ([d17a3eb](https://github.com/ternbusty/takoyaki/commit/d17a3eb6e7b270d3e8db1252c2e0a92d17cff1c2))
+* **rootfs:** keep /dev/ptmx as pts/ptmx and remount a read-only /dev last ([#91](https://github.com/ternbusty/takoyaki/issues/91)) ([dd7eb37](https://github.com/ternbusty/takoyaki/commit/dd7eb379c9edd362f09f616c1ac39bf55a103c7f))
+
+
+### ⚡ Performance Improvements
+
+* **build:** disable SecurityServicesFeature to trim unused crypto from binary ([#86](https://github.com/ternbusty/takoyaki/issues/86)) ([9d5cecb](https://github.com/ternbusty/takoyaki/commit/9d5cecb31e152a492cf16c8c04cbf64895efee46))
+* **create:** spawn stage-1 directly into the container cgroup ([#92](https://github.com/ternbusty/takoyaki/issues/92)) ([e97abeb](https://github.com/ternbusty/takoyaki/commit/e97abebcef76b164fe0d3d35eafc43653f150b50))
+* **ffm:** call jextract bindings through constant downcall handles ([#88](https://github.com/ternbusty/takoyaki/issues/88)) ([fbc69f8](https://github.com/ternbusty/takoyaki/commit/fbc69f83a5ab133aa790fec2f6b3b5563463ad0d))
+
+
+### 🔗 Dependencies
+
+* **deps:** bump org.graalvm.buildtools.native from 1.1.11 to 1.1.12 ([#79](https://github.com/ternbusty/takoyaki/issues/79)) ([c9a007f](https://github.com/ternbusty/takoyaki/commit/c9a007f5e3093572ae50f8d0cf17be9d31834b00))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.12 to 1.1.13 ([#82](https://github.com/ternbusty/takoyaki/issues/82)) ([d786f3f](https://github.com/ternbusty/takoyaki/commit/d786f3f10b4dc66f010718447ff5c6dd9e4b7275))
+
 ## [0.4.1](https://github.com/ternbusty/takoyaki/compare/v0.4.0...v0.4.1) (2026-09-08)
 
 
