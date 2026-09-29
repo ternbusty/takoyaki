@@ -96,12 +96,18 @@ jobs:
           lima sudo install -m 0755 /tmp/takoyaki-bin /usr/local/bin/takoyaki
 
       # ── runc SELinux bats tests ──────────────────────────────────
+      # Use the same runc commit as the tests/runc submodule so that the
+      # SELinux tests match the ones the pattern file was written against.
       - name: Clone runc and build test helpers in VM
         run: |
-          lima sudo bash -c '
+          RUNC_COMMIT=$(git rev-parse HEAD:tests/runc/src/github.com/opencontainers/runc)
+          echo ">>> Using runc $RUNC_COMMIT"
+          lima sudo env RUNC_COMMIT="$RUNC_COMMIT" bash -c '
             set -eux
-            git clone --depth 1 https://github.com/opencontainers/runc /tmp/runc
+            git init -q /tmp/runc
             cd /tmp/runc
+            git fetch -q --depth 1 https://github.com/opencontainers/runc "$RUNC_COMMIT"
+            git checkout -q FETCH_HEAD
             make test-binaries
             chmod +x tests/integration/get-images.sh
             tests/integration/get-images.sh > /dev/null
