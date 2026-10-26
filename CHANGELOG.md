@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1](https://github.com/ternbusty/takoyaki/compare/v0.5.0...v0.5.1) (2026-10-26)
+
+
+### 🔗 Dependencies
+
+* **deps:** bump gradle-wrapper from 9.7.1 to 9.8.0 ([#98](https://github.com/ternbusty/takoyaki/issues/98)) ([c01a879](https://github.com/ternbusty/takoyaki/commit/c01a87928fd4dbd31d2afca62d47262430402d30))
+* **deps:** bump gradle-wrapper from 9.8.0 to 9.8.1 ([#100](https://github.com/ternbusty/takoyaki/issues/100)) ([5807d0c](https://github.com/ternbusty/takoyaki/commit/5807d0c17cccfc76c2ac7b3a039b760617083cd2))
+* **deps:** bump gradle-wrapper from 9.8.1 to 9.8.2 ([#102](https://github.com/ternbusty/takoyaki/issues/102)) ([5134f16](https://github.com/ternbusty/takoyaki/commit/5134f168b637af8e43063518478c361bba6b5adc))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.13 to 1.1.14 ([#95](https://github.com/ternbusty/takoyaki/issues/95)) ([366e126](https://github.com/ternbusty/takoyaki/commit/366e12691bd63d878b7ccaea6fe9b035a1aa5f41))
+* **deps:** bump org.graalvm.buildtools.native from 1.1.14 to 1.1.16 ([#101](https://github.com/ternbusty/takoyaki/issues/101)) ([ca089ce](https://github.com/ternbusty/takoyaki/commit/ca089cee0759abd38120301e4fa76c9fdcf44a4a))
+* **deps:** bump org.graalvm.sdk:nativeimage from 25.3.4.1 to 25.4.4.1.1 ([#97](https://github.com/ternbusty/takoyaki/issues/97)) ([8aa53d8](https://github.com/ternbusty/takoyaki/commit/8aa53d8ae17ed18c6b24933877db861c6da3f8ba))
+* **deps:** bump org.mockito:mockito-core from 5.23.0 to 5.24.0 ([#94](https://github.com/ternbusty/takoyaki/issues/94)) ([72d40ec](https://github.com/ternbusty/takoyaki/commit/72d40ecac2f85eb8f78acf20b1ea5751d739a041))
+* **deps:** bump org.mockito:mockito-junit-jupiter from 5.23.0 to 5.24.0 ([#96](https://github.com/ternbusty/takoyaki/issues/96)) ([3ba4938](https://github.com/ternbusty/takoyaki/commit/3ba4938ebdbb22f08656a77bd77add727bdd83a7))
+
 ## [0.5.0](https://github.com/ternbusty/takoyaki/compare/v0.4.1...v0.5.0) (2026-09-24)
 
 
