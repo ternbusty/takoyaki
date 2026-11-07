@@ -5,6 +5,7 @@ import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.gen.ifreq;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -122,17 +123,16 @@ public final class NetDevice {
         int sock = PosixIO.socket(Constants.AF_INET, Constants.SOCK_DGRAM, 0);
         if (sock < 0) return -1;
         try {
-            // struct ifreq: 16 bytes name + 4 bytes ifindex + padding = 40 bytes
-            MemorySegment ifreq = arena.allocate(40);
-            ifreq.fill((byte) 0);
+            MemorySegment req = ifreq.allocate(arena);
+            MemorySegment ifrName = ifreq.ifr_ifrn.ifrn_name(ifreq.ifr_ifrn(req));
             byte[] nameBytes = name.getBytes(StandardCharsets.UTF_8);
             for (int i = 0; i < Math.min(nameBytes.length, 15); i++) {
-                ifreq.set(ValueLayout.JAVA_BYTE, i, nameBytes[i]);
+                ifrName.set(ValueLayout.JAVA_BYTE, i, nameBytes[i]);
             }
-            if (Libc.ioctl(sock, SIOCGIFINDEX, ifreq) != 0) {
+            if (Libc.ioctl(sock, SIOCGIFINDEX, req) != 0) {
                 return -1;
             }
-            return ifreq.get(ValueLayout.JAVA_INT, 16);
+            return ifreq.ifr_ifru.ifru_ivalue(ifreq.ifr_ifru(req));
         } finally {
             PosixIO.close(sock);
         }
