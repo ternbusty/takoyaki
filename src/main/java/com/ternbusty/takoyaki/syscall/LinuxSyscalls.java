@@ -1,5 +1,7 @@
 package com.ternbusty.takoyaki.syscall;
 
+import com.ternbusty.takoyaki.ffi.structs.ifreq;
+
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -55,9 +57,7 @@ public final class LinuxSyscalls implements Syscalls {
         }
     }
 
-    /** ifreq layout: name[16] + flags at offset 16. Buffer is 40 bytes total. */
     private static final int IFNAMSIZ = 16;
-    private static final int IFREQ_SIZE = 40;
 
     @Override
     public int ifUp(String ifaceName) {
@@ -65,15 +65,17 @@ public final class LinuxSyscalls implements Syscalls {
             int fd = PosixIO.socket(Constants.AF_INET, Constants.SOCK_DGRAM, 0);
             if (fd < 0) return -1;
             try {
-                MemorySegment ifr = arena.allocate(IFREQ_SIZE, 8);
+                MemorySegment ifr = ifreq.allocate(arena);
+                MemorySegment ifrName = ifreq.ifr_ifrn.ifrn_name(ifreq.ifr_ifrn(ifr));
                 byte[] name = (ifaceName + "\0").getBytes();
                 for (int i = 0; i < name.length && i < IFNAMSIZ; i++) {
-                    ifr.set(ValueLayout.JAVA_BYTE, i, name[i]);
+                    ifrName.set(ValueLayout.JAVA_BYTE, i, name[i]);
                 }
                 if (Libc.ioctl(fd, Constants.SIOCGIFFLAGS, ifr) != 0) return -1;
-                short flags = ifr.get(ValueLayout.JAVA_SHORT, IFNAMSIZ);
+                MemorySegment ifru = ifreq.ifr_ifru(ifr);
+                short flags = ifreq.ifr_ifru.ifru_flags(ifru);
                 flags |= (short) Constants.IFF_UP;
-                ifr.set(ValueLayout.JAVA_SHORT, IFNAMSIZ, flags);
+                ifreq.ifr_ifru.ifru_flags(ifru, flags);
                 if (Libc.ioctl(fd, Constants.SIOCSIFFLAGS, ifr) != 0) return -1;
                 return 0;
             } finally {

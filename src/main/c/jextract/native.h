@@ -29,9 +29,15 @@
 #include <sys/wait.h>
 
 /* kernel / device / namespace constants */
+#include <linux/bpf.h>
 #include <linux/capability.h>
 #include <linux/close_range.h>
+#include <linux/filter.h>
+#include <linux/if_addr.h>
 #include <linux/keyctl.h>
+#include <linux/netlink.h>
+#include <linux/rtnetlink.h>
+#include <linux/sched/types.h>
 #include <linux/sockios.h>
 #include <net/if.h>
 

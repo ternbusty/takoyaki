@@ -204,6 +204,22 @@ val generateFastBindings by tasks.registering(JavaExec::class) {
 }
 sourceSets["main"].java.srcDir(fastBindingsDir)
 
+// Build-time generator for struct accessors with constant offsets (see
+// GenerateStructs). It writes ffi.structs, one class per jextract struct.
+val structsDir = layout.buildDirectory.dir("generated/structs")
+val generateStructs by tasks.registering(JavaExec::class) {
+    classpath = ffigenSourceSet.output + jextractSourceSet.output
+    mainClass = "com.ternbusty.takoyaki.ffigen.GenerateStructs"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
+    inputs.files(ffigenSourceSet.output, jextractSourceSet.output)
+    outputs.dir(structsDir)
+    val outDir = structsDir
+    doFirst { outDir.get().asFile.deleteRecursively() }
+    args(structsDir.get().asFile.absolutePath, jextractDir.get().asFile.absolutePath)
+}
+sourceSets["main"].java.srcDir(structsDir)
+
 // Generate BuildInfo.java so the binary reports the release-please managed
 // project version (and the git commit) instead of a hand-maintained constant.
 val buildInfoDir = layout.buildDirectory.dir("generated/buildinfo")
@@ -244,6 +260,7 @@ val generateBuildInfo by tasks.registering {
 sourceSets["main"].java.srcDir(buildInfoDir)
 tasks.named<JavaCompile>("compileJava") { dependsOn(generateBuildInfo) }
 tasks.named<JavaCompile>("compileJava") { dependsOn(generateFastBindings) }
+tasks.named<JavaCompile>("compileJava") { dependsOn(generateStructs) }
 
 // Pass -Pquick to gradle for a fast (-Ob) development build.
 // Without -Pquick, a fully optimized image is produced.

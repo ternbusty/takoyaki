@@ -7,6 +7,7 @@ import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
+import com.ternbusty.takoyaki.ffi.structs.winsize;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -109,17 +110,16 @@ public final class ConsoleSocket {
 
     /**
      * Set the terminal window size on the given pty fd. Must be called before
-     * wireStdio so the slave inherits the size. struct winsize is {rows, cols,
-     * xpixel, ypixel} = 4 unsigned shorts = 8 bytes.
+     * wireStdio so the slave inherits the size.
      */
     public static void setWinsize(int fd, int rows, int cols) {
         if (rows <= 0 && cols <= 0) return;
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment ws = arena.allocate(8);
-            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 0, (short) rows);
-            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 2, (short) cols);
-            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 4, (short) 0);
-            ws.set(java.lang.foreign.ValueLayout.JAVA_SHORT, 6, (short) 0);
+            MemorySegment ws = winsize.allocate(arena);
+            winsize.ws_row(ws, (short) rows);
+            winsize.ws_col(ws, (short) cols);
+            winsize.ws_xpixel(ws, (short) 0);
+            winsize.ws_ypixel(ws, (short) 0);
             if (Libc.ioctl(fd, Constants.TIOCSWINSZ, ws) != 0) {
                 Logger.warn("TIOCSWINSZ failed: " + Libc.strerror(Libc.errno()));
             }

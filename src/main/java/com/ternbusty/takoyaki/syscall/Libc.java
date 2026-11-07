@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.syscall;
 
+import com.ternbusty.takoyaki.ffi.structs.rlimit64;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
 
 import java.lang.foreign.Arena;
@@ -111,9 +112,9 @@ public final class Libc {
     }
 
     public static int prlimit64(Arena arena, int pid, int resource, long softCur, long hardMax) {
-        MemorySegment newLim = arena.allocate(16);
-        newLim.set(ValueLayout.JAVA_LONG, 0, softCur);
-        newLim.set(ValueLayout.JAVA_LONG, 8, hardMax);
+        MemorySegment newLim = rlimit64.allocate(arena);
+        rlimit64.rlim_cur(newLim, softCur);
+        rlimit64.rlim_max(newLim, hardMax);
         return NativeH.prlimit64(pid, resource, newLim, MemorySegment.NULL);
     }
 

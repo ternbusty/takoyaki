@@ -1,12 +1,12 @@
 package com.ternbusty.takoyaki.ioloop;
 
+import com.ternbusty.takoyaki.ffi.structs.epoll_data;
+import com.ternbusty.takoyaki.ffi.structs.epoll_event;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.epoll_data;
-import com.ternbusty.takoyaki.syscall.gen.epoll_event;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -100,7 +100,7 @@ public final class IoLoop implements AutoCloseable {
      */
     public void run() {
         try (var arena = Arena.ofConfined()) {
-            long eventSize = epoll_event.layout().byteSize();
+            long eventSize = epoll_event.sizeof();
             MemorySegment events = arena.allocate(eventSize * MAX_EVENTS);
             while (!closed) {
                 int n = NativeH.epoll_wait(epfd, events, MAX_EVENTS, -1);

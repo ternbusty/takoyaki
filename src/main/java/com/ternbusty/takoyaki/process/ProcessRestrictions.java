@@ -2,6 +2,7 @@ package com.ternbusty.takoyaki.process;
 
 import com.ternbusty.takoyaki.apparmor.AppArmor;
 import com.ternbusty.takoyaki.capability.Capability;
+import com.ternbusty.takoyaki.ffi.structs.sched_attr;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.seccomp.Seccomp;
 import com.ternbusty.takoyaki.selinux.SeLinux;
@@ -10,6 +11,7 @@ import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Groups;
 import com.ternbusty.takoyaki.syscall.Libc;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
 
 /**
  * The per-process security restriction sequence shared by the container init
@@ -72,35 +74,25 @@ public final class ProcessRestrictions {
      * Apply scheduler attributes from the OCI process.scheduler field. Called
      * before the restriction sequence while the process still has full privileges.
      *
-     * Uses the raw {@code sched_setattr(2)} syscall with a manually-laid-out
-     * {@code struct sched_attr} (48 bytes).
+     * Uses the raw {@code sched_setattr(2)} syscall. The fields come from the
+     * jextract {@code struct sched_attr}, but only its first version
+     * (SCHED_ATTR_SIZE_VER0, 48 bytes) is allocated and announced in
+     * {@code size}: every field set here belongs to it, and newer header
+     * versions append fields (sched_util_min/max) that are not used.
      */
     public static void applyScheduler(Spec.Scheduler scheduler) {
         if (scheduler == null) return;
         try (var arena = java.lang.foreign.Arena.ofConfined()) {
-            // struct sched_attr layout (48 bytes):
-            //   u32 size           offset  0
-            //   u32 sched_policy   offset  4
-            //   u64 sched_flags    offset  8
-            //   s32 sched_nice     offset 16
-            //   u32 sched_priority offset 20
-            //   u64 sched_runtime  offset 24
-            //   u64 sched_deadline offset 32
-            //   u64 sched_period   offset 40
-            var seg = arena.allocate(48);
-            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 0, 48); // size
-            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 4, scheduler.policyValue());
-            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8, scheduler.flagBits());
-            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 16,
-                    scheduler.nice != null ? scheduler.nice : 0);
-            seg.set(java.lang.foreign.ValueLayout.JAVA_INT, 20,
-                    scheduler.priority != null ? scheduler.priority : 0);
-            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 24,
-                    scheduler.runtime != null ? scheduler.runtime : 0L);
-            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 32,
-                    scheduler.deadline != null ? scheduler.deadline : 0L);
-            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG, 40,
-                    scheduler.period != null ? scheduler.period : 0L);
+            int size = NativeH.SCHED_ATTR_SIZE_VER0();
+            var seg = arena.allocate(size, sched_attr.alignof());
+            sched_attr.size(seg, size);
+            sched_attr.sched_policy(seg, scheduler.policyValue());
+            sched_attr.sched_flags(seg, scheduler.flagBits());
+            sched_attr.sched_nice(seg, scheduler.nice != null ? scheduler.nice : 0);
+            sched_attr.sched_priority(seg, scheduler.priority != null ? scheduler.priority : 0);
+            sched_attr.sched_runtime(seg, scheduler.runtime != null ? scheduler.runtime : 0L);
+            sched_attr.sched_deadline(seg, scheduler.deadline != null ? scheduler.deadline : 0L);
+            sched_attr.sched_period(seg, scheduler.period != null ? scheduler.period : 0L);
             long rc = Libc.syscall(Constants.NR_sched_setattr,
                     0, seg.address(), 0, 0, 0);
             if (rc != 0) {
