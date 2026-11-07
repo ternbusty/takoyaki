@@ -5,7 +5,13 @@ import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.gen.ifaddrmsg;
+import com.ternbusty.takoyaki.syscall.gen.ifinfomsg;
 import com.ternbusty.takoyaki.syscall.gen.ifreq;
+import com.ternbusty.takoyaki.syscall.gen.nlmsgerr;
+import com.ternbusty.takoyaki.syscall.gen.nlmsghdr;
+import com.ternbusty.takoyaki.syscall.gen.rtattr;
+import com.ternbusty.takoyaki.syscall.gen.sockaddr_nl;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -47,14 +53,9 @@ public final class NetDevice {
     private static final short IFA_FLAGS     = 8;
     private static final int  IFA_F_PERMANENT = 0x80;
     private static final int  RT_SCOPE_UNIVERSE = 0;
-    private static final int  IFADDRMSG_LEN  = 8;
 
     // ioctl for getting ifindex
     private static final long SIOCGIFINDEX = 0x8933L;
-
-    // struct nlmsghdr size = 16, struct ifinfomsg size = 16
-    private static final int NLMSG_HDRLEN    = 16;
-    private static final int IFINFOMSG_LEN   = 16;
 
     /** A saved IPv4/IPv6 address to re-add after moving a device. */
     private record SavedAddr(int family, int prefixLen, byte[] address) {}
@@ -143,30 +144,20 @@ public final class NetDevice {
      * Sends RTM_SETLINK with IFLA_NET_NS_PID.
      */
     private static void moveToNamespace(Arena arena, int ifindex, int nsPid) {
-        // NLA for IFLA_NET_NS_PID: rta_len=8 (4 header + 4 data), rta_type=IFLA_NET_NS_PID
-        int nlaLen = 4 + 4; // rta header + u32
-        int nlaPadded = align4(nlaLen);
-        int totalLen = NLMSG_HDRLEN + IFINFOMSG_LEN + nlaPadded;
+        int nlaLen = rtaHdrLen() + 4; // rtattr + u32 pid
+        int attrOff = nlmsgHdrLen() + align4((int) ifinfomsg.sizeof());
+        int totalLen = attrOff + align4(nlaLen);
 
         MemorySegment msg = arena.allocate(totalLen);
         msg.fill((byte) 0);
+        putHeader(msg, totalLen, RTM_SETLINK, NLM_F_REQUEST | NLM_F_ACK);
 
-        // nlmsghdr
-        msg.set(ValueLayout.JAVA_INT, 0, totalLen);                             // nlmsg_len
-        msg.set(ValueLayout.JAVA_SHORT, 4, RTM_SETLINK);                       // nlmsg_type
-        msg.set(ValueLayout.JAVA_SHORT, 6, (short)(NLM_F_REQUEST | NLM_F_ACK));// nlmsg_flags
-        msg.set(ValueLayout.JAVA_INT, 8, 1);                                   // nlmsg_seq
-        msg.set(ValueLayout.JAVA_INT, 12, 0);                                  // nlmsg_pid
+        MemorySegment ifi = msg.asSlice(nlmsgHdrLen());
+        ifinfomsg.ifi_family(ifi, (byte) 0);
+        ifinfomsg.ifi_index(ifi, ifindex);
 
-        // ifinfomsg
-        msg.set(ValueLayout.JAVA_BYTE, NLMSG_HDRLEN, (byte) 0);               // ifi_family
-        msg.set(ValueLayout.JAVA_INT, NLMSG_HDRLEN + 4, ifindex);              // ifi_index
-
-        // rtattr IFLA_NET_NS_PID
-        int attrOff = NLMSG_HDRLEN + IFINFOMSG_LEN;
-        msg.set(ValueLayout.JAVA_SHORT, attrOff, (short) nlaLen);              // rta_len
-        msg.set(ValueLayout.JAVA_SHORT, attrOff + 2, IFLA_NET_NS_PID);        // rta_type
-        msg.set(ValueLayout.JAVA_INT, attrOff + 4, nsPid);                     // pid value
+        putAttr(msg, attrOff, nlaLen, IFLA_NET_NS_PID);
+        msg.set(ValueLayout.JAVA_INT, attrOff + rtaHdrLen(), nsPid);
 
         sendNetlink(arena, msg, totalLen);
     }
@@ -177,30 +168,21 @@ public final class NetDevice {
      */
     private static void renameDevice(Arena arena, int ifindex, String newName) {
         byte[] nameBytes = newName.getBytes(StandardCharsets.UTF_8);
-        int nlaLen = 4 + nameBytes.length + 1; // rta header + name + null terminator
-        int nlaPadded = align4(nlaLen);
-        int totalLen = NLMSG_HDRLEN + IFINFOMSG_LEN + nlaPadded;
+        int nlaLen = rtaHdrLen() + nameBytes.length + 1; // rtattr + name + null terminator
+        int attrOff = nlmsgHdrLen() + align4((int) ifinfomsg.sizeof());
+        int totalLen = attrOff + align4(nlaLen);
 
         MemorySegment msg = arena.allocate(totalLen);
         msg.fill((byte) 0);
+        putHeader(msg, totalLen, RTM_SETLINK, NLM_F_REQUEST | NLM_F_ACK);
 
-        // nlmsghdr
-        msg.set(ValueLayout.JAVA_INT, 0, totalLen);
-        msg.set(ValueLayout.JAVA_SHORT, 4, RTM_SETLINK);
-        msg.set(ValueLayout.JAVA_SHORT, 6, (short)(NLM_F_REQUEST | NLM_F_ACK));
-        msg.set(ValueLayout.JAVA_INT, 8, 1);
-        msg.set(ValueLayout.JAVA_INT, 12, 0);
+        MemorySegment ifi = msg.asSlice(nlmsgHdrLen());
+        ifinfomsg.ifi_family(ifi, (byte) 0);
+        ifinfomsg.ifi_index(ifi, ifindex);
 
-        // ifinfomsg
-        msg.set(ValueLayout.JAVA_BYTE, NLMSG_HDRLEN, (byte) 0);
-        msg.set(ValueLayout.JAVA_INT, NLMSG_HDRLEN + 4, ifindex);
-
-        // rtattr IFLA_IFNAME
-        int attrOff = NLMSG_HDRLEN + IFINFOMSG_LEN;
-        msg.set(ValueLayout.JAVA_SHORT, attrOff, (short) nlaLen);
-        msg.set(ValueLayout.JAVA_SHORT, attrOff + 2, IFLA_IFNAME);
+        putAttr(msg, attrOff, nlaLen, IFLA_IFNAME);
         for (int i = 0; i < nameBytes.length; i++) {
-            msg.set(ValueLayout.JAVA_BYTE, attrOff + 4 + i, nameBytes[i]);
+            msg.set(ValueLayout.JAVA_BYTE, attrOff + rtaHdrLen() + i, nameBytes[i]);
         }
 
         sendNetlink(arena, msg, totalLen);
@@ -215,11 +197,8 @@ public final class NetDevice {
         }
         try {
             // Bind to kernel (pid=0, groups=0)
-            // struct sockaddr_nl = { sa_family (2) + pad (2) + pid (4) + groups (4) } = 12
-            MemorySegment sa = arena.allocate(12);
-            sa.fill((byte) 0);
-            sa.set(ValueLayout.JAVA_SHORT, 0, (short) AF_NETLINK);
-            if (PosixIO.bindRaw(arena, sock, sa, 12) < 0) {
+            MemorySegment sa = netlinkAddr(arena);
+            if (PosixIO.bindRaw(arena, sock, sa, (int) sockaddr_nl.sizeof()) < 0) {
                 throw new RuntimeException("netlink bind: "
                         + Libc.strerror(Libc.errno()));
             }
@@ -233,10 +212,10 @@ public final class NetDevice {
             // nlmsghdr(16) + int error(4) + original nlmsghdr(16)
             MemorySegment ack = arena.allocate(1024);
             long n = PosixIO.recvRaw(sock, ack, 1024, 0);
-            if (n < 20) {
+            if (n < nlmsgHdrLen() + Integer.BYTES) {
                 throw new RuntimeException("netlink: no ack received");
             }
-            int err = ack.get(ValueLayout.JAVA_INT, NLMSG_HDRLEN);
+            int err = ackError(ack);
             if (err != 0) {
                 throw new RuntimeException("netlink: "
                         + Libc.strerror(-err));
@@ -255,19 +234,17 @@ public final class NetDevice {
         int sock = PosixIO.socket(AF_NETLINK, Constants.SOCK_DGRAM, NETLINK_ROUTE);
         if (sock < 0) return result;
         try {
-            MemorySegment sa = arena.allocate(12);
-            sa.fill((byte) 0);
-            sa.set(ValueLayout.JAVA_SHORT, 0, (short) AF_NETLINK);
-            if (PosixIO.bindRaw(arena, sock, sa, 12) < 0) return result;
+            MemorySegment sa = netlinkAddr(arena);
+            if (PosixIO.bindRaw(arena, sock, sa, (int) sockaddr_nl.sizeof()) < 0) return result;
+
+            int hdrLen = nlmsgHdrLen();
+            int ifaLen = align4((int) ifaddrmsg.sizeof());
 
             // RTM_GETADDR dump request
-            int reqLen = NLMSG_HDRLEN + IFADDRMSG_LEN;
+            int reqLen = hdrLen + ifaLen;
             MemorySegment req = arena.allocate(reqLen);
             req.fill((byte) 0);
-            req.set(ValueLayout.JAVA_INT, 0, reqLen);
-            req.set(ValueLayout.JAVA_SHORT, 4, RTM_GETADDR);
-            req.set(ValueLayout.JAVA_SHORT, 6, (short) (NLM_F_REQUEST | NLM_F_DUMP));
-            req.set(ValueLayout.JAVA_INT, 8, 1);
+            putHeader(req, reqLen, RTM_GETADDR, NLM_F_REQUEST | NLM_F_DUMP);
             if (PosixIO.sendRaw(sock, req, reqLen, 0) < 0) return result;
 
             MemorySegment buf = arena.allocate(65536);
@@ -277,41 +254,43 @@ public final class NetDevice {
                 if (n <= 0) break;
 
                 int offset = 0;
-                while (offset + NLMSG_HDRLEN <= n) {
-                    int msgLen = buf.get(ValueLayout.JAVA_INT, offset);
-                    if (msgLen < NLMSG_HDRLEN || offset + msgLen > n) break;
-                    short msgType = buf.get(ValueLayout.JAVA_SHORT, offset + 4);
+                while (offset + hdrLen <= n) {
+                    MemorySegment nlh = buf.asSlice(offset);
+                    int msgLen = nlmsghdr.nlmsg_len(nlh);
+                    if (msgLen < hdrLen || offset + msgLen > n) break;
+                    short msgType = nlmsghdr.nlmsg_type(nlh);
 
                     if (msgType == NLMSG_DONE) { done = true; break; }
                     if (msgType == NLMSG_ERROR) { done = true; break; }
 
-                    if (msgType == RTM_NEWADDR
-                            && msgLen >= NLMSG_HDRLEN + IFADDRMSG_LEN) {
-                        int base = offset + NLMSG_HDRLEN;
-                        int family   = buf.get(ValueLayout.JAVA_BYTE, base)     & 0xFF;
-                        int prefLen  = buf.get(ValueLayout.JAVA_BYTE, base + 1) & 0xFF;
-                        int ifaFlags = buf.get(ValueLayout.JAVA_BYTE, base + 2) & 0xFF;
-                        int scope    = buf.get(ValueLayout.JAVA_BYTE, base + 3) & 0xFF;
-                        int index    = buf.get(ValueLayout.JAVA_INT,  base + 4);
+                    if (msgType == RTM_NEWADDR && msgLen >= hdrLen + ifaLen) {
+                        MemorySegment ifa = buf.asSlice(offset + hdrLen);
+                        int family   = ifaddrmsg.ifa_family(ifa)    & 0xFF;
+                        int prefLen  = ifaddrmsg.ifa_prefixlen(ifa) & 0xFF;
+                        int ifaFlags = ifaddrmsg.ifa_flags(ifa)     & 0xFF;
+                        int scope    = ifaddrmsg.ifa_scope(ifa)     & 0xFF;
+                        int index    = ifaddrmsg.ifa_index(ifa);
 
                         if (index == ifindex && scope == RT_SCOPE_UNIVERSE) {
                             byte[] addrBytes = null;
                             int extFlags = ifaFlags;
-                            int attrOff = base + IFADDRMSG_LEN;
+                            int attrOff = offset + hdrLen + ifaLen;
                             int attrEnd = offset + align4(msgLen);
 
-                            while (attrOff + 4 <= attrEnd) {
-                                int rtaLen  = buf.get(ValueLayout.JAVA_SHORT, attrOff)     & 0xFFFF;
-                                int rtaType = buf.get(ValueLayout.JAVA_SHORT, attrOff + 2) & 0xFFFF;
-                                if (rtaLen < 4) break;
-                                int dataLen = rtaLen - 4;
+                            while (attrOff + rtaHdrLen() <= attrEnd) {
+                                MemorySegment rta = buf.asSlice(attrOff);
+                                int rtaLen  = rtattr.rta_len(rta)  & 0xFFFF;
+                                int rtaType = rtattr.rta_type(rta) & 0xFFFF;
+                                if (rtaLen < rtaHdrLen()) break;
+                                int dataOff = attrOff + rtaHdrLen();
+                                int dataLen = rtaLen - rtaHdrLen();
                                 if (rtaType == IFA_LOCAL
                                         || (rtaType == IFA_ADDRESS && addrBytes == null)) {
                                     addrBytes = new byte[dataLen];
-                                    MemorySegment.copy(buf, attrOff + 4,
+                                    MemorySegment.copy(buf, dataOff,
                                             MemorySegment.ofArray(addrBytes), 0, dataLen);
                                 } else if (rtaType == IFA_FLAGS && dataLen >= 4) {
-                                    extFlags = buf.get(ValueLayout.JAVA_INT, attrOff + 4);
+                                    extFlags = buf.get(ValueLayout.JAVA_INT, dataOff);
                                 }
                                 attrOff += align4(rtaLen);
                             }
@@ -378,10 +357,8 @@ public final class NetDevice {
 
         try {
             // Bind the netlink socket (created in container's netns).
-            MemorySegment sa = arena.allocate(12);
-            sa.fill((byte) 0);
-            sa.set(ValueLayout.JAVA_SHORT, 0, (short) AF_NETLINK);
-            if (PosixIO.bindRaw(arena, nlSock, sa, 12) < 0) {
+            MemorySegment sa = netlinkAddr(arena);
+            if (PosixIO.bindRaw(arena, nlSock, sa, (int) sockaddr_nl.sizeof()) < 0) {
                 Logger.warn("netlink bind in container ns failed");
                 return;
             }
@@ -401,41 +378,32 @@ public final class NetDevice {
     /** Send RTM_NEWADDR to add an address to the interface. */
     private static void addAddress(Arena arena, int sock, int ifindex, SavedAddr addr) {
         int addrLen = addr.address.length;
-        int nlaLocalLen = 4 + addrLen;
-        int nlaLocalPad = align4(nlaLocalLen);
-        int nlaAddrLen = 4 + addrLen;
-        int nlaAddrPad = align4(nlaAddrLen);
-        int totalLen = NLMSG_HDRLEN + IFADDRMSG_LEN + nlaLocalPad + nlaAddrPad;
+        int nlaLen = rtaHdrLen() + addrLen;
+        int nlaPad = align4(nlaLen);
+        int base = nlmsgHdrLen();
+        int off = base + align4((int) ifaddrmsg.sizeof());
+        int totalLen = off + 2 * nlaPad; // IFA_LOCAL + IFA_ADDRESS
 
         MemorySegment msg = arena.allocate(totalLen);
         msg.fill((byte) 0);
+        putHeader(msg, totalLen, RTM_NEWADDR,
+                NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL);
 
-        // nlmsghdr
-        msg.set(ValueLayout.JAVA_INT, 0, totalLen);
-        msg.set(ValueLayout.JAVA_SHORT, 4, RTM_NEWADDR);
-        msg.set(ValueLayout.JAVA_SHORT, 6,
-                (short) (NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL));
-        msg.set(ValueLayout.JAVA_INT, 8, 1);
-
-        // ifaddrmsg
-        int base = NLMSG_HDRLEN;
-        msg.set(ValueLayout.JAVA_BYTE, base,     (byte) addr.family);
-        msg.set(ValueLayout.JAVA_BYTE, base + 1, (byte) addr.prefixLen);
-        msg.set(ValueLayout.JAVA_BYTE, base + 2, (byte) 0);           // flags
-        msg.set(ValueLayout.JAVA_BYTE, base + 3, (byte) RT_SCOPE_UNIVERSE);
-        msg.set(ValueLayout.JAVA_INT,  base + 4, ifindex);
+        MemorySegment ifa = msg.asSlice(base);
+        ifaddrmsg.ifa_family(ifa, (byte) addr.family);
+        ifaddrmsg.ifa_prefixlen(ifa, (byte) addr.prefixLen);
+        ifaddrmsg.ifa_flags(ifa, (byte) 0);
+        ifaddrmsg.ifa_scope(ifa, (byte) RT_SCOPE_UNIVERSE);
+        ifaddrmsg.ifa_index(ifa, ifindex);
 
         // IFA_LOCAL
-        int off = NLMSG_HDRLEN + IFADDRMSG_LEN;
-        msg.set(ValueLayout.JAVA_SHORT, off,     (short) nlaLocalLen);
-        msg.set(ValueLayout.JAVA_SHORT, off + 2, IFA_LOCAL);
-        MemorySegment.copy(MemorySegment.ofArray(addr.address), 0, msg, off + 4, addrLen);
+        putAttr(msg, off, nlaLen, IFA_LOCAL);
+        MemorySegment.copy(MemorySegment.ofArray(addr.address), 0, msg, off + rtaHdrLen(), addrLen);
 
         // IFA_ADDRESS
-        off += nlaLocalPad;
-        msg.set(ValueLayout.JAVA_SHORT, off,     (short) nlaAddrLen);
-        msg.set(ValueLayout.JAVA_SHORT, off + 2, IFA_ADDRESS);
-        MemorySegment.copy(MemorySegment.ofArray(addr.address), 0, msg, off + 4, addrLen);
+        off += nlaPad;
+        putAttr(msg, off, nlaLen, IFA_ADDRESS);
+        MemorySegment.copy(MemorySegment.ofArray(addr.address), 0, msg, off + rtaHdrLen(), addrLen);
 
         if (PosixIO.sendRaw(sock, msg, totalLen, 0) < 0) {
             Logger.warn("RTM_NEWADDR send failed: " + Libc.strerror(Libc.errno()));
@@ -443,8 +411,8 @@ public final class NetDevice {
         }
         MemorySegment ack = arena.allocate(256);
         long n = PosixIO.recvRaw(sock, ack, 256, 0);
-        if (n >= 20) {
-            int err = ack.get(ValueLayout.JAVA_INT, NLMSG_HDRLEN);
+        if (n >= nlmsgHdrLen() + Integer.BYTES) {
+            int err = ackError(ack);
             if (err != 0) {
                 Logger.warn("RTM_NEWADDR error: " + Libc.strerror(-err));
             }
@@ -453,20 +421,17 @@ public final class NetDevice {
 
     /** Set the interface link state to UP via RTM_SETLINK. */
     private static void setLinkUp(Arena arena, int sock, int ifindex) {
-        int totalLen = NLMSG_HDRLEN + IFINFOMSG_LEN;
+        int totalLen = nlmsgHdrLen() + align4((int) ifinfomsg.sizeof());
         MemorySegment msg = arena.allocate(totalLen);
         msg.fill((byte) 0);
+        putHeader(msg, totalLen, RTM_SETLINK, NLM_F_REQUEST | NLM_F_ACK);
 
-        msg.set(ValueLayout.JAVA_INT, 0, totalLen);
-        msg.set(ValueLayout.JAVA_SHORT, 4, RTM_SETLINK);
-        msg.set(ValueLayout.JAVA_SHORT, 6, (short) (NLM_F_REQUEST | NLM_F_ACK));
-        msg.set(ValueLayout.JAVA_INT, 8, 1);
-
-        msg.set(ValueLayout.JAVA_BYTE, NLMSG_HDRLEN, (byte) 0);
-        msg.set(ValueLayout.JAVA_INT, NLMSG_HDRLEN + 4, ifindex);
+        MemorySegment ifi = msg.asSlice(nlmsgHdrLen());
+        ifinfomsg.ifi_family(ifi, (byte) 0);
+        ifinfomsg.ifi_index(ifi, ifindex);
         // ifi_flags = IFF_UP, ifi_change = IFF_UP (change only the UP bit)
-        msg.set(ValueLayout.JAVA_INT, NLMSG_HDRLEN + 8, Constants.IFF_UP);
-        msg.set(ValueLayout.JAVA_INT, NLMSG_HDRLEN + 12, Constants.IFF_UP);
+        ifinfomsg.ifi_flags(ifi, Constants.IFF_UP);
+        ifinfomsg.ifi_change(ifi, Constants.IFF_UP);
 
         if (PosixIO.sendRaw(sock, msg, totalLen, 0) < 0) {
             Logger.warn("RTM_SETLINK UP send failed: " + Libc.strerror(Libc.errno()));
@@ -474,12 +439,50 @@ public final class NetDevice {
         }
         MemorySegment ack = arena.allocate(256);
         long n = PosixIO.recvRaw(sock, ack, 256, 0);
-        if (n >= 20) {
-            int err = ack.get(ValueLayout.JAVA_INT, NLMSG_HDRLEN);
+        if (n >= nlmsgHdrLen() + Integer.BYTES) {
+            int err = ackError(ack);
             if (err != 0) {
                 Logger.warn("RTM_SETLINK UP error: " + Libc.strerror(-err));
             }
         }
+    }
+
+    /** NLMSG_HDRLEN: the nlmsghdr size rounded up to NLMSG_ALIGNTO (4). */
+    private static int nlmsgHdrLen() {
+        return align4((int) nlmsghdr.sizeof());
+    }
+
+    /** RTA_LENGTH(0): the rtattr header size rounded up to RTA_ALIGNTO (4). */
+    private static int rtaHdrLen() {
+        return align4((int) rtattr.sizeof());
+    }
+
+    /** Fill the nlmsghdr at the start of msg; the kernel is the peer (pid 0). */
+    private static void putHeader(MemorySegment msg, int len, short type, int flags) {
+        nlmsghdr.nlmsg_len(msg, len);
+        nlmsghdr.nlmsg_type(msg, type);
+        nlmsghdr.nlmsg_flags(msg, (short) flags);
+        nlmsghdr.nlmsg_seq(msg, 1);
+        nlmsghdr.nlmsg_pid(msg, 0);
+    }
+
+    /** Write an rtattr header at off; its payload starts at off + rtaHdrLen(). */
+    private static void putAttr(MemorySegment msg, long off, int len, short type) {
+        MemorySegment rta = msg.asSlice(off);
+        rtattr.rta_len(rta, (short) len);
+        rtattr.rta_type(rta, type);
+    }
+
+    /** The error field of the nlmsgerr that follows the nlmsghdr of an ACK. */
+    private static int ackError(MemorySegment ack) {
+        return nlmsgerr.error(ack.asSlice(nlmsgHdrLen()));
+    }
+
+    /** sockaddr_nl addressing the kernel (pid 0, no multicast groups). */
+    private static MemorySegment netlinkAddr(Arena arena) {
+        MemorySegment sa = sockaddr_nl.allocate(arena);
+        sockaddr_nl.nl_family(sa, (short) AF_NETLINK);
+        return sa;
     }
 
     private static int align4(int len) {

@@ -5,13 +5,14 @@ import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
 import com.ternbusty.takoyaki.syscall.gen.scmp_arg_cmp;
+import com.ternbusty.takoyaki.syscall.gen.sock_filter;
+import com.ternbusty.takoyaki.syscall.gen.sock_fprog;
 
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 
 /**
  * libseccomp facade over the jextract-generated {@link NativeH} bindings. The
@@ -398,10 +399,7 @@ public final class Seccomp {
         //  [4] RET     ERRNO|ENOSYS
         //  [5] RET     ALLOW
         int instCount = 6;
-        int instSize = 8; // struct sock_filter = 8 bytes
-        MemorySegment filter = arena.allocate(instCount * instSize);
-        // Helper to write one BPF instruction
-        // struct sock_filter { __u16 code; __u8 jt; __u8 jf; __u32 k; }
+        MemorySegment filter = sock_filter.allocateArray(instCount, arena);
         writeBpfInst(filter, 0, (short) 0x20, (byte) 0, (byte) 0, 4);                     // LD_ABS arch
         writeBpfInst(filter, 1, (short) 0x15, (byte) 0, (byte) 3, (int) auditArch);       // JEQ native
         writeBpfInst(filter, 2, (short) 0x20, (byte) 0, (byte) 0, 0);                     // LD_ABS nr
@@ -409,11 +407,9 @@ public final class Seccomp {
         writeBpfInst(filter, 4, (short) 0x06, (byte) 0, (byte) 0, retEnosys);             // RET ENOSYS
         writeBpfInst(filter, 5, (short) 0x06, (byte) 0, (byte) 0, retAllow);              // RET ALLOW
 
-        // struct sock_fprog { unsigned short len; /*pad*/ struct sock_filter *filter; }
-        // On 64-bit: 2 + 6(pad) + 8(pointer) = 16 bytes
-        MemorySegment prog = arena.allocate(16);
-        prog.set(ValueLayout.JAVA_SHORT, 0, (short) instCount);
-        prog.set(ValueLayout.ADDRESS, 8, filter);
+        MemorySegment prog = sock_fprog.allocate(arena);
+        sock_fprog.len(prog, (short) instCount);
+        sock_fprog.filter(prog, filter);
 
         // seccomp(SECCOMP_SET_MODE_FILTER=1, flags, &prog)
         // Always include TSYNC (flag 1) so the filter covers all JVM threads.
@@ -429,11 +425,11 @@ public final class Seccomp {
 
     private static void writeBpfInst(MemorySegment buf, int idx, short code,
                                       byte jt, byte jf, int k) {
-        long off = idx * 8L;
-        buf.set(ValueLayout.JAVA_SHORT, off, code);
-        buf.set(ValueLayout.JAVA_BYTE, off + 2, jt);
-        buf.set(ValueLayout.JAVA_BYTE, off + 3, jf);
-        buf.set(ValueLayout.JAVA_INT, off + 4, k);
+        MemorySegment inst = sock_filter.asSlice(buf, idx);
+        sock_filter.code(inst, code);
+        sock_filter.jt(inst, jt);
+        sock_filter.jf(inst, jf);
+        sock_filter.k(inst, k);
     }
 
     /**
