@@ -1,12 +1,12 @@
 package com.ternbusty.takoyaki.console;
 
+import com.ternbusty.takoyaki.ffi.structs.termios;
 import com.ternbusty.takoyaki.ioloop.IoLoop;
 import com.ternbusty.takoyaki.ipc.ScmRights;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
-import com.ternbusty.takoyaki.syscall.gen.termios;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;

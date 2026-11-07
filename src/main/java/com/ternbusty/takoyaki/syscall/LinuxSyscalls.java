@@ -1,6 +1,6 @@
 package com.ternbusty.takoyaki.syscall;
 
-import com.ternbusty.takoyaki.syscall.gen.ifreq;
+import com.ternbusty.takoyaki.ffi.structs.ifreq;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

@@ -1,9 +1,9 @@
 package com.ternbusty.takoyaki.syscall;
 
+import com.ternbusty.takoyaki.ffi.structs.__CONST_SOCKADDR_ARG;
+import com.ternbusty.takoyaki.ffi.structs.__SOCKADDR_ARG;
+import com.ternbusty.takoyaki.ffi.structs.sockaddr_un;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.__CONST_SOCKADDR_ARG;
-import com.ternbusty.takoyaki.syscall.gen.__SOCKADDR_ARG;
-import com.ternbusty.takoyaki.syscall.gen.sockaddr_un;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

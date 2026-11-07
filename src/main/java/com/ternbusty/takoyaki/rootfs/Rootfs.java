@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.rootfs;
 
+import com.ternbusty.takoyaki.ffi.structs.mount_attr;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
@@ -8,7 +9,6 @@ import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.syscall.SyscallHost;
 import com.ternbusty.takoyaki.syscall.Syscalls;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.mount_attr;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;

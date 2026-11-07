@@ -1,11 +1,11 @@
 package com.ternbusty.takoyaki.rootfs;
 
+import com.ternbusty.takoyaki.ffi.structs.mount_attr;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.mount_attr;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

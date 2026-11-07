@@ -1,7 +1,7 @@
 package com.ternbusty.takoyaki.syscall;
 
+import com.ternbusty.takoyaki.ffi.structs.rlimit64;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.rlimit64;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

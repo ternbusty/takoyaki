@@ -1,11 +1,11 @@
 package com.ternbusty.takoyaki.cgroup;
 
+import com.ternbusty.takoyaki.ffi.structs.bpf_attr;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
-import com.ternbusty.takoyaki.syscall.gen.bpf_attr;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.foreign.Arena;

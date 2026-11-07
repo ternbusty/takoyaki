@@ -1,11 +1,11 @@
 package com.ternbusty.takoyaki.capability;
 
+import com.ternbusty.takoyaki.ffi.structs.__user_cap_data_struct;
+import com.ternbusty.takoyaki.ffi.structs.__user_cap_header_struct;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
-import com.ternbusty.takoyaki.syscall.gen.__user_cap_data_struct;
-import com.ternbusty.takoyaki.syscall.gen.__user_cap_header_struct;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

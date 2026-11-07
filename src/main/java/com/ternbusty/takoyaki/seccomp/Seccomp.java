@@ -4,9 +4,9 @@ import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.state.State;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.scmp_arg_cmp;
-import com.ternbusty.takoyaki.syscall.gen.sock_filter;
-import com.ternbusty.takoyaki.syscall.gen.sock_fprog;
+import com.ternbusty.takoyaki.ffi.structs.scmp_arg_cmp;
+import com.ternbusty.takoyaki.ffi.structs.sock_filter;
+import com.ternbusty.takoyaki.ffi.structs.sock_fprog;
 
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;

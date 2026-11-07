@@ -7,7 +7,7 @@ import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.winsize;
+import com.ternbusty.takoyaki.ffi.structs.winsize;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

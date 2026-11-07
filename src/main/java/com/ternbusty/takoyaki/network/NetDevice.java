@@ -1,17 +1,17 @@
 package com.ternbusty.takoyaki.network;
 
+import com.ternbusty.takoyaki.ffi.structs.ifaddrmsg;
+import com.ternbusty.takoyaki.ffi.structs.ifinfomsg;
+import com.ternbusty.takoyaki.ffi.structs.ifreq;
+import com.ternbusty.takoyaki.ffi.structs.nlmsgerr;
+import com.ternbusty.takoyaki.ffi.structs.nlmsghdr;
+import com.ternbusty.takoyaki.ffi.structs.rtattr;
+import com.ternbusty.takoyaki.ffi.structs.sockaddr_nl;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
-import com.ternbusty.takoyaki.syscall.gen.ifaddrmsg;
-import com.ternbusty.takoyaki.syscall.gen.ifinfomsg;
-import com.ternbusty.takoyaki.syscall.gen.ifreq;
-import com.ternbusty.takoyaki.syscall.gen.nlmsgerr;
-import com.ternbusty.takoyaki.syscall.gen.nlmsghdr;
-import com.ternbusty.takoyaki.syscall.gen.rtattr;
-import com.ternbusty.takoyaki.syscall.gen.sockaddr_nl;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;

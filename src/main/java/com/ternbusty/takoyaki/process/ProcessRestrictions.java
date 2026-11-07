@@ -2,6 +2,7 @@ package com.ternbusty.takoyaki.process;
 
 import com.ternbusty.takoyaki.apparmor.AppArmor;
 import com.ternbusty.takoyaki.capability.Capability;
+import com.ternbusty.takoyaki.ffi.structs.sched_attr;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.seccomp.Seccomp;
 import com.ternbusty.takoyaki.selinux.SeLinux;
@@ -11,7 +12,6 @@ import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Groups;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.sched_attr;
 
 /**
  * The per-process security restriction sequence shared by the container init
@@ -84,7 +84,7 @@ public final class ProcessRestrictions {
         if (scheduler == null) return;
         try (var arena = java.lang.foreign.Arena.ofConfined()) {
             int size = NativeH.SCHED_ATTR_SIZE_VER0();
-            var seg = arena.allocate(size, sched_attr.layout().byteAlignment());
+            var seg = arena.allocate(size, sched_attr.alignof());
             sched_attr.size(seg, size);
             sched_attr.sched_policy(seg, scheduler.policyValue());
             sched_attr.sched_flags(seg, scheduler.flagBits());

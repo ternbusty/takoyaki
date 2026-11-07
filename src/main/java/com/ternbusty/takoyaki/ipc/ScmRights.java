@@ -1,11 +1,11 @@
 package com.ternbusty.takoyaki.ipc;
 
+import com.ternbusty.takoyaki.ffi.structs.cmsghdr;
+import com.ternbusty.takoyaki.ffi.structs.iovec;
+import com.ternbusty.takoyaki.ffi.structs.msghdr;
 import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
-import com.ternbusty.takoyaki.syscall.gen.cmsghdr;
-import com.ternbusty.takoyaki.syscall.gen.iovec;
-import com.ternbusty.takoyaki.syscall.gen.msghdr;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
