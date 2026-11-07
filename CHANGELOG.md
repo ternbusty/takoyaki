@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/ternbusty/takoyaki/compare/v0.5.1...v0.5.2) (2026-11-07)
+
+
+### ⚡ Performance Improvements
+
+* **ffm:** generate struct accessors with constant offsets ([#104](https://github.com/ternbusty/takoyaki/issues/104)) ([8f03b17](https://github.com/ternbusty/takoyaki/commit/8f03b1773d2d3c55380c4250f0e91d3da08b60f5))
+
 ## [0.5.1](https://github.com/ternbusty/takoyaki/compare/v0.5.0...v0.5.1) (2026-11-02)
 
 
