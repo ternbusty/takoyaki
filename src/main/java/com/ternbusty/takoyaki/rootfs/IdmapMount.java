@@ -4,10 +4,11 @@ import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
+import com.ternbusty.takoyaki.syscall.gen.mount_attr;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 
 /**
  * Linux 5.12+ id-mapped mounts.
@@ -80,16 +81,15 @@ public final class IdmapMount {
      */
     public static boolean setIdmap(int treeFd, int usernsFd, boolean recursive) {
         try (Arena arena = Arena.ofConfined()) {
-            // struct mount_attr { u64 attr_set; u64 attr_clr; u64 propagation; u64 userns_fd; }
-            MemorySegment attr = arena.allocate(32);
-            attr.set(ValueLayout.JAVA_LONG, 0, MOUNT_ATTR_IDMAP);
-            attr.set(ValueLayout.JAVA_LONG, 8, 0L);
-            attr.set(ValueLayout.JAVA_LONG, 16, 0L);
-            attr.set(ValueLayout.JAVA_LONG, 24, (long) usernsFd);
+            MemorySegment attr = mount_attr.allocate(arena);
+            mount_attr.attr_set(attr, MOUNT_ATTR_IDMAP);
+            mount_attr.attr_clr(attr, 0L);
+            mount_attr.propagation(attr, 0L);
+            mount_attr.userns_fd(attr, usernsFd);
             MemorySegment empty = arena.allocateFrom("");
             int flags = AT_EMPTY_PATH | (recursive ? AT_RECURSIVE : 0);
             long rc = Libc.syscall(NR_mount_setattr, treeFd, empty.address(),
-                    flags, attr.address(), 32);
+                    flags, attr.address(), NativeH.MOUNT_ATTR_SIZE_VER0());
             if (rc != 0) {
                 Logger.warn("mount_setattr(IDMAP) failed: " + Libc.strerror(Libc.errno()));
                 return false;

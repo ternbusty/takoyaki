@@ -4,10 +4,11 @@ import com.ternbusty.takoyaki.logger.Logger;
 import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
+import com.ternbusty.takoyaki.syscall.gen.__user_cap_data_struct;
+import com.ternbusty.takoyaki.syscall.gen.__user_cap_header_struct;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -119,17 +120,20 @@ public final class Capability {
 
     private static void capset(long eff, long per, long inh) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment header = arena.allocate(8);
-            header.set(ValueLayout.JAVA_INT, 0, Constants.LINUX_CAPABILITY_VERSION_3);
-            header.set(ValueLayout.JAVA_INT, 4, 0);
+            MemorySegment header = __user_cap_header_struct.allocate(arena);
+            __user_cap_header_struct.version(header, Constants.LINUX_CAPABILITY_VERSION_3);
+            __user_cap_header_struct.pid(header, 0);
 
-            MemorySegment data = arena.allocate(12 * 2);
-            data.set(ValueLayout.JAVA_INT, 0, (int) (eff & 0xffffffffL));
-            data.set(ValueLayout.JAVA_INT, 4, (int) (per & 0xffffffffL));
-            data.set(ValueLayout.JAVA_INT, 8, (int) (inh & 0xffffffffL));
-            data.set(ValueLayout.JAVA_INT, 12, (int) ((eff >>> 32) & 0xffffffffL));
-            data.set(ValueLayout.JAVA_INT, 16, (int) ((per >>> 32) & 0xffffffffL));
-            data.set(ValueLayout.JAVA_INT, 20, (int) ((inh >>> 32) & 0xffffffffL));
+            // _LINUX_CAPABILITY_U32S_3: element 0 holds bits 0-31, element 1 bits 32-63.
+            MemorySegment data = __user_cap_data_struct.allocateArray(2, arena);
+            MemorySegment low = __user_cap_data_struct.asSlice(data, 0);
+            __user_cap_data_struct.effective(low, (int) (eff & 0xffffffffL));
+            __user_cap_data_struct.permitted(low, (int) (per & 0xffffffffL));
+            __user_cap_data_struct.inheritable(low, (int) (inh & 0xffffffffL));
+            MemorySegment high = __user_cap_data_struct.asSlice(data, 1);
+            __user_cap_data_struct.effective(high, (int) ((eff >>> 32) & 0xffffffffL));
+            __user_cap_data_struct.permitted(high, (int) ((per >>> 32) & 0xffffffffL));
+            __user_cap_data_struct.inheritable(high, (int) ((inh >>> 32) & 0xffffffffL));
 
             long rc = Libc.syscall(Constants.NR_capset,
                     header.address(), data.address(), 0L, 0L, 0L);

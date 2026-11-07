@@ -7,11 +7,12 @@ import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
 import com.ternbusty.takoyaki.syscall.SyscallHost;
 import com.ternbusty.takoyaki.syscall.Syscalls;
+import com.ternbusty.takoyaki.syscall.gen.NativeH;
+import com.ternbusty.takoyaki.syscall.gen.mount_attr;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -1058,11 +1059,9 @@ public final class Rootfs {
     /**
      * Call mount_setattr(2) with AT_RECURSIVE on the given path.
      *
-     * struct mount_attr (size = MOUNT_ATTR_SIZE_VER0 = 32 bytes)
-     *   u64 attr_set      (offset  0)
-     *   u64 attr_clr      (offset  8)
-     *   u64 propagation   (offset 16)
-     *   u64 userns_fd     (offset 24)
+     * struct mount_attr comes from the jextract bindings; the size passed to
+     * the kernel stays MOUNT_ATTR_SIZE_VER0 (32 bytes), the version whose
+     * fields are set here.
      *
      * runc pattern (rootfs_linux.go setRecAttr): opens the target via
      * /proc/self/fd to avoid TOCTOU, then calls mount_setattr(-1, procfd,
@@ -1071,14 +1070,15 @@ public final class Rootfs {
      */
     private static void mountSetattr(String target, long attrSet, long attrClr) {
         try (Arena arena = Arena.ofConfined()) {
-            MemorySegment attr = arena.allocate(32);
-            attr.set(ValueLayout.JAVA_LONG, 0, attrSet);
-            attr.set(ValueLayout.JAVA_LONG, 8, attrClr);
-            attr.set(ValueLayout.JAVA_LONG, 16, 0L); // propagation
-            attr.set(ValueLayout.JAVA_LONG, 24, 0L); // userns_fd
+            MemorySegment attr = mount_attr.allocate(arena);
+            mount_attr.attr_set(attr, attrSet);
+            mount_attr.attr_clr(attr, attrClr);
+            mount_attr.propagation(attr, 0L);
+            mount_attr.userns_fd(attr, 0L);
             MemorySegment path = arena.allocateFrom(target);
             long rc = Libc.syscall(Constants.NR_mount_setattr,
-                    -1, path.address(), Constants.AT_RECURSIVE, attr.address(), 32);
+                    -1, path.address(), Constants.AT_RECURSIVE, attr.address(),
+                    NativeH.MOUNT_ATTR_SIZE_VER0());
             if (rc != 0) {
                 Logger.debug("mount_setattr(AT_RECURSIVE) on " + target + " failed: "
                         + Libc.strerror(Libc.errno()));
