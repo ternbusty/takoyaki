@@ -5,11 +5,11 @@ import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.gen.bpf_attr;
 
 import java.io.ByteArrayOutputStream;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.List;
@@ -246,7 +246,8 @@ public final class DeviceCgroup {
     }
 
     private static int loadProgram(Arena arena, byte[] prog) {
-        // union bpf_attr (size at least 0x80 for old kernels, we round up to 128).
+        // union bpf_attr grows with the kernel; 128 bytes cover the PROG_LOAD
+        // fields set below and are what we pass as the size.
         MemorySegment attr = arena.allocate(128);
         MemorySegment insns = arena.allocate(prog.length);
         insns.copyFrom(MemorySegment.ofArray(prog));
@@ -254,29 +255,21 @@ public final class DeviceCgroup {
         // Verifier log buffer: capture kernel messages on failure.
         int logSize = 16384;
         MemorySegment logBuf = arena.allocate(logSize);
-        // Layout of bpf_attr for PROG_LOAD (relevant fields):
-        //   u32 prog_type        offset  0
-        //   u32 insn_cnt         offset  4
-        //   u64 insns            offset  8
-        //   u64 license          offset 16
-        //   u32 log_level        offset 24
-        //   u32 log_size         offset 28
-        //   u64 log_buf          offset 32
-        attr.set(ValueLayout.JAVA_INT, 0, BPF_PROG_TYPE_CGROUP_DEVICE);
-        attr.set(ValueLayout.JAVA_INT, 4, prog.length / 8);
-        attr.set(ValueLayout.JAVA_LONG, 8, insns.address());
-        attr.set(ValueLayout.JAVA_LONG, 16, license.address());
+        bpf_attr.prog_type(attr, BPF_PROG_TYPE_CGROUP_DEVICE);
+        bpf_attr.insn_cnt(attr, prog.length / 8);
+        bpf_attr.insns(attr, insns.address());
+        bpf_attr.license(attr, license.address());
         long rc = Libc.syscall(bpfNr(), BPF_PROG_LOAD, attr.address(), 128, 0, 0);
         if (rc < 0) {
             // Retry with log_level=1 to get verifier output for diagnosis.
             attr.fill((byte) 0);
-            attr.set(ValueLayout.JAVA_INT, 0, BPF_PROG_TYPE_CGROUP_DEVICE);
-            attr.set(ValueLayout.JAVA_INT, 4, prog.length / 8);
-            attr.set(ValueLayout.JAVA_LONG, 8, insns.address());
-            attr.set(ValueLayout.JAVA_LONG, 16, license.address());
-            attr.set(ValueLayout.JAVA_INT, 24, 1); // log_level
-            attr.set(ValueLayout.JAVA_INT, 28, logSize);
-            attr.set(ValueLayout.JAVA_LONG, 32, logBuf.address());
+            bpf_attr.prog_type(attr, BPF_PROG_TYPE_CGROUP_DEVICE);
+            bpf_attr.insn_cnt(attr, prog.length / 8);
+            bpf_attr.insns(attr, insns.address());
+            bpf_attr.license(attr, license.address());
+            bpf_attr.log_level(attr, 1);
+            bpf_attr.log_size(attr, logSize);
+            bpf_attr.log_buf(attr, logBuf.address());
             Libc.syscall(bpfNr(), BPF_PROG_LOAD, attr.address(), 128, 0, 0);
             String log = logBuf.getString(0);
             if (!log.isEmpty()) {
@@ -287,12 +280,12 @@ public final class DeviceCgroup {
     }
 
     private static int attachProgram(Arena arena, int cgroupFd, int progFd) {
+        // 64 bytes cover the PROG_ATTACH fields and are passed as the size.
         MemorySegment attr = arena.allocate(64);
-        // Layout: u32 target_fd; u32 attach_bpf_fd; u32 attach_type; u32 attach_flags;
-        attr.set(ValueLayout.JAVA_INT, 0, cgroupFd);
-        attr.set(ValueLayout.JAVA_INT, 4, progFd);
-        attr.set(ValueLayout.JAVA_INT, 8, BPF_CGROUP_DEVICE);
-        attr.set(ValueLayout.JAVA_INT, 12, 0);
+        bpf_attr.target_fd(attr, cgroupFd);
+        bpf_attr.attach_bpf_fd(attr, progFd);
+        bpf_attr.attach_type(attr, BPF_CGROUP_DEVICE);
+        bpf_attr.attach_flags(attr, 0);
         long rc = Libc.syscall(bpfNr(), BPF_PROG_ATTACH, attr.address(), 64, 0, 0);
         return (int) rc;
     }
