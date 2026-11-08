@@ -44,8 +44,8 @@ class AppArmorTest {
             fm.when(() -> Files.exists(any(Path.class))).thenReturn(false);
             assertDoesNotThrow(() -> AppArmor.apply("test-profile"));
             // Both candidate paths must have been probed.
-            fm.verify(() -> Files.exists(eq(Path.of("/proc/self/attr/apparmor/exec"))));
-            fm.verify(() -> Files.exists(eq(Path.of("/proc/self/attr/exec"))));
+            fm.verify(() -> Files.exists(eq(Path.of("/proc/thread-self/attr/apparmor/exec"))));
+            fm.verify(() -> Files.exists(eq(Path.of("/proc/thread-self/attr/exec"))));
         }
     }
 }

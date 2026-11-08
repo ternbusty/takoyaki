@@ -130,18 +130,15 @@ public final class MainProcess {
             resetCpuAffinity(stage2Pid);
 
             // Notify stage-1 that the init process has been moved to the
-            // container's cgroup. Stage-1 forwards this to stage-2, which
-            // then calls unshare(CLONE_NEWCGROUP) so the cgroupns root is
-            // the container's cgroup (not the parent's).
-            // Only send CGROUP_ACK when the spec creates a new cgroup
-            // namespace. bootstrap.c's stage-1 reads CGROUP_ACK only when
-            // CLONE_NEWCGROUP is in the clone flags. Writing it
-            // unconditionally causes EPIPE when stage-1 has already exited
-            // (it doesn't wait for CGROUP_ACK when there's no cgroup ns).
-            boolean creatingCgroupNs = spec.isCreatingNamespace("cgroup");
-            if (creatingCgroupNs) {
-                SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
-            }
+            // container's cgroup and its affinity reset. Stage-1 forwards this
+            // to stage-2, which then calls unshare(CLONE_NEWCGROUP) if the
+            // spec asks for it, so the cgroupns root is the container's
+            // cgroup (not the parent's). Stage-2 waits for it even without a
+            // cgroup namespace: until then it is single-threaded C, so the
+            // affinity reset reaches the thread that later runs Java main and
+            // execs the workload (with RunMainInNewThread that is not the
+            // main thread, the only one a pid names).
+            SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
             PosixIO.close(syncFd);
 
             int initReady = SyncChannel.readInt32(mainSenderFd);

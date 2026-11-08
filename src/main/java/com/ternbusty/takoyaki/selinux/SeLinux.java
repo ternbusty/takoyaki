@@ -9,9 +9,10 @@ import java.nio.file.Path;
 /**
  * Apply a SELinux exec context to the current thread.
  *
- *   echo "container_t:s0:c1,c2" > /proc/self/attr/exec
+ *   echo "container_t:s0:c1,c2" > /proc/thread-self/attr/exec
  *
- * The next exec(2) loads the process with that label. Like AppArmor, the kernel
+ * The next exec(2) loads the process with that label. The attr files are per
+ * thread, hence thread-self (see AppArmor). Like AppArmor, the kernel
  * rejects further label changes after exec when PR_SET_NO_NEW_PRIVS is set, so we
  * must do this before seccomp + execvp.
  */
@@ -25,7 +26,7 @@ public final class SeLinux {
             return;
         }
         try {
-            Files.writeString(Path.of("/proc/self/attr/exec"), label);
+            Files.writeString(Path.of("/proc/thread-self/attr/exec"), label);
             Logger.debug("selinux exec label staged: " + label);
         } catch (IOException e) {
             Logger.warn("selinux exec label write failed (label=" + label + "): " + e.getMessage());
@@ -39,9 +40,9 @@ public final class SeLinux {
      */
     public static void applyKeyCreate(String label) {
         if (label == null || label.isEmpty()) return;
-        if (!Files.exists(Path.of("/proc/self/attr/keycreate"))) return;
+        if (!Files.exists(Path.of("/proc/thread-self/attr/keycreate"))) return;
         try {
-            Files.writeString(Path.of("/proc/self/attr/keycreate"), label);
+            Files.writeString(Path.of("/proc/thread-self/attr/keycreate"), label);
             Logger.debug("selinux keycreate label set: " + label);
         } catch (IOException e) {
             Logger.warn("selinux keycreate label write failed (label=" + label + "): "
@@ -54,7 +55,7 @@ public final class SeLinux {
      * override. Writing an empty string resets to the default.
      */
     public static void clearKeyCreate() {
-        Path p = Path.of("/proc/self/attr/keycreate");
+        Path p = Path.of("/proc/thread-self/attr/keycreate");
         if (!Files.exists(p)) return;
         try {
             Files.writeString(p, "");

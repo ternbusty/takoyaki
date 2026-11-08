@@ -112,31 +112,22 @@ val bootstrapDir = layout.projectDirectory.dir("src/main/c/bootstrap")
 val bootstrapBuildDir = layout.buildDirectory.dir("bootstrap")
 
 // -Pmusl=1 switches the native build to musl libc + fully static linking,
-// which collapses pre-main wall time (no glibc locale init, no dynamic
-// loader work) at the cost of needing musl-tools, a musl-built libseccomp,
-// and (later) a musl-built libz on the build machine. Default OFF so a
+// which removes every runtime dependency (no glibc version requirement, no
+// libseccomp.so on the host) at the cost of needing musl-tools and a
+// musl-built libseccomp + libz on the build machine (see
+// scripts/build-musl-deps.sh). x86_64 only: GraalVM ships no static JDK
+// libraries for musl on aarch64 (oracle/graal#10375). Default OFF so a
 // stock Ubuntu + libseccomp-dev install still builds.
-val useMusl = providers.gradleProperty("musl").isPresent
+val useMusl = providers.gradleProperty("musl").isPresent.also {
+    if (it && System.getProperty("os.arch") == "aarch64") {
+        throw GradleException("-Pmusl is not supported on aarch64 (oracle/graal#10375)")
+    }
+}
 // Root of the musl prefix, ie. the --prefix passed to configure when
 // building libseccomp / libz against musl-gcc. Default matches the VM
 // layout documented in scripts/build-musl-deps.sh; override with
 // -PmuslDepsDir=/path on the gradle command line.
 val muslDepsDir = providers.gradleProperty("muslDepsDir").orElse("/home/ubuntu/musl-deps/prefix").get()
-
-val buildBootstrap by tasks.registering(Exec::class) {
-    val outDir = bootstrapBuildDir.get().asFile
-    doFirst { outDir.mkdirs() }
-    workingDir = bootstrapDir.asFile
-    inputs.dir(bootstrapDir)
-    inputs.property("useMusl", useMusl)
-    outputs.dir(bootstrapBuildDir)
-    val cc = if (useMusl) "musl-gcc" else "gcc"
-    commandLine(
-        "sh", "-c",
-        "$cc -c -fPIC -Wall -Wextra -O2 bootstrap.c -o ${outDir.absolutePath}/bootstrap.o " +
-            "&& ar rcs ${outDir.absolutePath}/libbootstrap.a ${outDir.absolutePath}/bootstrap.o",
-    )
-}
 
 // Generate FFM bindings from the system headers with jextract at build time.
 // Not committed: the output is regenerated per build, so it always matches
@@ -159,6 +150,7 @@ val jextractNative by tasks.registering(Exec::class) {
     inputs.file(header)
     inputs.property("jextract", jextractBin)
     inputs.property("multiarch", multiarch)
+    inputs.property("useMusl", useMusl)
     outputs.dir(jextractDir)
     commandLine(buildList {
         add(jextractBin.get())
@@ -170,11 +162,35 @@ val jextractNative by tasks.registering(Exec::class) {
         add("-I"); add("/usr/include/" + multiarch.get())
         add(header.asFile.absolutePath)
     })
+    // A static executable cannot dlopen or dlsym, so in the image the static
+    // build resolves symbols through StaticSymbolLookup instead. jextract's
+    // lookup stays for the JVM: the generators initialize the bindings.
+    val muslBuild = useMusl
+    val outDir = jextractDir
+    doLast {
+        if (!muslBuild) return@doLast
+        val lookup = Regex("""(static final SymbolLookup SYMBOL_LOOKUP = )([^;]+);""")
+        val patched = outDir.get().asFile.walk()
+            .filter { it.name.startsWith("NativeHRaw") && it.extension == "java" }
+            .count { file ->
+                val src = file.readText()
+                val new = lookup.replace(src) {
+                    it.groupValues[1] + "org.graalvm.nativeimage.ImageInfo.inImageCode()\n" +
+                        "            ? com.ternbusty.takoyaki.nativeimage.StaticSymbolLookup.INSTANCE\n" +
+                        "            : " + it.groupValues[2] + ";"
+                }
+                if (new != src) file.writeText(new)
+                new != src
+            }
+        if (patched == 0) throw GradleException("jextract output has no SYMBOL_LOOKUP to replace")
+    }
 }
 
 // The jextract output is compiled on its own so that generateFastBindings can
-// read it by reflection before the main sources are compiled.
+// read it by reflection before the main sources are compiled. src/jextract/java
+// holds StaticSymbolLookup, which the static build's jextract output refers to.
 val jextractSourceSet = sourceSets.create("jextract") { java.srcDir(jextractDir) }
+configurations[jextractSourceSet.compileOnlyConfigurationName].extendsFrom(configurations.compileOnly.get())
 tasks.named<JavaCompile>(jextractSourceSet.compileJavaTaskName) { dependsOn(jextractNative) }
 dependencies { implementation(jextractSourceSet.output) }
 
@@ -219,6 +235,49 @@ val generateStructs by tasks.registering(JavaExec::class) {
     args(structsDir.get().asFile.absolutePath, jextractDir.get().asFile.absolutePath)
 }
 sourceSets["main"].java.srcDir(structsDir)
+
+// Symbol table for the static build (see GenerateStaticSymbols): the native
+// functions the compiled main classes call, compiled into libbootstrap.a.
+val staticSymbolsFile = layout.buildDirectory.file("generated/staticsymbols/static_symbols.c")
+val generateStaticSymbols by tasks.registering(JavaExec::class) {
+    val mainClasses = sourceSets["main"].output.classesDirs
+    classpath = ffigenSourceSet.output + jextractSourceSet.output
+    mainClass = "com.ternbusty.takoyaki.ffigen.GenerateStaticSymbols"
+    javaLauncher = javaToolchains.launcherFor(java.toolchain)
+    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
+    dependsOn("compileJava")
+    inputs.files(ffigenSourceSet.output, jextractSourceSet.output, mainClasses)
+    outputs.file(staticSymbolsFile)
+    args(staticSymbolsFile.get().asFile.absolutePath, mainClasses.singleFile.absolutePath)
+}
+
+val buildBootstrap by tasks.registering(Exec::class) {
+    val outDir = bootstrapBuildDir.get().asFile
+    doFirst { outDir.mkdirs() }
+    workingDir = bootstrapDir.asFile
+    inputs.dir(bootstrapDir)
+    inputs.property("useMusl", useMusl)
+    outputs.dir(bootstrapBuildDir)
+    val out = outDir.absolutePath
+    val cmd = if (useMusl) {
+        // The static build also links the symbol table StaticSymbolLookup
+        // reads. It includes the jextract header, which needs seccomp.h and
+        // the kernel headers from the musl prefix.
+        dependsOn(generateStaticSymbols)
+        inputs.files(staticSymbolsFile)
+        val jextractInclude = layout.projectDirectory.dir("src/main/c/jextract").asFile.absolutePath
+        "musl-gcc -c -fPIC -Wall -Wextra -O2 -DTAKOYAKI_STATIC bootstrap.c -o $out/bootstrap.o " +
+            "&& musl-gcc -c -fPIC -Wall -O2 -isystem $muslDepsDir/include -I $jextractInclude " +
+            "${staticSymbolsFile.get().asFile.absolutePath} -o $out/static_symbols.o " +
+            "&& ar rcs $out/libbootstrap.a $out/bootstrap.o $out/static_symbols.o"
+    } else {
+        "gcc -c -fPIC -Wall -Wextra -O2 bootstrap.c -o $out/bootstrap.o " +
+            "&& ar rcs $out/libbootstrap.a $out/bootstrap.o"
+    }
+    // ar would keep a member left over from the other mode.
+    doFirst { outDir.resolve("libbootstrap.a").delete() }
+    commandLine("sh", "-c", cmd)
+}
 
 // Generate BuildInfo.java so the binary reports the release-please managed
 // project version (and the git commit) instead of a hand-maintained constant.
@@ -291,10 +350,10 @@ graalvmNative {
                 "-H:+ForeignAPISupport",
                 "-H:+PrintImageHeapPartitionSizes",
                 // Mostly-static: pull java/nio/net/zip etc. into the binary
-                // statically. libc stays dynamic (musl static on aarch64 is
-                // not supported by GraalVM; see issue #10375). Saves a few
-                // ld.so DT_NEEDED resolutions at startup.
-                "--static-nolibc",
+                // statically. With glibc, libc stays dynamic (glibc cannot be
+                // linked statically); saves a few ld.so DT_NEEDED resolutions
+                // at startup. The musl build links libc too.
+                if (useMusl) "--static" else "--static-nolibc",
                 // Skip glibc system locale initialization at startup. With
                 // it on, SubstrateVM's LocaleSupport.initialize() calls into
                 // glibc which opens 28 LC_*/locale-archive files (~80 ms of
@@ -328,7 +387,7 @@ graalvmNative {
                 "-H:-EnableSecurityServicesFeature",
             )
             if (useMusl) {
-                // --libc=musl plus --static produces a fully static
+                // --libc=musl plus --static (above) produces a fully static
                 // executable with no DT_NEEDED entries and no glibc
                 // locale init at startup. Requires musl-tools and a
                 // musl-built libseccomp + libz on the build machine.
@@ -336,9 +395,17 @@ graalvmNative {
                 // native-image looks for a triplet-prefixed binary
                 // ($arch-linux-musl-gcc) that Ubuntu does not ship;
                 // the linker step uses musl-gcc directly anyway.
+                //
+                // With musl, native-image runs main on a new thread by
+                // default (RunMainInNewThread): musl's pthread_getattr_np
+                // reports only the mapped part of the main thread's stack,
+                // about 128 KiB at startup, and SubstrateVM takes that as the
+                // stack size. takoyaki needs about 56 KiB of it, so keep main
+                // on the main thread: that saves a thread per image start
+                // and an execve from a non-main thread, about 0.6 ms per run.
                 buildArgs.addAll(
                     "--libc=musl",
-                    "--static",
+                    "-H:-RunMainInNewThread",
                     "-H:-CheckToolchain",
                     "-H:CLibraryPath=$muslDepsDir/lib",
                 )
