@@ -148,6 +148,16 @@ public final class MainProcess {
             PosixIO.close(mainSenderFd);
             Logger.debug("init ready");
 
+            // Reap stage-1. It exits right after stage-2 reports
+            // SYNC_CHILD_FINISH, which happens before the init execs and so
+            // before INIT_READY: the wait is immediate. A detached create
+            // exits soon and leaves this to init, but a foreground run would
+            // keep stage-1 as a zombie for the life of the container.
+            int stage1Exit = com.ternbusty.takoyaki.command.Wait.waitForChild(stage1Pid);
+            if (stage1Exit != 0) {
+                Logger.debug("stage-1 exited with " + stage1Exit);
+            }
+
             // Apply pids.max now that the init process has fully initialized.
             // This is deferred from Cgroup.setup because the Java init
             // process needs multiple threads (for GraalVM internals) during
