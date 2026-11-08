@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/ternbusty/takoyaki/compare/v0.5.1...v0.6.0) (2026-11-08)
+
+
+### 🎉 Features
+
+* **build:** build a fully static x86_64 binary with musl ([#106](https://github.com/ternbusty/takoyaki/issues/106)) ([5f0313f](https://github.com/ternbusty/takoyaki/commit/5f0313f324b0795291520480b4cc21e74ba282e5))
+
+
+### ⚡ Performance Improvements
+
+* **ffm:** generate struct accessors with constant offsets ([#104](https://github.com/ternbusty/takoyaki/issues/104)) ([8f03b17](https://github.com/ternbusty/takoyaki/commit/8f03b1773d2d3c55380c4250f0e91d3da08b60f5))
+
 ## [0.5.1](https://github.com/ternbusty/takoyaki/compare/v0.5.0...v0.5.1) (2026-11-02)
 
 
