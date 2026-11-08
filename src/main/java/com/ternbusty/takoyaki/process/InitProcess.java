@@ -347,7 +347,7 @@ public final class InitProcess {
             // the restriction sequence so no seccomp filter can veto keyctl.
             //
             // When a SELinux label is configured, write it to
-            // /proc/self/attr/keycreate BEFORE creating the keyring so the
+            // /proc/thread-self/attr/keycreate BEFORE creating the keyring so the
             // kernel stamps the correct label on the new key. Without this
             // the keyring inherits the runtime's label and the container
             // process (running under container_t) cannot access it.

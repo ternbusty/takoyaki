@@ -21,7 +21,7 @@ import com.ternbusty.takoyaki.syscall.gen.NativeH;
  *
  * The caller is expected to be the single-threaded process (or forked child)
  * that will execve into the workload next: AppArmor/SELinux labels are staged
- * on the calling thread's /proc/self/attr files and only take effect at that
+ * on the calling thread's /proc/thread-self/attr files and only take effect at that
  * execve.
  */
 public final class ProcessRestrictions {
@@ -67,6 +67,38 @@ public final class ProcessRestrictions {
         } else {
             Logger.debug("ioprio_set class=" + ioPriority.clazz
                     + " priority=" + ioPriority.priority);
+        }
+    }
+
+    /**
+     * Apply the final CPU affinity of an exec'd process (runc compat): the
+     * {@code final} mask if set; nothing if only {@code initial} is set (it
+     * persists through the exec); otherwise all CPUs, which the kernel clamps
+     * to the cgroup cpuset.
+     *
+     * Affinity belongs to a thread, and execve keeps the calling thread's, so
+     * this targets the calling thread (pid 0) rather than being set from the
+     * parent: in the static musl build Java main does not run on the
+     * process's main thread, which is the one a pid names.
+     */
+    public static void applyExecCpuAffinity(Spec.ExecCPUAffinity affinity) {
+        boolean hasFinal = affinity != null && affinity.fin != null && !affinity.fin.isEmpty();
+        boolean hasInitial = affinity != null && affinity.initial != null && !affinity.initial.isEmpty();
+        if (!hasFinal && hasInitial) return;
+        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+            int size = 128; // cpu_set_t: 1024 bits
+            var mask = arena.allocate(size);
+            if (hasFinal) {
+                mask.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0,
+                        Spec.ExecCPUAffinity.parseCpuList(affinity.fin));
+            } else {
+                mask.fill((byte) 0xFF);
+            }
+            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
+                    0, size, mask.address(), 0, 0);
+            if (rc != 0) {
+                Logger.debug("sched_setaffinity: " + Libc.strerror(Libc.errno()));
+            }
         }
     }
 

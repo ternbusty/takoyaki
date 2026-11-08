@@ -113,8 +113,11 @@ public final class ExecProcess {
             // oom_score_adj first, while still privileged; inherited across execve.
             ProcessRestrictions.applyOomScoreAdj(payload.process.oomScoreAdj);
 
-            // I/O priority and scheduler before the restriction sequence.
+            // I/O priority, CPU affinity and scheduler before the restriction
+            // sequence. Affinity goes first: SCHED_DEADLINE needs it to span
+            // the root domain. The parent has added us to the cgroup by now.
             ProcessRestrictions.applyIOPriority(payload.process.ioPriority);
+            ProcessRestrictions.applyExecCpuAffinity(payload.process.execCPUAffinity);
             ProcessRestrictions.applyScheduler(payload.process.scheduler);
 
             // NUMA memory policy inherited from the container's linux config.

@@ -142,6 +142,8 @@ public final class ExecCommand {
         if (effectiveAffinity == null && spec.process != null) {
             effectiveAffinity = spec.process.execCPUAffinity;
         }
+        // The workload applies the final affinity itself (see ExecProcess).
+        process.execCPUAffinity = effectiveAffinity;
 
         ExecPayload payload = new ExecPayload();
         payload.containerId = containerId;
@@ -540,17 +542,6 @@ public final class ExecCommand {
             }
         }
 
-        // runc compat: set final CPU affinity after cgroup assignment.
-        // If affinity.final is set, apply that specific mask.
-        // If no affinity is configured at all, reset to all CPUs (kernel
-        // clamps to cpuset). If only initial was set, do nothing (initial
-        // persists through the exec).
-        if (affinity != null && affinity.fin != null && !affinity.fin.isEmpty()) {
-            setCpuAffinity(workloadPid, affinity.fin);
-        } else if (affinity == null || affinity.initial == null || affinity.initial.isEmpty()) {
-            resetCpuAffinity(workloadPid);
-        }
-
         // Stream the payload; the workload drains concurrently, so there is no
         // socket-buffer deadlock however large the profile is. Closing our end
         // gives the workload's read its EOF.
@@ -616,38 +607,5 @@ public final class ExecCommand {
                 : Wait.waitForChild(workloadPid);
         if (masterFd >= 0) PosixIO.close(masterFd);
         return written ? code : EXIT_RUNTIME_ERROR;
-    }
-
-    /** Set CPU affinity from a Linux CPU list string (e.g. "0-3,5"). */
-    private static void setCpuAffinity(int pid, String cpuList) {
-        long mask = Spec.ExecCPUAffinity.parseCpuList(cpuList);
-        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
-            int size = 128;
-            java.lang.foreign.MemorySegment seg = arena.allocate(size);
-            seg.fill((byte) 0);
-            // Write the mask in little-endian long order.
-            seg.set(java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED, 0, mask);
-            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
-                    pid, size, seg.address(), 0L, 0L);
-            if (rc != 0) {
-                Logger.debug("sched_setaffinity(" + pid + ", " + cpuList + "): "
-                        + Libc.strerror(Libc.errno()));
-            }
-        }
-    }
-
-    /** Reset CPU affinity of pid to all CPUs. See MainProcess.resetCpuAffinity. */
-    private static void resetCpuAffinity(int pid) {
-        try (java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
-            int size = 128; // cpu_set_t: 1024 bits
-            java.lang.foreign.MemorySegment mask = arena.allocate(size);
-            mask.fill((byte) 0xFF);
-            long rc = Libc.syscall(Constants.NR_sched_setaffinity,
-                    pid, size, mask.address(), 0L, 0L);
-            if (rc != 0) {
-                Logger.debug("sched_setaffinity(" + pid + "): "
-                        + Libc.strerror(Libc.errno()));
-            }
-        }
     }
 }

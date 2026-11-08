@@ -9,9 +9,11 @@ import java.nio.file.Path;
 
 /**
  * Apply an AppArmor profile to the calling thread by writing to
- * {@code /proc/self/attr/apparmor/exec} (preferred, kernel >=5.8) or
- * {@code /proc/self/attr/exec} (legacy). The profile takes effect on the next
- * exec(2) on this thread.
+ * {@code /proc/thread-self/attr/apparmor/exec} (preferred, kernel >=5.8) or
+ * {@code /proc/thread-self/attr/exec} (legacy). The profile takes effect on the next
+ * exec(2) on this thread. /proc/self would name the main thread, which is not
+ * the one running Java main in the static musl build; the kernel refuses a
+ * write to another thread's attr files.
  *
  * Stage this before PR_SET_NO_NEW_PRIVS and before dropping privileges. It is
  * the first privilege step in init, ahead of NNP and the capability/uid drop.
@@ -25,16 +27,16 @@ public final class AppArmor {
         if (profile == null || profile.isEmpty() || "unconfined".equals(profile)) return;
         // Don't check /sys/kernel/security/apparmor here: this runs after pivot_root,
         // and the container rootfs typically does not mount securityfs. Rely on the
-        // existence check inside writeAttr (/proc/self/attr/... is always available
+        // existence check inside writeAttr (/proc/thread-self/attr/... is always available
         // because /proc is mounted in the container).
         byte[] command = ("exec " + profile).getBytes();
 
         // Prefer the newer per-LSM path; fall back to the legacy attr/exec.
-        if (writeAttr("/proc/self/attr/apparmor/exec", command)) {
+        if (writeAttr("/proc/thread-self/attr/apparmor/exec", command)) {
             Logger.debug("apparmor profile staged via attr/apparmor/exec: " + profile);
             return;
         }
-        if (writeAttr("/proc/self/attr/exec", command)) {
+        if (writeAttr("/proc/thread-self/attr/exec", command)) {
             Logger.debug("apparmor profile staged via attr/exec: " + profile);
             return;
         }

@@ -858,19 +858,20 @@ void takoyaki_bootstrap(void) {
     }
 
     /* Wait for the parent to move the init process into the container's
-     * cgroup (addPid). Stage-2 will unshare CLONE_NEWCGROUP after this
-     * so the cgroupns root is the container's cgroup, not the parent's. */
-    if (clone_flags & CLONE_NEWCGROUP) {
-        if (read(sync_fd, &s, sizeof(s)) != sizeof(s)) {
-            fprintf(stderr, "[stage-1] read SYNC_CGROUP_ACK failed: %s\n", strerror(errno));
-            exit(1);
-        }
-        if (s != SYNC_CGROUP_ACK) {
-            fprintf(stderr, "[stage-1] expected SYNC_CGROUP_ACK, got 0x%x\n", s);
-            exit(1);
-        }
-        DBG("[stage-1] received CGROUP_ACK from parent\n");
+     * cgroup (addPid) and reset its CPU affinity. Stage-2 will unshare
+     * CLONE_NEWCGROUP after this so the cgroupns root is the container's
+     * cgroup, not the parent's. Held back even without a cgroup namespace:
+     * stage-2 must still be single-threaded when the parent sets the
+     * affinity, or the thread that execs the workload can miss it. */
+    if (read(sync_fd, &s, sizeof(s)) != sizeof(s)) {
+        fprintf(stderr, "[stage-1] read SYNC_CGROUP_ACK failed: %s\n", strerror(errno));
+        exit(1);
     }
+    if (s != SYNC_CGROUP_ACK) {
+        fprintf(stderr, "[stage-1] expected SYNC_CGROUP_ACK, got 0x%x\n", s);
+        exit(1);
+    }
+    DBG("[stage-1] received CGROUP_ACK from parent\n");
 
     s = SYNC_GRANDCHILD;
     if (write(sync_pipe[1], &s, sizeof(s)) != sizeof(s)) {

@@ -48,7 +48,7 @@ class SeLinuxTest {
             SeLinux.apply("system_u:system_r:container_t:s0");
 
             fm.verify(() -> Files.writeString(
-                    eq(Path.of("/proc/self/attr/exec")),
+                    eq(Path.of("/proc/thread-self/attr/exec")),
                     eq("system_u:system_r:container_t:s0")));
         }
     }
