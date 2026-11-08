@@ -14,7 +14,7 @@ curl -sSL https://raw.githubusercontent.com/ternbusty/takoyaki/main/install.sh |
 ### Runtime requirements
 
 - Linux 5.12+ (for idmap mount; older kernels still work for simpler bundles)
-- libseccomp 2.x (`libseccomp2` on Debian/Ubuntu, `libseccomp` on Fedora). The binary loads `libseccomp.so.2` at runtime
+- aarch64 only: libseccomp 2.x (`libseccomp2` on Debian/Ubuntu, `libseccomp` on Fedora). The binary loads `libseccomp.so.2` at runtime. The x86_64 binary is fully static and needs no shared libraries
 - cgroup v2 mounted at `/sys/fs/cgroup` (cgroup v1 is not supported)
 
 ## Usage
@@ -36,6 +36,13 @@ You need GraalVM Community 25 and libseccomp-dev installed.
 ```sh
 ./gradlew nativeCompile
 # Produces build/native/nativeCompile/takoyaki
+```
+
+On x86_64 you can build the fully static binary that releases ship. It links musl and a musl-built libseccomp and zlib, which `scripts/build-musl-deps.sh` builds (needs musl-tools and gperf):
+
+```sh
+./scripts/build-musl-deps.sh            # installs into ~/musl-deps/prefix
+./gradlew nativeCompile -Pmusl -PmuslDepsDir=$HOME/musl-deps/prefix
 ```
 
 Pass `-Pquick` for a fast development image:

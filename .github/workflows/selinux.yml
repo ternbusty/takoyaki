@@ -29,6 +29,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libseccomp-dev jq
 
+      # x86_64 builds the fully static musl binary, which needs neither a
+      # recent glibc nor libseccomp.so on the host. GraalVM has no static musl
+      # support on aarch64, so that keeps the glibc build.
+      - name: Build musl dependencies
+        if: runner.arch == 'X64'
+        run: |
+          sudo apt-get install -y musl-tools gperf
+          ./scripts/build-musl-deps.sh
+          echo "ORG_GRADLE_PROJECT_musl=1" >> "$GITHUB_ENV"
+          echo "ORG_GRADLE_PROJECT_muslDepsDir=$HOME/musl-deps/prefix" >> "$GITHUB_ENV"
+
       - name: Install GraalVM 25
         uses: graalvm/setup-graalvm@v1
         with:
