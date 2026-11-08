@@ -12,8 +12,9 @@ import java.nio.file.Path;
  * {@code /proc/thread-self/attr/apparmor/exec} (preferred, kernel >=5.8) or
  * {@code /proc/thread-self/attr/exec} (legacy). The profile takes effect on the next
  * exec(2) on this thread. /proc/self would name the main thread, which is not
- * the one running Java main in the static musl build; the kernel refuses a
- * write to another thread's attr files.
+ * the one running Java main if native-image runs main on a new thread
+ * (RunMainInNewThread); the kernel refuses a write to another thread's attr
+ * files.
  *
  * Stage this before PR_SET_NO_NEW_PRIVS and before dropping privileges. It is
  * the first privilege step in init, ahead of NNP and the capability/uid drop.

@@ -136,7 +136,7 @@ public final class MainProcess {
             // cgroup (not the parent's). Stage-2 waits for it even without a
             // cgroup namespace: until then it is single-threaded C, so the
             // affinity reset reaches the thread that later runs Java main and
-            // execs the workload (in the static musl build that is not the
+            // execs the workload (with RunMainInNewThread that is not the
             // main thread, the only one a pid names).
             SyncChannel.writeInt32(syncFd, SyncChannel.MSG_CGROUP_ACK);
             PosixIO.close(syncFd);

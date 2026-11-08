@@ -78,7 +78,7 @@ public final class ProcessRestrictions {
      *
      * Affinity belongs to a thread, and execve keeps the calling thread's, so
      * this targets the calling thread (pid 0) rather than being set from the
-     * parent: in the static musl build Java main does not run on the
+     * parent: with RunMainInNewThread Java main does not run on the
      * process's main thread, which is the one a pid names.
      */
     public static void applyExecCpuAffinity(Spec.ExecCPUAffinity affinity) {

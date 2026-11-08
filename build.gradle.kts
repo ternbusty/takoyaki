@@ -395,8 +395,17 @@ graalvmNative {
                 // native-image looks for a triplet-prefixed binary
                 // ($arch-linux-musl-gcc) that Ubuntu does not ship;
                 // the linker step uses musl-gcc directly anyway.
+                //
+                // With musl, native-image runs main on a new thread by
+                // default (RunMainInNewThread): musl's pthread_getattr_np
+                // reports only the mapped part of the main thread's stack,
+                // about 128 KiB at startup, and SubstrateVM takes that as the
+                // stack size. takoyaki needs about 56 KiB of it, so keep main
+                // on the main thread: that saves a thread per image start
+                // and an execve from a non-main thread, about 0.6 ms per run.
                 buildArgs.addAll(
                     "--libc=musl",
+                    "-H:-RunMainInNewThread",
                     "-H:-CheckToolchain",
                     "-H:CLibraryPath=$muslDepsDir/lib",
                 )
