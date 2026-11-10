@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/ternbusty/takoyaki/compare/v0.6.0...v0.6.1) (2026-11-08)
+
+
+### ⚡ Performance Improvements
+
+* **ffm:** pass glibc's sockaddr unions through constant handles ([#109](https://github.com/ternbusty/takoyaki/issues/109)) ([66656de](https://github.com/ternbusty/takoyaki/commit/66656de80f602b29354c585fb55e02b64e9d08db))
+
 ## [0.6.0](https://github.com/ternbusty/takoyaki/compare/v0.5.1...v0.6.0) (2026-11-08)
 
 
