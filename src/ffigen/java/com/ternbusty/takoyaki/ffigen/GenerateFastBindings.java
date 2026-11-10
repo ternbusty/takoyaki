@@ -33,7 +33,9 @@ import java.util.TreeMap;
  * descriptor has only scalar and pointer layouts, a static method with the
  * same signature that hides the inherited one. In the image it calls the
  * function through a {@code @CFunction} declaration, which the linker resolves,
- * so a call compiles to a direct native call and needs no lookup. On the JVM
+ * so a call compiles to a direct native call and needs no lookup. Segment
+ * arguments go through {@code NativeArgs.address}, which makes the checks the
+ * downcall handle would (heap segment, closed arena, owner thread). On the JVM
  * (the generators and the unit tests) it calls the jextract binding instead.
  * A union of pointers passed by value (glibc's transparent sockaddr unions)
  * counts as a pointer: the method keeps taking the union and passes the
@@ -209,6 +211,7 @@ public final class GenerateFastBindings {
     private static void writeNativeH(Path out, List<Fn> fns) throws IOException {
         StringBuilder sb = new StringBuilder();
         sb.append("package ").append(PKG).append(";\n\n")
+          .append("import com.ternbusty.takoyaki.syscall.NativeArgs;\n")
           .append("import java.lang.foreign.MemorySegment;\n")
           .append("import java.lang.foreign.ValueLayout;\n")
           .append("import org.graalvm.nativeimage.ImageInfo;\n")
@@ -244,9 +247,10 @@ public final class GenerateFastBindings {
                 argNames.append("x").append(i);
                 if (fn.pointerUnions().contains(i)) {
                     // A pointer union arrives as a segment holding the pointer.
-                    callArgs.append("WordFactory.pointer(x").append(i).append(".get(ValueLayout.ADDRESS, 0).address())");
+                    callArgs.append("WordFactory.pointer(NativeArgs.address(x").append(i)
+                            .append(".get(ValueLayout.ADDRESS, 0)))");
                 } else if (pt[i] == MemorySegment.class) {
-                    callArgs.append("WordFactory.pointer(x").append(i).append(".address())");
+                    callArgs.append("WordFactory.pointer(NativeArgs.address(x").append(i).append("))");
                 } else {
                     callArgs.append("x").append(i);
                 }
