@@ -13,91 +13,81 @@ import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Build-time generator for constant downcall handles.
+ * Build-time generator for the native function bindings takoyaki calls.
  *
- * <p>jextract binds each function through a {@code static final MethodHandle}
- * created from the symbol address. The bindings must be initialized at run
- * time (native-image forbids symbol lookup at build time), so those handles
- * are not image-build constants and every call takes SubstrateVM's generic
- * {@code invokeExact} path (~2 us per call).
+ * <p>jextract binds each function through a downcall handle created at run
+ * time from the symbol address. In the image that means a symbol lookup per
+ * function and, unless the handle is an image-build constant, SubstrateVM's
+ * generic {@code invokeExact} path (~2 us per call). A static executable
+ * cannot look symbols up at all.
  *
  * <p>This generator reads the compiled jextract output ({@code NativeHRaw},
- * {@code NativeHRaw_1}, ...) by reflection and writes:
- * <ul>
- *   <li>{@code ffi.Downcalls}: one address-less downcall handle per distinct
- *       function descriptor. It is initialized at build time, so the handles
- *       are constants and calls compile to direct native calls.</li>
- *   <li>{@code syscall.gen.NativeH extends NativeHRaw}: for every function
- *       whose descriptor has only scalar and pointer layouts, a static method
- *       with the same signature that hides the inherited one and invokes the
- *       constant handle with the symbol address, which is still looked up
- *       lazily at run time. A union of pointers passed by value (glibc's
- *       transparent sockaddr unions) counts as a pointer: the method keeps
- *       taking the union and passes the pointer it holds. Everything else
- *       (constants, structs, variadic invokers, struct-by-value functions)
- *       is inherited unchanged.</li>
- * </ul>
+ * {@code NativeHRaw_1}, ...) by reflection and writes
+ * {@code syscall.gen.NativeH extends NativeHRaw}: for every function whose
+ * descriptor has only scalar and pointer layouts, a static method with the
+ * same signature that hides the inherited one. In the image it calls the
+ * function through a {@code @CFunction} declaration, which the linker resolves,
+ * so a call compiles to a direct native call and needs no lookup. Segment
+ * arguments go through {@code NativeArgs.address}, which makes the checks the
+ * downcall handle would (heap segment, closed arena, owner thread). On the JVM
+ * (the generators and the unit tests) it calls the jextract binding instead.
+ * A union of pointers passed by value (glibc's transparent sockaddr unions)
+ * counts as a pointer: the method keeps taking the union and passes the
+ * pointer it holds. Everything else (constants, structs, variadic invokers,
+ * struct-by-value functions) is inherited unchanged; calling one of those
+ * functions in the image fails with "unresolved symbol", as the image has no
+ * symbol lookup.
  *
  * <p>Variadic functions have no fixed descriptor: jextract only offers
- * {@code makeInvoker(layouts...)}, which builds a handle at run time and calls
- * it through an {@code Object[]} spreader. The specialisations takoyaki needs
- * are passed on the command line as {@code name:LAYOUT,...} (the variadic
- * layouts, jextract names such as {@code C_LONG}). For each one this writes a
- * {@code firstVariadicArg} handle and a static method taking the fixed and the
- * variadic arguments, e.g. {@code NativeH.syscall(long, long, long, ...)}.
- *
- * <p>Compiling constant downcall handles needs native-image from GraalVM 25.3
- * (innovation release) or later; 25.0.x fails with "unexpected input could
- * not be handled: linkToNative".
+ * {@code makeInvoker(layouts...)}. The specialisations takoyaki needs are passed
+ * on the command line as {@code name:LAYOUT,...} (the variadic layouts, jextract
+ * names such as {@code C_LONG}). For each one this writes a static method taking
+ * the fixed and the variadic arguments, e.g.
+ * {@code NativeH.syscall(long, long, long, ...)}. {@code @CFunction} does not
+ * support the varargs calling convention, so in the image the method calls a
+ * fixed-arity C wrapper, {@code takoyaki_<name>} in bootstrap/varargs.c, which
+ * must exist for every specialisation.
  *
  * <p>Usage: {@code GenerateFastBindings <output source dir> [name:LAYOUT,...]...}
  */
 public final class GenerateFastBindings {
     private static final String PKG = "com.ternbusty.takoyaki.syscall.gen";
     private static final String RAW = PKG + ".NativeHRaw";
-    private static final String DOWNCALLS_PKG = "com.ternbusty.takoyaki.ffi";
 
     /** Same definition as jextract's C_POINTER. */
     private static final AddressLayout C_POINTER = ValueLayout.ADDRESS.withTargetLayout(
             MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));
 
-    private static final Map<MemoryLayout, String> LAYOUTS = new LinkedHashMap<>();
-    static {
-        LAYOUTS.put(ValueLayout.JAVA_BOOLEAN, "ValueLayout.JAVA_BOOLEAN");
-        LAYOUTS.put(ValueLayout.JAVA_BYTE, "ValueLayout.JAVA_BYTE");
-        LAYOUTS.put(ValueLayout.JAVA_SHORT, "ValueLayout.JAVA_SHORT");
-        LAYOUTS.put(ValueLayout.JAVA_CHAR, "ValueLayout.JAVA_CHAR");
-        LAYOUTS.put(ValueLayout.JAVA_INT, "ValueLayout.JAVA_INT");
-        LAYOUTS.put(ValueLayout.JAVA_LONG, "ValueLayout.JAVA_LONG");
-        LAYOUTS.put(ValueLayout.JAVA_FLOAT, "ValueLayout.JAVA_FLOAT");
-        LAYOUTS.put(ValueLayout.JAVA_DOUBLE, "ValueLayout.JAVA_DOUBLE");
-        LAYOUTS.put(ValueLayout.ADDRESS, "ValueLayout.ADDRESS");
-        LAYOUTS.put(C_POINTER, "C_POINTER");
-    }
+    /**
+     * Layouts a {@code @CFunction} declaration can take: their carriers map to
+     * the C types one to one. boolean and char are left out on purpose.
+     */
+    private static final Set<MemoryLayout> SUPPORTED = Set.of(
+            ValueLayout.JAVA_BYTE, ValueLayout.JAVA_SHORT, ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+            ValueLayout.JAVA_FLOAT, ValueLayout.JAVA_DOUBLE, ValueLayout.ADDRESS, C_POINTER);
 
     private static final Map<String, MemoryLayout> JEXTRACT_NAMES = Map.of(
-            "C_BOOL", ValueLayout.JAVA_BOOLEAN,
             "C_CHAR", ValueLayout.JAVA_BYTE,
             "C_SHORT", ValueLayout.JAVA_SHORT,
             "C_INT", ValueLayout.JAVA_INT,
             "C_LONG", ValueLayout.JAVA_LONG,
             "C_LONG_LONG", ValueLayout.JAVA_LONG,
-            "C_FLOAT", ValueLayout.JAVA_FLOAT,
             "C_DOUBLE", ValueLayout.JAVA_DOUBLE,
             "C_POINTER", C_POINTER);
 
     /**
-     * One generated function: the Java parameter and return types, and the
-     * arguments of {@code Linker.downcallHandle} that the constant handle is built from.
+     * One generated function: the Java parameter and return types, the C
+     * symbol the image calls, and for a variadic specialisation the jextract
+     * names of its variadic layouts (null otherwise).
      */
-    private record Fn(String name, List<Class<?>> params, Class<?> ret, String handleArgs,
-                      List<Integer> pointerUnions) {}
+    private record Fn(String name, List<Class<?>> params, Class<?> ret, List<Integer> pointerUnions,
+                      FunctionDescriptor desc, String symbol, List<String> variadicLayouts) {}
 
     public static void main(String[] args) throws Exception {
         Path out = Path.of(args[0]);
@@ -121,28 +111,20 @@ public final class GenerateFastBindings {
                 FunctionDescriptor desc = descriptorOf(holder, "DESC");
                 if (desc == null) continue;
                 Method m = findMethod(header, holder.getSimpleName(), desc);
-                String expr = m == null ? null : descriptorExpr(desc);
-                if (expr == null) {
+                if (m == null || !isSupported(desc)) {
                     skipped++;
                     continue;
                 }
-                fns.add(new Fn(holder.getSimpleName(), List.of(m.getParameterTypes()), m.getReturnType(), expr,
-                        pointerUnionArgs(desc)));
+                fns.add(new Fn(holder.getSimpleName(), List.of(m.getParameterTypes()), m.getReturnType(),
+                        pointerUnionArgs(desc), desc, holder.getSimpleName(), null));
             }
         }
         for (int i = 1; i < args.length; i++) {
             fns.add(variadic(args[i], variadicHolders));
         }
-        // TreeMap keeps the generated files stable across builds.
-        Map<String, Integer> handles = new TreeMap<>();
-        for (Fn fn : fns) handles.putIfAbsent(fn.handleArgs(), 0);
-        int idx = 0;
-        for (var e : handles.entrySet()) e.setValue(idx++);
-
-        writeDowncalls(out, handles);
-        writeNativeH(out, fns, handles);
-        System.out.printf("GenerateFastBindings: %d functions (%d variadic), %d handles, %d left on the generic path%n",
-                fns.size(), args.length - 1, handles.size(), skipped);
+        writeNativeH(out, fns);
+        System.out.printf("GenerateFastBindings: %d functions (%d variadic), %d left to jextract%n",
+                fns.size(), args.length - 1, skipped);
     }
 
     /** A {@code name:LAYOUT,...} variadic specialisation. */
@@ -153,24 +135,24 @@ public final class GenerateFastBindings {
         if (holder == null) throw new IllegalArgumentException("no variadic function " + name + " in the bindings");
         FunctionDescriptor base = descriptorOf(holder, "BASE_DESC");
         if (base == null) throw new IllegalArgumentException("cannot read BASE_DESC of " + name);
+        List<String> names = new ArrayList<>();
         List<MemoryLayout> extra = new ArrayList<>();
         if (colon >= 0 && colon < spec.length() - 1) {
             for (String l : spec.substring(colon + 1).split(",")) {
                 MemoryLayout layout = JEXTRACT_NAMES.get(l.trim());
                 if (layout == null) throw new IllegalArgumentException("unknown layout " + l + " in " + spec);
+                names.add(l.trim());
                 extra.add(layout);
             }
         }
         FunctionDescriptor desc = base.appendArgumentLayouts(extra.toArray(MemoryLayout[]::new));
-        String expr = descriptorExpr(desc);
-        if (expr == null) throw new IllegalArgumentException("unsupported layout in " + spec);
+        if (!isSupported(desc)) throw new IllegalArgumentException("unsupported layout in " + spec);
         List<Class<?>> params = new ArrayList<>();
         for (MemoryLayout l : desc.argumentLayouts()) params.add(((ValueLayout) l).carrier());
         Class<?> ret = desc.returnLayout().isPresent()
                 ? ((ValueLayout) desc.returnLayout().get()).carrier()
                 : void.class;
-        return new Fn(name, params, ret,
-                expr + ", Linker.Option.firstVariadicArg(" + base.argumentLayouts().size() + ")", List.of());
+        return new Fn(name, params, ret, List.of(), desc, "takoyaki_" + name, names);
     }
 
     /** A FunctionDescriptor field of a jextract holder, or null if it is absent or unreadable. */
@@ -199,19 +181,12 @@ public final class GenerateFastBindings {
         return null;
     }
 
-    /** Java source for the descriptor, or null if it has a struct or other unsupported layout. */
-    private static String descriptorExpr(FunctionDescriptor desc) {
-        List<String> parts = new ArrayList<>();
+    /** Whether every layout of the descriptor can be passed through a {@code @CFunction}. */
+    private static boolean isSupported(FunctionDescriptor desc) {
         for (MemoryLayout l : desc.argumentLayouts()) {
-            String s = isPointerUnion(l) ? "C_POINTER" : LAYOUTS.get(l);
-            if (s == null) return null;
-            parts.add(s);
+            if (!isPointerUnion(l) && !SUPPORTED.contains(l)) return false;
         }
-        String args = String.join(", ", parts);
-        if (desc.returnLayout().isEmpty()) return "FunctionDescriptor.ofVoid(" + args + ")";
-        String ret = LAYOUTS.get(desc.returnLayout().get());
-        if (ret == null) return null;
-        return "FunctionDescriptor.of(" + ret + (args.isEmpty() ? "" : ", " + args) + ")";
+        return desc.returnLayout().map(SUPPORTED::contains).orElse(true);
     }
 
     /**
@@ -233,43 +208,21 @@ public final class GenerateFastBindings {
         return idx;
     }
 
-    private static void writeDowncalls(Path out, Map<String, Integer> handles) throws IOException {
-        StringBuilder sb = new StringBuilder();
-        sb.append("package ").append(DOWNCALLS_PKG).append(";\n\n")
-          .append("import java.lang.foreign.AddressLayout;\n")
-          .append("import java.lang.foreign.FunctionDescriptor;\n")
-          .append("import java.lang.foreign.Linker;\n")
-          .append("import java.lang.foreign.MemoryLayout;\n")
-          .append("import java.lang.foreign.ValueLayout;\n")
-          .append("import java.lang.invoke.MethodHandle;\n\n")
-          .append("/**\n")
-          .append(" * Address-less downcall handles, one per function descriptor. Generated\n")
-          .append(" * by GenerateFastBindings; do not edit. Initialized at image build time so\n")
-          .append(" * that the handles are constants and calls compile to direct native calls.\n")
-          .append(" */\n")
-          .append("public final class Downcalls {\n")
-          .append("    private Downcalls() {}\n\n")
-          .append("    private static final Linker LINKER = Linker.nativeLinker();\n")
-          .append("    private static final AddressLayout C_POINTER = ValueLayout.ADDRESS.withTargetLayout(\n")
-          .append("            MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));\n\n");
-        for (var e : handles.entrySet()) {
-            sb.append("    public static final MethodHandle H").append(e.getValue())
-              .append(" = LINKER.downcallHandle(").append(e.getKey()).append(");\n");
-        }
-        sb.append("}\n");
-        write(out, DOWNCALLS_PKG, "Downcalls", sb);
-    }
-
-    private static void writeNativeH(Path out, List<Fn> fns, Map<String, Integer> handles) throws IOException {
+    private static void writeNativeH(Path out, List<Fn> fns) throws IOException {
         StringBuilder sb = new StringBuilder();
         sb.append("package ").append(PKG).append(";\n\n")
-          .append("import ").append(DOWNCALLS_PKG).append(".Downcalls;\n")
+          .append("import com.ternbusty.takoyaki.syscall.NativeArgs;\n")
           .append("import java.lang.foreign.MemorySegment;\n")
-          .append("import java.lang.foreign.ValueLayout;\n\n")
+          .append("import java.lang.foreign.ValueLayout;\n")
+          .append("import org.graalvm.nativeimage.ImageInfo;\n")
+          .append("import org.graalvm.nativeimage.c.function.CFunction;\n")
+          .append("import org.graalvm.word.PointerBase;\n")
+          .append("import org.graalvm.word.WordFactory;\n\n")
           .append("/**\n")
-          .append(" * jextract bindings with constant downcall handles. Generated by\n")
-          .append(" * GenerateFastBindings; do not edit. Functions hide the ones inherited from\n")
-          .append(" * NativeHRaw; everything else is inherited unchanged.\n")
+          .append(" * jextract bindings that call C through @CFunction in the image and through\n")
+          .append(" * the jextract downcall handles on the JVM. Generated by GenerateFastBindings;\n")
+          .append(" * do not edit. Functions hide the ones inherited from NativeHRaw; everything\n")
+          .append(" * else is inherited unchanged.\n")
           .append(" */\n")
           .append("@SuppressWarnings(\"unused\")\n")
           .append("public class NativeH extends NativeHRaw {\n")
@@ -278,45 +231,72 @@ public final class GenerateFastBindings {
             String name = fn.name();
             Class<?> ret = fn.ret();
             StringBuilder params = new StringBuilder();
+            StringBuilder nativeParams = new StringBuilder();
             StringBuilder argNames = new StringBuilder();
             StringBuilder callArgs = new StringBuilder();
             Class<?>[] pt = fn.params().toArray(Class<?>[]::new);
             for (int i = 0; i < pt.length; i++) {
                 if (i > 0) {
                     params.append(", ");
+                    nativeParams.append(", ");
                     argNames.append(", ");
                     callArgs.append(", ");
                 }
                 params.append(typeName(pt[i])).append(" x").append(i);
+                nativeParams.append(nativeTypeName(pt[i])).append(" x").append(i);
                 argNames.append("x").append(i);
-                // A pointer union arrives as a segment holding the pointer.
-                callArgs.append(fn.pointerUnions().contains(i)
-                        ? "x" + i + ".get(ValueLayout.ADDRESS, 0)" : "x" + i);
+                if (fn.pointerUnions().contains(i)) {
+                    // A pointer union arrives as a segment holding the pointer.
+                    callArgs.append("WordFactory.pointer(NativeArgs.address(x").append(i)
+                            .append(".get(ValueLayout.ADDRESS, 0)))");
+                } else if (pt[i] == MemorySegment.class) {
+                    callArgs.append("WordFactory.pointer(NativeArgs.address(x").append(i).append("))");
+                } else {
+                    callArgs.append("x").append(i);
+                }
             }
-            String call = "Downcalls.H" + handles.get(fn.handleArgs()) + ".invokeExact(a$" + name + ".ADDR"
-                    + (pt.length > 0 ? ", " + callArgs : "") + ")";
-            sb.append("\n    private static final class a$").append(name).append(" {\n")
-              .append("        static final MemorySegment ADDR = findOrThrow(\"").append(name).append("\");\n")
-              .append("    }\n\n")
+            String call = name + "$c(" + callArgs + ")";
+            String jvmCall = fn.variadicLayouts() == null
+                    ? "NativeHRaw." + name + "(" + argNames + ")"
+                    : "NativeHRaw." + name + ".makeInvoker("
+                            + String.join(", ", fn.variadicLayouts().stream().map(l -> "NativeHRaw." + l).toList())
+                            + ").apply(" + argNames + ")";
+            String returnKw = ret == void.class ? "" : "return ";
+            sb.append("\n    @CFunction(\"").append(fn.symbol()).append("\")\n")
+              .append("    private static native ").append(nativeTypeName(ret)).append(' ').append(name)
+              .append("$c(").append(nativeParams).append(");\n\n")
               .append("    public static ").append(typeName(ret)).append(' ').append(name)
               .append('(').append(params).append(") {\n")
-              .append("        try {\n")
-              .append("            if (TRACE_DOWNCALLS) {\n")
-              .append("                traceDowncall(\"").append(name).append('"')
+              .append("        if (!ImageInfo.inImageCode()) {\n")
+              .append("            ").append(returnKw).append(jvmCall).append(";\n");
+            if (ret == void.class) sb.append("            return;\n");
+            sb.append("        }\n")
+              .append("        if (TRACE_DOWNCALLS) {\n")
+              .append("            traceDowncall(\"").append(name).append('"')
               .append(pt.length > 0 ? ", " + argNames : "").append(");\n")
-              .append("            }\n");
-            if (ret == void.class) {
-                sb.append("            ").append(call).append(";\n");
+              .append("        }\n");
+            if (ret == MemorySegment.class) {
+                sb.append("        return ").append(wrapPointer(fn.desc(), call)).append(";\n");
             } else {
-                sb.append("            return (").append(typeName(ret)).append(") ").append(call).append(";\n");
+                sb.append("        ").append(returnKw).append(call).append(";\n");
             }
-            sb.append("        } catch (Throwable ex$) {\n")
-              .append("            throw new AssertionError(\"should not reach here\", ex$);\n")
-              .append("        }\n")
-              .append("    }\n");
+            sb.append("    }\n");
         }
         sb.append("}\n");
         write(out, PKG, "NativeH", sb);
+    }
+
+    /** The returned pointer as the segment the jextract binding returns: sized by the target layout, if any. */
+    private static String wrapPointer(FunctionDescriptor desc, String call) {
+        String seg = "MemorySegment.ofAddress(" + call + ".rawValue())";
+        if (desc.returnLayout().orElseThrow() instanceof AddressLayout a && a.targetLayout().isPresent()) {
+            return seg + ".reinterpret(" + a.targetLayout().get().byteSize() + "L)";
+        }
+        return seg;
+    }
+
+    private static String nativeTypeName(Class<?> c) {
+        return c == MemorySegment.class ? "PointerBase" : c.getName();
     }
 
     private static String typeName(Class<?> c) {

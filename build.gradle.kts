@@ -162,13 +162,13 @@ val jextractNative by tasks.registering(Exec::class) {
         add("-I"); add("/usr/include/" + multiarch.get())
         add(header.asFile.absolutePath)
     })
-    // A static executable cannot dlopen or dlsym, so in the image the static
-    // build resolves symbols through StaticSymbolLookup instead. jextract's
-    // lookup stays for the JVM: the generators initialize the bindings.
-    val muslBuild = useMusl
+    // In the image every function takoyaki calls goes through @CFunction (see
+    // GenerateFastBindings), which the linker resolves, so the image needs no
+    // symbol lookup and must not dlopen anything: a static executable cannot.
+    // jextract's lookup stays for the JVM, where the generators and the unit
+    // tests use the jextract bindings.
     val outDir = jextractDir
     doLast {
-        if (!muslBuild) return@doLast
         val lookup = Regex("""(static final SymbolLookup SYMBOL_LOOKUP = )([^;]+);""")
         val patched = outDir.get().asFile.walk()
             .filter { it.name.startsWith("NativeHRaw") && it.extension == "java" }
@@ -176,7 +176,7 @@ val jextractNative by tasks.registering(Exec::class) {
                 val src = file.readText()
                 val new = lookup.replace(src) {
                     it.groupValues[1] + "org.graalvm.nativeimage.ImageInfo.inImageCode()\n" +
-                        "            ? com.ternbusty.takoyaki.nativeimage.StaticSymbolLookup.INSTANCE\n" +
+                        "            ? name -> java.util.Optional.empty()\n" +
                         "            : " + it.groupValues[2] + ";"
                 }
                 if (new != src) file.writeText(new)
@@ -187,15 +187,15 @@ val jextractNative by tasks.registering(Exec::class) {
 }
 
 // The jextract output is compiled on its own so that generateFastBindings can
-// read it by reflection before the main sources are compiled. src/jextract/java
-// holds StaticSymbolLookup, which the static build's jextract output refers to.
+// read it by reflection before the main sources are compiled. It needs the
+// GraalVM SDK for the ImageInfo check patched in above.
 val jextractSourceSet = sourceSets.create("jextract") { java.srcDir(jextractDir) }
 configurations[jextractSourceSet.compileOnlyConfigurationName].extendsFrom(configurations.compileOnly.get())
 tasks.named<JavaCompile>(jextractSourceSet.compileJavaTaskName) { dependsOn(jextractNative) }
 dependencies { implementation(jextractSourceSet.output) }
 
-// Build-time generator for constant downcall handles (see GenerateFastBindings).
-// It writes NativeH (extends the jextract NativeHRaw) and ffi.Downcalls.
+// Build-time generator for the @CFunction bindings (see GenerateFastBindings).
+// It writes NativeH, which extends the jextract NativeHRaw.
 val ffigenSourceSet = sourceSets.create("ffigen")
 val fastBindingsDir = layout.buildDirectory.dir("generated/fastbindings")
 val generateFastBindings by tasks.registering(JavaExec::class) {
@@ -208,7 +208,8 @@ val generateFastBindings by tasks.registering(JavaExec::class) {
     val outDir = fastBindingsDir
     doFirst { outDir.get().asFile.deleteRecursively() }
     // Variadic functions need their call shape fixed up front: name followed by
-    // the layouts of the variadic arguments takoyaki passes.
+    // the layouts of the variadic arguments takoyaki passes. Each one needs a
+    // fixed-arity wrapper in src/main/c/bootstrap/varargs.c.
     args(
         fastBindingsDir.get().asFile.absolutePath,
         "prctl:C_LONG,C_LONG,C_LONG,C_LONG",
@@ -236,21 +237,6 @@ val generateStructs by tasks.registering(JavaExec::class) {
 }
 sourceSets["main"].java.srcDir(structsDir)
 
-// Symbol table for the static build (see GenerateStaticSymbols): the native
-// functions the compiled main classes call, compiled into libbootstrap.a.
-val staticSymbolsFile = layout.buildDirectory.file("generated/staticsymbols/static_symbols.c")
-val generateStaticSymbols by tasks.registering(JavaExec::class) {
-    val mainClasses = sourceSets["main"].output.classesDirs
-    classpath = ffigenSourceSet.output + jextractSourceSet.output
-    mainClass = "com.ternbusty.takoyaki.ffigen.GenerateStaticSymbols"
-    javaLauncher = javaToolchains.launcherFor(java.toolchain)
-    jvmArgs("--enable-native-access=ALL-UNNAMED", "--enable-preview")
-    dependsOn("compileJava")
-    inputs.files(ffigenSourceSet.output, jextractSourceSet.output, mainClasses)
-    outputs.file(staticSymbolsFile)
-    args(staticSymbolsFile.get().asFile.absolutePath, mainClasses.singleFile.absolutePath)
-}
-
 val buildBootstrap by tasks.registering(Exec::class) {
     val outDir = bootstrapBuildDir.get().asFile
     doFirst { outDir.mkdirs() }
@@ -260,19 +246,14 @@ val buildBootstrap by tasks.registering(Exec::class) {
     outputs.dir(bootstrapBuildDir)
     val out = outDir.absolutePath
     val cmd = if (useMusl) {
-        // The static build also links the symbol table StaticSymbolLookup
-        // reads. It includes the jextract header, which needs seccomp.h and
-        // the kernel headers from the musl prefix.
-        dependsOn(generateStaticSymbols)
-        inputs.files(staticSymbolsFile)
-        val jextractInclude = layout.projectDirectory.dir("src/main/c/jextract").asFile.absolutePath
         "musl-gcc -c -fPIC -Wall -Wextra -O2 -DTAKOYAKI_STATIC bootstrap.c -o $out/bootstrap.o " +
-            "&& musl-gcc -c -fPIC -Wall -O2 -isystem $muslDepsDir/include -I $jextractInclude " +
-            "${staticSymbolsFile.get().asFile.absolutePath} -o $out/static_symbols.o " +
-            "&& ar rcs $out/libbootstrap.a $out/bootstrap.o $out/static_symbols.o"
+            "&& musl-gcc -c -fPIC -Wall -Wextra -O2 varargs.c -o $out/varargs.o " +
+            "&& musl-gcc -c -fPIC -Wall -Wextra -O2 musl_compat.c -o $out/musl_compat.o " +
+            "&& ar rcs $out/libbootstrap.a $out/bootstrap.o $out/varargs.o $out/musl_compat.o"
     } else {
         "gcc -c -fPIC -Wall -Wextra -O2 bootstrap.c -o $out/bootstrap.o " +
-            "&& ar rcs $out/libbootstrap.a $out/bootstrap.o"
+            "&& gcc -c -fPIC -Wall -Wextra -O2 varargs.c -o $out/varargs.o " +
+            "&& ar rcs $out/libbootstrap.a $out/bootstrap.o $out/varargs.o"
     }
     // ar would keep a member left over from the other mode.
     doFirst { outDir.resolve("libbootstrap.a").delete() }
@@ -365,8 +346,6 @@ graalvmNative {
                 "-H:NativeLinkerOption=-rdynamic",
                 "-H:NativeLinkerOption=-Wl,--whole-archive,${bootstrapBuildDir.get().asFile.absolutePath}/libbootstrap.a,--no-whole-archive",
                 seccompLinkerOpt,
-                "--features=com.ternbusty.takoyaki.nativeimage.ForeignFeature",
-                "--features=com.ternbusty.takoyaki.nativeimage.GeneratedForeignFeature",
                 "--enable-native-access=ALL-UNNAMED",
                 "--enable-preview",
                 // Build-time-initialize most of takoyaki. Classes that have
