@@ -16,7 +16,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Real downcalls through the NativeH methods written by GenerateFastBindings,
  * one fixed-arity and one of each generated variadic shape that is safe to call,
- * and the sockaddr union arguments of bind, connect and accept.
+ * and the sockaddr union arguments of bind, connect and accept. On the JVM the
+ * methods call the jextract bindings; their @CFunction path only exists in the
+ * image and is exercised by the integration tests against the binary.
  */
 class FastBindingsTest {
 
