@@ -248,4 +248,60 @@ class RootfsApplyOciMountsTest {
                 | Constants.MS_NODEV  | Constants.MS_NOEXEC;
         assertEquals(expected, rec.mountCalls().get(1).flags());
     }
+
+    @Test
+    void mountsGoToTheOpenedMountPointByFd(@TempDir Path tmp) {
+        // mount(2) gets the mount point's /proc/thread-self/fd path, not the
+        // path string, so nothing swapped into the path after it was opened
+        // can redirect the mount (see InRoot).
+        RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
+        try (var s = SyscallHost.install(rec)) {
+            Rootfs.applyOciMounts(tmp.toString(), List.of(
+                    mount("/etc/ro", "/host/etc", null, List.of("bind", "ro"))
+            ), Map.of(), Map.of(), Map.of(), new Spec());
+        }
+        assertEquals(2, rec.rawMountCalls().size());
+        for (MountCall c : rec.rawMountCalls()) {
+            assertTrue(c.target().startsWith("/proc/thread-self/fd/"), c.target());
+        }
+    }
+
+    @Test
+    void destinationThroughASymlinkOutOfTheRootfsStaysInside(@TempDir Path tmp) throws Exception {
+        // <rootfs>/data -> <tmp>/outside, an absolute link: it is resolved as
+        // the container would see it, inside the rootfs.
+        Path rootfs = java.nio.file.Files.createDirectory(tmp.resolve("rootfs"));
+        Path outside = java.nio.file.Files.createDirectory(tmp.resolve("outside"));
+        java.nio.file.Files.createSymbolicLink(rootfs.resolve("data"), outside);
+        RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
+        try (var s = SyscallHost.install(rec)) {
+            Rootfs.applyOciMounts(rootfs.toString(), List.of(
+                    mount("/data/x", "tmpfs", "tmpfs", null)
+            ), Map.of(), Map.of(), Map.of(), new Spec());
+        }
+        assertEquals(1, rec.mountCalls().size());
+        assertEquals(rootfs.toRealPath() + outside.toString() + "/x",
+                rec.mountCalls().get(0).target());
+        try (var entries = java.nio.file.Files.list(outside)) {
+            assertEquals(0, entries.count());
+        }
+    }
+
+    @Test
+    void containerBindSourceIsOpenedInsideTheRootfs(@TempDir Path tmp) throws Exception {
+        // A bind source that only exists in the rootfs is opened through the
+        // rootfs handle too: a symlink there resolves inside the rootfs.
+        Path rootfs = java.nio.file.Files.createDirectory(tmp.resolve("rootfs"));
+        java.nio.file.Files.createDirectories(rootfs.resolve("srcdir"));
+        java.nio.file.Files.createSymbolicLink(rootfs.resolve("takoyaki-test-src"), Path.of("/srcdir"));
+        RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
+        try (var s = SyscallHost.install(rec)) {
+            Rootfs.applyOciMounts(rootfs.toString(), List.of(
+                    mount("/dst", "/takoyaki-test-src", null, List.of("bind"))
+            ), Map.of(), Map.of(), Map.of(), new Spec());
+        }
+        assertEquals(1, rec.mountCalls().size());
+        assertEquals(rootfs.toRealPath() + "/srcdir", rec.mountCalls().get(0).source());
+        assertTrue(rec.rawMountCalls().get(0).source().startsWith("/proc/thread-self/fd/"));
+    }
 }

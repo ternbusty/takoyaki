@@ -302,6 +302,30 @@ public final class Rootfs {
                                java.util.Map<String, int[]> idmapUsernsFds,
                                java.util.Map<String, Integer> bindSourceFds,
                                Spec spec) {
+        // Mount points are opened through a handle on the rootfs and mounted
+        // on by fd, so a symlink swapped into a destination path cannot move a
+        // mount outside the rootfs (see InRoot).
+        InRoot root = InRoot.of(rootfsPath);
+        if (root == null) {
+            throw new RuntimeException("open rootfs " + rootfsPath + ": "
+                    + Libc.strerror(Libc.errno()));
+        }
+        // The mount point fds, closed when all mounts are done.
+        java.util.List<Integer> openFds = new java.util.ArrayList<>();
+        try (root) {
+            applyOciMounts(root, openFds, rootfsPath, mounts, idmapFds, idmapUsernsFds,
+                    bindSourceFds, spec);
+        } finally {
+            openFds.forEach(PosixIO::close);
+        }
+    }
+
+    private static void applyOciMounts(InRoot root, java.util.List<Integer> openFds,
+                                       String rootfsPath, List<Spec.Mount> mounts,
+                                       java.util.Map<String, Integer> idmapFds,
+                                       java.util.Map<String, int[]> idmapUsernsFds,
+                                       java.util.Map<String, Integer> bindSourceFds,
+                                       Spec spec) {
         Syscalls sc = SyscallHost.current();
         for (Spec.Mount m : mounts) {
             if (m.destination == null) continue;
@@ -323,22 +347,28 @@ public final class Rootfs {
                 || dest.equals("/sys/fs/cgroup")) continue;
             // Resolve symlinks in the destination path within the rootfs
             // scope, so bind mounts through dangling symlinks end up at the
-            // correct host-side path. The resolved target is used for both
-            // mkdir and mount(2); the original destination stays for logging.
+            // path they point to. The mount point is then created and opened
+            // through the rootfs handle; the original destination stays for
+            // logging.
             String resolved = resolveInRootfs(rootfsPath, dest);
-            String target = resolved;
             String type = m.type != null ? m.type : "none";
             MountOptions.Parsed parsed = MountOptions.parse(m.options);
             long flags = parsed.flags;
             long propagation = parsed.propagation;
             String data = parsed.data;
             boolean isBind = parsed.isBind;
-            // Create the target mount point. For bind mounts where the source
-            // is a regular file, create a file (not a directory). runc follows
-            // symlinks in the destination path within the rootfs and creates
-            // intermediate directories as needed.
-            boolean targetExisted = Files.isDirectory(Path.of(target));
-            createMountTarget(rootfsPath, m, target, isBind);
+            boolean targetExisted = Files.isDirectory(Path.of(resolved));
+            int dstFd = openMountTarget(root, m,
+                    Path.of(rootfsPath).relativize(Path.of(resolved)).toString(), isBind);
+            if (dstFd < 0) {
+                Logger.debug("mount point " + m.destination + ": " + sc.strerror(root.errno()));
+                continue;
+            }
+            openFds.add(dstFd);
+            // Pre-mount operations go to the mount point fd; the ones after
+            // the mount go to mounted.get(), the new mount re-opened.
+            String target = InRoot.fdPath(dstFd);
+            MountedPath mounted = new MountedPath(root, dstFd, m.destination, openFds);
 
             // Id-mapped mounts: if uidMappings/gidMappings are present (or the
             // "idmap"/"ridmap" option is set) we route the bind through
@@ -414,20 +444,20 @@ public final class Rootfs {
                     if ((flags & vfsIdmap) != 0 || parsed.clearedFlags != 0) {
                         long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
                                 | (flags & vfsIdmap);
-                        if (sc.mount(null, target, null, remountFlags, null) != 0) {
+                        if (sc.mount(null, mounted.get(), null, remountFlags, null) != 0) {
                             Logger.debug("bind remount with access flags on "
                                     + m.destination + " (idmap) failed: "
                                     + sc.strerror(sc.errno()));
                         }
                     }
                     if (propagation != 0) {
-                        if (sc.mount(null, target, null, propagation, null) != 0) {
+                        if (sc.mount(null, mounted.get(), null, propagation, null) != 0) {
                             Logger.debug("propagation set on " + m.destination
                                     + " (idmap) failed: " + sc.strerror(sc.errno()));
                         }
                     }
                     if (parsed.hasRecAttr()) {
-                        mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
+                        mountSetattr(mounted.get(), parsed.recAttrSet, parsed.recAttrClr);
                     }
                     continue;
                 }
@@ -437,7 +467,7 @@ public final class Rootfs {
             // runc compat: for tmpfs mounts without an explicit "mode=" option,
             // inherit the permission bits from the existing target directory.
             // This makes "mount tmpfs on /tmp" keep /tmp's chmod'd mode.
-            // Only inherit when the target directory existed BEFORE createMountTarget
+            // Only inherit when the target directory existed BEFORE openMountTarget
             // made it; freshly-created directories would just reflect the default
             // mkdir mode (755) which is not the user's intent.
             if ("tmpfs".equals(type) && !isBind && targetExisted) {
@@ -448,7 +478,9 @@ public final class Rootfs {
             java.util.List<Object[]> tmpcopyupSnapshot = null;
             if (parsed.tmpcopyup && "tmpfs".equals(type) && !isBind
                     && Files.isDirectory(Path.of(target))) {
-                tmpcopyupSnapshot = snapshotDirectory(Path.of(target));
+                // Files.walk does not descend into a start path that is a
+                // symlink, which the fd path is; "<fd path>/." is not.
+                tmpcopyupSnapshot = snapshotDirectory(Path.of(target, "."));
             }
 
             // Pre-opened bind source fd: the host used open_tree(OPEN_TREE_CLONE)
@@ -470,21 +502,21 @@ public final class Rootfs {
                     if ((flags & vfsBind) != 0 || parsed.clearedFlags != 0) {
                         long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
                                 | (flags & vfsBind);
-                        if (sc.mount(null, target, null, remountFlags, null) != 0) {
+                        if (sc.mount(null, mounted.get(), null, remountFlags, null) != 0) {
                             Logger.debug("bind remount on " + m.destination
                                     + " (bind-source-fd) failed: "
                                     + sc.strerror(sc.errno()));
                         }
                     }
                     if (propagation != 0) {
-                        if (sc.mount(null, target, null, propagation, null) != 0) {
+                        if (sc.mount(null, mounted.get(), null, propagation, null) != 0) {
                             Logger.debug("propagation on " + m.destination
                                     + " (bind-source-fd) failed: "
                                     + sc.strerror(sc.errno()));
                         }
                     }
                     if (parsed.hasRecAttr()) {
-                        mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
+                        mountSetattr(mounted.get(), parsed.recAttrSet, parsed.recAttrClr);
                     }
                     continue;
                 }
@@ -492,19 +524,25 @@ public final class Rootfs {
                         + " failed, falling back to regular mount");
             }
             String mountSource = m.source;
+            int srcFd = -1;
             if (isBind && mountSource != null
-                    && !new java.io.File(mountSource).exists()
-                    && new java.io.File(rootfsPath + mountSource).exists()) {
+                    && !new java.io.File(mountSource).exists()) {
                 // Container bind-mount source: when the source path does not
                 // exist on the host but DOES exist under the rootfs, it refers
                 // to a location created by an earlier mount in the same spec
                 // (e.g. a tmpfs or another bind). Resolve it rootfs-relative
                 // so the mount sees the right content.  This matches runc.
-                mountSource = rootfsPath + mountSource;
-                Logger.debug("resolved container bind source " + m.source
-                        + " -> " + mountSource);
+                // Opened through the rootfs handle like the destination, so
+                // a symlink in the rootfs cannot make it a host path.
+                srcFd = root.open(mountSource);
+                if (srcFd >= 0) {
+                    mountSource = InRoot.fdPath(srcFd);
+                    Logger.debug("resolved container bind source " + m.source
+                            + " -> " + InRoot.realPath(srcFd));
+                }
             }
             int rc = sc.mount(mountSource, target, isBind ? null : type, flags, data);
+            if (srcFd >= 0) PosixIO.close(srcFd);
             if (rc != 0) {
                 Logger.debug("optional mount " + m.destination + " failed: "
                         + sc.strerror(sc.errno()));
@@ -514,7 +552,7 @@ public final class Rootfs {
 
             // tmpcopyup: restore pre-existing contents into the fresh tmpfs.
             if (tmpcopyupSnapshot != null && !tmpcopyupSnapshot.isEmpty()) {
-                restoreDirectory(Path.of(target), tmpcopyupSnapshot);
+                restoreDirectory(Path.of(mounted.get(), "."), tmpcopyupSnapshot);
                 Logger.debug("tmpcopyup restored contents into " + m.destination);
             }
             // bind mounts ignore MS_RDONLY (and other access flags) on the initial
@@ -530,7 +568,7 @@ public final class Rootfs {
             if (isBind && ((flags & vfsFlags) != 0 || parsed.clearedFlags != 0)) {
                 long remountFlags = Constants.MS_BIND | Constants.MS_REMOUNT
                         | (flags & vfsFlags);
-                if (sc.mount(null, target, null, remountFlags, null) != 0) {
+                if (sc.mount(null, mounted.get(), null, remountFlags, null) != 0) {
                     Logger.debug("bind remount with access flags on " + m.destination
                             + " failed: " + sc.strerror(sc.errno()));
                 }
@@ -538,7 +576,7 @@ public final class Rootfs {
             // Apply per-mount propagation if requested. propagation flag has to be set
             // alone via a second mount() call.
             if (propagation != 0) {
-                if (sc.mount(null, target, null, propagation, null) != 0) {
+                if (sc.mount(null, mounted.get(), null, propagation, null) != 0) {
                     Logger.debug("propagation set on " + m.destination + " failed: "
                             + sc.strerror(sc.errno()));
                 }
@@ -548,7 +586,7 @@ public final class Rootfs {
             // regular mount(2). This makes the attribute change propagate to
             // all submounts recursively.
             if (parsed.hasRecAttr()) {
-                mountSetattr(target, parsed.recAttrSet, parsed.recAttrClr);
+                mountSetattr(mounted.get(), parsed.recAttrSet, parsed.recAttrClr);
             }
         }
     }
@@ -849,41 +887,56 @@ public final class Rootfs {
     }
 
     /**
-     * Create the target mount point for an OCI mount. For bind mounts where the
-     * source is a regular file (not a directory), create a file; otherwise
-     * create a directory. Also resolves symlinks in the destination path within
-     * the rootfs scope, creating intermediate directories as needed.
+     * Create the mount point for an OCI mount inside the rootfs if it is
+     * missing, and open it with O_PATH through the rootfs handle. For bind
+     * mounts where the source is a regular file, the mount point is a file;
+     * otherwise a directory. Returns the fd, or -1 (root.errno() set).
      */
+    private static int openMountTarget(InRoot root, Spec.Mount m, String path, boolean isBind) {
+        int fd = root.open(path);
+        if (fd >= 0) return fd;
+        boolean isFile = false;
+        if (isBind && m.source != null) {
+            Path srcPath = Path.of(m.source);
+            if (!srcPath.isAbsolute()) {
+                srcPath = Path.of(System.getProperty("user.dir", ".")).resolve(srcPath);
+            }
+            isFile = Files.isRegularFile(srcPath);
+        }
+        return isFile ? root.createFile(path, 0644) : root.mkdirAll(path, 0755);
+    }
+
     /**
-     * Create the mount target directory or file at the already-resolved host
-     * path {@code target}. For bind mounts where the source is a regular file,
-     * create a file (not a directory).
+     * The new mount on a mount point fd, for the operations after mount(2):
+     * the fd still refers to the directory that was mounted over, so the path
+     * is re-opened ({@link InRoot#reopenAfterMount}) the first time it is
+     * needed. Fails the container if the mount point moved meanwhile, as the
+     * flags (ro and the like) must not go to another mount.
      */
-    private static void createMountTarget(String rootfsPath, Spec.Mount m,
-                                          String target, boolean isBind) {
-        try {
-            boolean isFile = false;
-            if (isBind && m.source != null) {
-                Path srcPath = Path.of(m.source);
-                if (!srcPath.isAbsolute()) {
-                    srcPath = Path.of(System.getProperty("user.dir", ".")).resolve(srcPath);
+    private static final class MountedPath {
+        private final InRoot root;
+        private final int dstFd;
+        private final String destination;
+        private final java.util.List<Integer> openFds;
+        private int fd = -1;
+
+        MountedPath(InRoot root, int dstFd, String destination, java.util.List<Integer> openFds) {
+            this.root = root;
+            this.dstFd = dstFd;
+            this.destination = destination;
+            this.openFds = openFds;
+        }
+
+        String get() {
+            if (fd < 0) {
+                fd = root.reopenAfterMount(dstFd);
+                if (fd < 0) {
+                    throw new RuntimeException("re-open mount point " + destination
+                            + " after mounting: " + Libc.strerror(root.errno()));
                 }
-                if (Files.isRegularFile(srcPath)) {
-                    isFile = true;
-                }
+                openFds.add(fd);
             }
-            Path targetPath = Path.of(target);
-            if (isFile) {
-                Files.createDirectories(targetPath.getParent());
-                if (!Files.exists(targetPath)) {
-                    Files.createFile(targetPath);
-                }
-            } else {
-                Files.createDirectories(targetPath);
-            }
-        } catch (IOException e) {
-            try { Files.createDirectories(Path.of(target)); }
-            catch (IOException ignored) {}
+            return InRoot.fdPath(fd);
         }
     }
 
@@ -951,8 +1004,8 @@ public final class Rootfs {
     private static String inheritTmpfsMode(String target, String data) {
         if (data != null && data.contains("mode=")) return data;
         try {
-            int unixMode = (int) Files.getAttribute(Path.of(target), "unix:mode",
-                    java.nio.file.LinkOption.NOFOLLOW_LINKS);
+            // target is the mount point's /proc/thread-self/fd path: follow it.
+            int unixMode = (int) Files.getAttribute(Path.of(target), "unix:mode");
             int mode = unixMode & 07777;
             String modeStr = "mode=0" + Integer.toOctalString(mode);
             Logger.debug("tmpfs inheriting " + modeStr + " from " + target);

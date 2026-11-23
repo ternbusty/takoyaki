@@ -31,6 +31,7 @@ public final class RecordingSyscalls implements Syscalls {
     public record AccessCall(String path, int mode) {}
 
     private final List<MountCall>       mountCalls       = new ArrayList<>();
+    private final List<MountCall>       rawMountCalls    = new ArrayList<>();
     private final List<Umount2Call>     umount2Calls     = new ArrayList<>();
     private final List<KillCall>        killCalls        = new ArrayList<>();
     private final List<SyscallCall>     syscallCalls     = new ArrayList<>();
@@ -55,10 +56,26 @@ public final class RecordingSyscalls implements Syscalls {
 
     // ---- Syscalls impl ------------------------------------------------------
 
+    /**
+     * Records source and target as the paths they name: Rootfs mounts on the
+     * /proc/thread-self/fd/N of an opened mount point, which is read here
+     * while the fd is still open. The arguments as passed are kept in
+     * {@link #rawMountCalls}.
+     */
     @Override
     public int mount(String source, String target, String fstype, long flags, String data) {
-        mountCalls.add(new MountCall(source, target, fstype, flags, data));
+        rawMountCalls.add(new MountCall(source, target, fstype, flags, data));
+        mountCalls.add(new MountCall(fdTarget(source), fdTarget(target), fstype, flags, data));
         return mountReturn.getAsInt();
+    }
+
+    private static String fdTarget(String path) {
+        if (path == null || !path.startsWith("/proc/thread-self/fd/")) return path;
+        try {
+            return java.nio.file.Files.readSymbolicLink(java.nio.file.Path.of(path)).toString();
+        } catch (java.io.IOException e) {
+            return path;
+        }
     }
 
     @Override
@@ -122,6 +139,7 @@ public final class RecordingSyscalls implements Syscalls {
     // ---- inspection (called from tests) ------------------------------------
 
     public List<MountCall>      mountCalls()      { return mountCalls; }
+    public List<MountCall>      rawMountCalls()   { return rawMountCalls; }
     public List<Umount2Call>    umount2Calls()    { return umount2Calls; }
     public List<KillCall>       killCalls()       { return killCalls; }
     public List<SyscallCall>    syscallCalls()    { return syscallCalls; }
