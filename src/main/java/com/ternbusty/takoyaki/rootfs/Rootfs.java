@@ -898,56 +898,101 @@ public final class Rootfs {
     }
 
     private static void maskPaths(java.util.Set<String> deduped, String devNull) {
+        // After pivot_root "/" is the container's root. Each path is opened
+        // once and mounted on by fd, like the spec's mounts (see InRoot).
+        InRoot root = openRoot("/");
+        java.util.List<Integer> openFds = new java.util.ArrayList<>();
+        try (root) {
+            maskPaths(root, deduped, devNull, openFds);
+        } finally {
+            openFds.forEach(PosixIO::close);
+        }
+    }
+
+    private static void maskPaths(InRoot root, java.util.Set<String> deduped, String devNull,
+                                  java.util.List<Integer> openFds) {
         Syscalls sc = SyscallHost.current();
         // runc mounts a single tmpfs for all directory masks and bind-mounts
         // it onto each target, so all share the same device number.
         String tmpfsSource = null;
         for (String p : deduped) {
-            int rc = sc.mount(devNull, p, null, Constants.MS_BIND, null);
+            int fd = openMaskTarget(root, p, openFds);
+            if (fd < 0) continue;
+            String target = InRoot.fdPath(fd);
+            int rc = sc.mount(devNull, target, null, Constants.MS_BIND, null);
             if (rc == 0) {
                 Logger.debug("masked " + p + " with /dev/null");
                 continue;
             }
-            int err = sc.errno();
-            if (err == Constants.ENOENT) continue; // skip nonexistent
             // Likely a directory. Mount a single shared tmpfs on the first
             // directory, then bind-mount it onto subsequent directories so
             // all directory masks share the same device number (runc compat).
             if (tmpfsSource == null) {
-                rc = sc.mount("tmpfs", p, "tmpfs", Constants.MS_RDONLY, null);
+                rc = sc.mount("tmpfs", target, "tmpfs", Constants.MS_RDONLY, null);
                 if (rc != 0) {
                     Logger.debug("mask " + p + " failed: " + sc.strerror(sc.errno()));
                 } else {
-                    tmpfsSource = p;
+                    tmpfsSource = InRoot.fdPath(reopenOwnMount(root, fd, p, openFds));
                     Logger.debug("masked " + p + " with tmpfs");
                 }
             } else {
-                rc = sc.mount(tmpfsSource, p, null,
+                rc = sc.mount(tmpfsSource, target, null,
                         Constants.MS_BIND | Constants.MS_RDONLY, null);
                 if (rc != 0) {
                     Logger.debug("mask bind " + p + " failed: " + sc.strerror(sc.errno()));
                 } else {
-                    Logger.debug("masked " + p + " via bind from " + tmpfsSource);
+                    Logger.debug("masked " + p + " via bind from the first directory mask");
                 }
             }
         }
     }
 
-    /** Bind-remount each path read-only. Used for /proc/bus, /proc/sys etc. */
+    /** Open a masked or read-only path; -1 if it does not exist (skipped) or cannot be opened. */
+    private static int openMaskTarget(InRoot root, String path, java.util.List<Integer> openFds) {
+        int fd = root.open(path);
+        if (fd < 0) {
+            if (root.errno() != Constants.ENOENT) {
+                Logger.debug("open " + path + ": " + Libc.strerror(root.errno()));
+            }
+            return -1;
+        }
+        openFds.add(fd);
+        return fd;
+    }
+
+    /**
+     * Bind-remount each path read-only. Used for /proc/bus, /proc/sys etc.
+     * Runs after pivot_root; each path is opened once, and the remount goes
+     * to the bind made on it, re-opened, so it cannot land on something
+     * swapped in after the bind.
+     */
     public static void readonlyRemount(List<String> paths) {
         if (paths == null) return;
+        InRoot root = openRoot("/");
+        java.util.List<Integer> openFds = new java.util.ArrayList<>();
+        try (root) {
+            readonlyRemount(root, paths, openFds);
+        } finally {
+            openFds.forEach(PosixIO::close);
+        }
+    }
+
+    private static void readonlyRemount(InRoot root, List<String> paths,
+                                        java.util.List<Integer> openFds) {
         Syscalls sc = SyscallHost.current();
         for (String p : paths) {
+            int fd = openMaskTarget(root, p, openFds);
+            if (fd < 0) continue;
+            String target = InRoot.fdPath(fd);
             // First bind it to itself so we can remount RO without affecting host.
-            if (sc.mount(p, p, null, Constants.MS_BIND | Constants.MS_REC, null) != 0) {
-                int err = sc.errno();
-                if (err == Constants.ENOENT) continue;
-                Logger.debug("rebind " + p + ": " + sc.strerror(err));
+            if (sc.mount(target, target, null, Constants.MS_BIND | Constants.MS_REC, null) != 0) {
+                Logger.debug("rebind " + p + ": " + sc.strerror(sc.errno()));
                 continue;
             }
+            String bound = InRoot.fdPath(reopenOwnMount(root, fd, p, openFds));
             long flags = Constants.MS_BIND | Constants.MS_REC | Constants.MS_REMOUNT
                     | Constants.MS_RDONLY;
-            if (sc.mount(p, p, null, flags, null) != 0) {
+            if (sc.mount(bound, bound, null, flags, null) != 0) {
                 Logger.debug("readonly remount " + p + ": " + sc.strerror(sc.errno()));
             } else {
                 Logger.debug("readonly " + p);
