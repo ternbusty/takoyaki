@@ -155,4 +155,26 @@ class RootfsMaskAndReadonlyTest {
         assertEquals(Constants.MS_BIND | Constants.MS_REC,
                 rec.mountCalls().get(0).flags());
     }
+
+    @Test
+    void maskPathsBindsTheCheckedDevNullByFd() {
+        RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
+        try (var s = SyscallHost.install(rec)) {
+            Rootfs.maskPaths(List.of("/proc/kcore"));
+        }
+        assertTrue(rec.rawMountCalls().get(0).source().startsWith("/proc/thread-self/fd/"),
+                rec.rawMountCalls().get(0).source());
+        assertEquals("/dev/null", rec.mountCalls().get(0).source());
+    }
+
+    @Test
+    void onlyTheNullCharacterDeviceCountsAsDevNull(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws Exception {
+        assertTrue(Rootfs.isNullDevice("/dev/null"));
+        assertFalse(Rootfs.isNullDevice("/dev/zero"), "another character device");
+        java.nio.file.Path file = java.nio.file.Files.createFile(tmp.resolve("null"));
+        assertFalse(Rootfs.isNullDevice(file.toString()), "a regular file");
+        java.nio.file.Path link = java.nio.file.Files.createSymbolicLink(tmp.resolve("link"), file);
+        assertFalse(Rootfs.isNullDevice(link.toString()), "a symlink to a regular file");
+    }
 }

@@ -827,14 +827,48 @@ public final class Rootfs {
      */
     public static void maskPaths(List<String> paths) {
         if (paths == null) return;
+        // The container's /dev/null can come from a spec mount. If it is not
+        // the null device (a symlink to a procfs file, say), binding it over
+        // the masked paths would expose that file instead (CVE-2025-31133 in
+        // runc). So bind the opened and checked /dev/null by fd.
+        int devNull;
+        try (Arena arena = Arena.ofConfined()) {
+            devNull = PosixIO.open(arena, "/dev/null", Constants.O_PATH | Constants.O_CLOEXEC, 0);
+        }
+        if (devNull < 0) {
+            throw new RuntimeException("open /dev/null to mask paths: " + Libc.strerror(Libc.errno()));
+        }
+        try {
+            String devNullPath = InRoot.fdPath(devNull);
+            if (!isNullDevice(devNullPath)) {
+                throw new RuntimeException("/dev/null is not the null device; refusing to mask paths");
+            }
+            // runc compat: deduplicate paths so each is masked exactly once.
+            maskPaths(new java.util.LinkedHashSet<>(paths), devNullPath);
+        } finally {
+            PosixIO.close(devNull);
+        }
+    }
+
+    /** /dev/null is the character device 1:3. */
+    static boolean isNullDevice(String path) {
+        try {
+            var attrs = Files.readAttributes(Path.of(path), "unix:mode,rdev");
+            int mode = (int) attrs.get("mode");
+            return (mode & 0170000) == 0020000 && (long) attrs.get("rdev") == Devices.makedev(1, 3);
+        } catch (IOException | UnsupportedOperationException e) {
+            Logger.debug("stat " + path + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    private static void maskPaths(java.util.Set<String> deduped, String devNull) {
         Syscalls sc = SyscallHost.current();
-        // runc compat: deduplicate paths so each is masked exactly once.
-        java.util.LinkedHashSet<String> deduped = new java.util.LinkedHashSet<>(paths);
         // runc mounts a single tmpfs for all directory masks and bind-mounts
         // it onto each target, so all share the same device number.
         String tmpfsSource = null;
         for (String p : deduped) {
-            int rc = sc.mount("/dev/null", p, null, Constants.MS_BIND, null);
+            int rc = sc.mount(devNull, p, null, Constants.MS_BIND, null);
             if (rc == 0) {
                 Logger.debug("masked " + p + " with /dev/null");
                 continue;
