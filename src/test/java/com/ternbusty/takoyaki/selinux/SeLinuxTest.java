@@ -1,5 +1,6 @@
 package com.ternbusty.takoyaki.selinux;
 
+import com.ternbusty.takoyaki.syscall.ProcFs;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 
@@ -30,34 +31,35 @@ class SeLinuxTest {
 
     @Test
     void selinuxNotMountedIsSkippedSilently() {
-        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+        try (MockedStatic<Files> fm = mockStatic(Files.class);
+             MockedStatic<ProcFs> pm = mockStatic(ProcFs.class)) {
             fm.when(() -> Files.exists(any(Path.class))).thenReturn(false);
             SeLinux.apply("system_u:system_r:container_t:s0");
             // Skip path: nothing should have been written.
-            fm.verify(() -> Files.writeString(any(Path.class), anyString()), never());
+            pm.verifyNoInteractions();
         }
     }
 
     @Test
     void labelIsWrittenToAttrExecWhenSelinuxIsMounted() {
-        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+        try (MockedStatic<Files> fm = mockStatic(Files.class);
+             MockedStatic<ProcFs> pm = mockStatic(ProcFs.class)) {
             fm.when(() -> Files.exists(eq(Path.of("/sys/fs/selinux")))).thenReturn(true);
-            fm.when(() -> Files.writeString(any(Path.class), anyString()))
-                    .thenReturn(Path.of("/dev/null"));
 
             SeLinux.apply("system_u:system_r:container_t:s0");
 
-            fm.verify(() -> Files.writeString(
-                    eq(Path.of("/proc/thread-self/attr/exec")),
+            pm.verify(() -> ProcFs.write(
+                    eq("thread-self/attr/exec"),
                     eq("system_u:system_r:container_t:s0")));
         }
     }
 
     @Test
     void writeFailureIsLoggedNotPropagated() {
-        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+        try (MockedStatic<Files> fm = mockStatic(Files.class);
+             MockedStatic<ProcFs> pm = mockStatic(ProcFs.class)) {
             fm.when(() -> Files.exists(any(Path.class))).thenReturn(true);
-            fm.when(() -> Files.writeString(any(Path.class), anyString()))
+            pm.when(() -> ProcFs.write(anyString(), anyString()))
                     .thenThrow(new java.io.IOException("EPERM"));
             assertDoesNotThrow(() -> SeLinux.apply("label"));
         }
@@ -65,7 +67,7 @@ class SeLinuxTest {
 
     @Test
     void applyKeyCreateNullIsNoOp() {
-        try (MockedStatic<Files> fm = mockStatic(Files.class)) {
+        try (MockedStatic<ProcFs> fm = mockStatic(ProcFs.class)) {
             SeLinux.applyKeyCreate(null);
             SeLinux.applyKeyCreate("");
             fm.verifyNoInteractions();

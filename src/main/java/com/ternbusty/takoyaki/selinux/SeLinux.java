@@ -1,6 +1,7 @@
 package com.ternbusty.takoyaki.selinux;
 
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.syscall.ProcFs;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -26,7 +27,7 @@ public final class SeLinux {
             return;
         }
         try {
-            Files.writeString(Path.of("/proc/thread-self/attr/exec"), label);
+            ProcFs.write("thread-self/attr/exec", label);
             Logger.debug("selinux exec label staged: " + label);
         } catch (IOException e) {
             Logger.warn("selinux exec label write failed (label=" + label + "): " + e.getMessage());
@@ -40,9 +41,9 @@ public final class SeLinux {
      */
     public static void applyKeyCreate(String label) {
         if (label == null || label.isEmpty()) return;
-        if (!Files.exists(Path.of("/proc/thread-self/attr/keycreate"))) return;
+        if (!ProcFs.exists("thread-self/attr/keycreate")) return;
         try {
-            Files.writeString(Path.of("/proc/thread-self/attr/keycreate"), label);
+            ProcFs.write("thread-self/attr/keycreate", label);
             Logger.debug("selinux keycreate label set: " + label);
         } catch (IOException e) {
             Logger.warn("selinux keycreate label write failed (label=" + label + "): "
@@ -55,10 +56,9 @@ public final class SeLinux {
      * override. Writing an empty string resets to the default.
      */
     public static void clearKeyCreate() {
-        Path p = Path.of("/proc/thread-self/attr/keycreate");
-        if (!Files.exists(p)) return;
+        if (!ProcFs.exists("thread-self/attr/keycreate")) return;
         try {
-            Files.writeString(p, "");
+            ProcFs.write("thread-self/attr/keycreate", "");
         } catch (IOException ignored) {
             // Best effort: clearing may fail if SELinux is not active.
         }

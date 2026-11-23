@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <sys/vfs.h>
 #include <sys/un.h>
 #include <sys/epoll.h>
 #include <sys/signalfd.h>
@@ -35,6 +36,7 @@
 #include <linux/filter.h>
 #include <linux/if_addr.h>
 #include <linux/keyctl.h>
+#include <linux/magic.h>
 #include <linux/netlink.h>
 #include <linux/openat2.h>
 #include <linux/rtnetlink.h>
