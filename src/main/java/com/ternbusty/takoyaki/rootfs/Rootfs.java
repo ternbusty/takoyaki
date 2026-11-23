@@ -61,31 +61,69 @@ public final class Rootfs {
             // rootfsPropagation "slave" impossible after pivot_root because
             // there would be no peer to slave to.
 
-            mountProc(arena, rootfsPath);
-            // runc compat: pass the spec's /dev mount options (if any). "ro" is
-            // held back until the devices, default symlinks and devpts are in
-            // place; remountDevReadonly applies it after pivot_root.
-            mountDev(arena, rootfsPath, devMountFlags(spec) & ~Constants.MS_RDONLY);
-            mountSys(arena, rootfsPath, spec);
+            // Every mount below is made on a mount point opened through a
+            // handle on the rootfs (see InRoot). The handle is opened after
+            // the bind above, so that it is on the new mount.
+            InRoot root = openRoot(rootfsPath);
+            // The mount point fds, closed when all mounts are done.
+            java.util.List<Integer> openFds = new java.util.ArrayList<>();
+            try (root) {
+                mountProc(arena, root, openFds);
+                // runc compat: pass the spec's /dev mount options (if any). "ro" is
+                // held back until the devices, default symlinks and devpts are in
+                // place; remountDevReadonly applies it after pivot_root.
+                mountDev(arena, root, devMountFlags(spec) & ~Constants.MS_RDONLY, openFds);
+                mountSys(arena, root, spec, openFds);
 
-            if (spec.mounts != null) {
-                applyOciMounts(rootfsPath, spec.mounts, idmapFds, idmapUsernsFds,
-                        bindSourceFds, spec);
+                if (spec.mounts != null) {
+                    applyOciMounts(root, openFds, rootfsPath, spec.mounts, idmapFds,
+                            idmapUsernsFds, bindSourceFds, spec);
+                }
+            } finally {
+                openFds.forEach(PosixIO::close);
             }
         }
     }
 
-    private static void mountProc(Arena arena, String rootfsPath) {
-        String p = rootfsPath + "/proc";
+    private static InRoot openRoot(String rootfsPath) {
+        InRoot root = InRoot.of(rootfsPath);
+        if (root == null) {
+            throw new RuntimeException("open rootfs " + rootfsPath + ": "
+                    + Libc.strerror(Libc.errno()));
+        }
+        return root;
+    }
+
+    /** Create and open the mount point {@code path} for one of the mounts made here. */
+    private static int openOwnMountPoint(InRoot root, String path, java.util.List<Integer> openFds) {
+        int fd = root.mkdirAll(path, 0755);
+        if (fd < 0) {
+            Logger.warn("mkdir " + path + ": " + Libc.strerror(root.errno()));
+            return -1;
+        }
+        openFds.add(fd);
+        return fd;
+    }
+
+    /** Re-open the mount made on {@code fd} (see InRoot#reopenAfterMount). */
+    private static int reopenOwnMount(InRoot root, int fd, String path, java.util.List<Integer> openFds) {
+        int mounted = root.reopenAfterMount(fd);
+        if (mounted < 0) {
+            throw new RuntimeException("re-open " + path + " after mounting: "
+                    + Libc.strerror(root.errno()));
+        }
+        openFds.add(mounted);
+        return mounted;
+    }
+
+    private static void mountProc(Arena arena, InRoot root, java.util.List<Integer> openFds) {
         // runc compat: /proc must be a real directory, not a symlink.
-        if (Files.isSymbolicLink(Path.of(p))) {
+        if (root.isSymlink("proc")) {
             throw new RuntimeException("/proc must be mounted on ordinary directory");
         }
-        if (PosixIO.access(arena, p, Constants.F_OK) != 0) {
-            try { Files.createDirectories(Path.of(p)); }
-            catch (IOException e) { Logger.warn("mkdir proc: " + e.getMessage()); return; }
-        }
-        if (Libc.mount(arena, "proc", p, "proc",
+        int fd = openOwnMountPoint(root, "proc", openFds);
+        if (fd < 0) return;
+        if (Libc.mount(arena, "proc", InRoot.fdPath(fd), "proc",
                 Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC, null) != 0) {
             Logger.warn("mount /proc: " + Libc.strerror(Libc.errno()));
         } else {
@@ -93,19 +131,20 @@ public final class Rootfs {
         }
     }
 
-    private static void mountDev(Arena arena, String rootfsPath, long extraFlags) {
-        String dev = rootfsPath + "/dev";
-        if (PosixIO.access(arena, dev, Constants.F_OK) != 0) {
-            try { Files.createDirectories(Path.of(dev)); }
-            catch (IOException e) { Logger.warn("mkdir dev: " + e.getMessage()); return; }
-        }
+    private static void mountDev(Arena arena, InRoot root, long extraFlags,
+                                 java.util.List<Integer> openFds) {
+        int fd = openOwnMountPoint(root, "dev", openFds);
+        if (fd < 0) return;
         long devFlags = Constants.MS_NOSUID | Constants.MS_NOEXEC | extraFlags;
-        if (Libc.mount(arena, "tmpfs", dev, "tmpfs",
+        if (Libc.mount(arena, "tmpfs", InRoot.fdPath(fd), "tmpfs",
                 devFlags, "mode=755") != 0) {
             Logger.warn("mount /dev tmpfs: " + Libc.strerror(Libc.errno()));
             return;
         }
         Logger.debug("mounted /dev (tmpfs)");
+        // Everything below goes into the tmpfs just mounted, which only this
+        // process can write to, through the fd of its root.
+        String dev = InRoot.fdPath(reopenOwnMount(root, fd, "/dev", openFds));
         for (String d : DEVICES) bindDevice(arena, dev, d);
 
         // OCI default mount order under /dev is pts → shm → mqueue; matching it
@@ -178,16 +217,15 @@ public final class Rootfs {
         }
     }
 
-    private static void mountSys(Arena arena, String rootfsPath, Spec spec) {
-        String sys = rootfsPath + "/sys";
+    private static void mountSys(Arena arena, InRoot root, Spec spec,
+                                 java.util.List<Integer> openFds) {
         // runc compat: /sys must be a real directory, not a symlink.
-        if (Files.isSymbolicLink(Path.of(sys))) {
+        if (root.isSymlink("sys")) {
             throw new RuntimeException("/sys must be mounted on ordinary directory");
         }
-        if (PosixIO.access(arena, sys, Constants.F_OK) != 0) {
-            try { Files.createDirectories(Path.of(sys)); }
-            catch (IOException e) { Logger.warn("mkdir sys: " + e.getMessage()); return; }
-        }
+        int fd = openOwnMountPoint(root, "sys", openFds);
+        if (fd < 0) return;
+        String sys = InRoot.fdPath(fd);
         long flags = Constants.MS_NOSUID | Constants.MS_NODEV | Constants.MS_NOEXEC | Constants.MS_RDONLY;
         if (Libc.mount(arena, "sysfs", sys, "sysfs", flags, null) != 0) {
             int e = Libc.errno();
@@ -204,8 +242,9 @@ public final class Rootfs {
             Logger.debug("mounted /sys");
         }
 
-        // /sys/fs/cgroup
-        String cg = sys + "/fs/cgroup";
+        // /sys/fs/cgroup, in the sysfs (or the bind of the host's /sys) just
+        // mounted.
+        String cg = InRoot.fdPath(reopenOwnMount(root, fd, "/sys", openFds)) + "/fs/cgroup";
         try { Files.createDirectories(Path.of(cg)); } catch (IOException ignored) {}
         String containerCgPath = spec != null && spec.linux != null && spec.linux.cgroupsPath != null
                 ? (spec.linux.cgroupsPath.startsWith("/") ? spec.linux.cgroupsPath
@@ -305,11 +344,7 @@ public final class Rootfs {
         // Mount points are opened through a handle on the rootfs and mounted
         // on by fd, so a symlink swapped into a destination path cannot move a
         // mount outside the rootfs (see InRoot).
-        InRoot root = InRoot.of(rootfsPath);
-        if (root == null) {
-            throw new RuntimeException("open rootfs " + rootfsPath + ": "
-                    + Libc.strerror(Libc.errno()));
-        }
+        InRoot root = openRoot(rootfsPath);
         // The mount point fds, closed when all mounts are done.
         java.util.List<Integer> openFds = new java.util.ArrayList<>();
         try (root) {
