@@ -6,6 +6,7 @@ import com.ternbusty.takoyaki.spec.Spec;
 import com.ternbusty.takoyaki.syscall.Constants;
 import com.ternbusty.takoyaki.syscall.Libc;
 import com.ternbusty.takoyaki.syscall.PosixIO;
+import com.ternbusty.takoyaki.syscall.ProcFs;
 import com.ternbusty.takoyaki.syscall.SyscallHost;
 import com.ternbusty.takoyaki.syscall.Syscalls;
 import com.ternbusty.takoyaki.syscall.gen.NativeH;
@@ -400,6 +401,7 @@ public final class Rootfs {
                 continue;
             }
             openFds.add(dstFd);
+            checkProcMount(root, dstFd, m, type, isBind);
             // Pre-mount operations go to the mount point fd; the ones after
             // the mount go to mounted.get(), the new mount re-opened.
             String target = InRoot.fdPath(dstFd);
@@ -997,6 +999,34 @@ public final class Rootfs {
             } else {
                 Logger.debug("readonly " + p);
             }
+        }
+    }
+
+    /** The files inside /proc a spec may mount on: the ones lxcfs emulates (runc's list). */
+    private static final java.util.Set<String> VALID_PROC_MOUNTS = java.util.Set.of(
+            "proc/cpuinfo", "proc/diskstats", "proc/meminfo", "proc/stat", "proc/swaps",
+            "proc/uptime", "proc/loadavg", "proc/slabinfo", "proc/sys/kernel/ns_last_pid",
+            "proc/sys/crypto/fips_enabled");
+
+    /**
+     * runc compat (checkProcMount): a spec mount may not go inside /proc,
+     * except on the files lxcfs emulates, and only procfs may go on /proc
+     * itself. Otherwise a mount could put another file over a procfs file the
+     * runtime writes to (see ProcFs), as in runc's CVE-2025-52881. The mount
+     * point is judged by where its fd really is, so a symlink to /proc does
+     * not get around it.
+     */
+    private static void checkProcMount(InRoot root, int dstFd, Spec.Mount m, String type,
+                                       boolean isBind) {
+        String real = InRoot.realPath(dstFd);
+        if (real == null || !real.startsWith(root.rootfs() + "/")) return;
+        String rel = real.substring(root.rootfs().length() + 1);
+        if (rel.equals("proc")) {
+            if (isBind ? m.source != null && ProcFs.isProcfs(m.source) : "proc".equals(type)) return;
+            throw new RuntimeException(m.destination + " cannot be mounted because it is not of type proc");
+        }
+        if (rel.startsWith("proc/") && !VALID_PROC_MOUNTS.contains(rel)) {
+            throw new RuntimeException(m.destination + " cannot be mounted because it is inside /proc");
         }
     }
 
