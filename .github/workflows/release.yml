@@ -104,6 +104,10 @@ jobs:
           cp build/native/nativeCompile/takoyaki staging/takoyaki-linux-${{ matrix.arch }}
           (cd staging && sha256sum takoyaki-linux-${{ matrix.arch }} \
               > takoyaki-linux-${{ matrix.arch }}.sha256)
+          # The asset name is the file name (a "#label" suffix on gh release
+          # upload only sets the display label), and install.sh downloads
+          # apparmor-profile.
+          cp dist/apparmor/takoyaki staging/apparmor-profile
           # Quick smoke check that the produced binary at least responds to --version.
           staging/takoyaki-linux-${{ matrix.arch }} --version
 
@@ -114,5 +118,5 @@ jobs:
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             staging/takoyaki-linux-${{ matrix.arch }} \
             staging/takoyaki-linux-${{ matrix.arch }}.sha256 \
-            dist/apparmor/takoyaki#apparmor-profile \
+            staging/apparmor-profile \
             --clobber
