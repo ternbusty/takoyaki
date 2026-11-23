@@ -55,19 +55,21 @@ class InRootTest {
 
     /**
      * A symlink in the rootfs that points outside it, as a process sharing a
-     * volume with the rootfs could swap in: with openat2 it resolves inside
-     * the rootfs, as it would for the container, and if it leads nowhere
-     * there the call fails instead of following it out.
+     * volume with the rootfs could swap in: it resolves inside the rootfs, as
+     * it would for the container, and if it leads nowhere there the call
+     * fails instead of following it out. Without openat2 InRoot resolves it
+     * itself and must give the same results.
      */
-    @org.junit.jupiter.api.Test
-    void symlinkOutOfTheRootfsResolvesInsideWithOpenat2(@TempDir Path tmp) throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void symlinkOutOfTheRootfsResolvesInside(boolean openat2, @TempDir Path tmp) throws Exception {
         Path rootfs = Files.createDirectory(tmp.resolve("rootfs"));
         Path outside = Files.createDirectory(tmp.resolve("outside"));
         Files.createSymbolicLink(rootfs.resolve("abs"), outside);
         Files.createSymbolicLink(rootfs.resolve("rel"), Path.of("../../outside"));
         // Where abs points to, seen from inside the rootfs.
         Files.createDirectories(Path.of(rootfs + outside.toString()));
-        try (InRoot root = InRoot.of(rootfs.toString(), true)) {
+        try (InRoot root = InRoot.of(rootfs.toString(), openat2)) {
             assertEquals(real(rootfs) + outside + "/x", pathOf(root.mkdirAll("/abs/x", 0755)));
             assertEquals(real(rootfs) + outside + "/file", pathOf(root.createFile("/abs/file", 0644)));
             assertEquals(real(rootfs), pathOf(root.open("/../../..")));
@@ -80,19 +82,28 @@ class InRootTest {
         }
     }
 
-    /**
-     * Without openat2 the path is followed as the host sees it, so the handle
-     * is checked: an fd outside the rootfs is refused instead of returned.
-     */
-    @org.junit.jupiter.api.Test
-    void symlinkOutOfTheRootfsIsRefusedWithoutOpenat2(@TempDir Path tmp) throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void symlinkLoopFailsWithEloop(boolean openat2, @TempDir Path tmp) throws Exception {
         Path rootfs = Files.createDirectory(tmp.resolve("rootfs"));
-        Path outside = Files.createDirectory(tmp.resolve("outside"));
-        Files.createDirectory(outside.resolve("x"));
-        Files.createSymbolicLink(rootfs.resolve("abs"), outside);
-        try (InRoot root = InRoot.of(rootfs.toString(), false)) {
-            assertThrows(IllegalStateException.class, () -> root.open("/abs/x"));
-            assertThrows(IllegalStateException.class, () -> root.open("/.."));
+        Files.createSymbolicLink(rootfs.resolve("a"), Path.of("b"));
+        Files.createSymbolicLink(rootfs.resolve("b"), Path.of("a"));
+        try (InRoot root = InRoot.of(rootfs.toString(), openat2)) {
+            assertEquals(-1, root.open("/a/x"));
+            assertEquals(com.ternbusty.takoyaki.syscall.Constants.ELOOP, root.errno());
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void isSymlinkDoesNotFollowTheLastComponent(boolean openat2, @TempDir Path tmp) throws Exception {
+        Path rootfs = Files.createDirectory(tmp.resolve("rootfs"));
+        Files.createDirectory(rootfs.resolve("dir"));
+        Files.createSymbolicLink(rootfs.resolve("link"), Path.of("dir"));
+        try (InRoot root = InRoot.of(rootfs.toString(), openat2)) {
+            assertTrue(root.isSymlink("/link"));
+            assertFalse(root.isSymlink("/dir"));
+            assertFalse(root.isSymlink("/missing"));
         }
     }
 

@@ -73,6 +73,7 @@ public final class Constants {
     public static final int EBUSY = NativeH.EBUSY();
     public static final int EINVAL = NativeH.EINVAL();
     public static final int ENOSYS = NativeH.ENOSYS();
+    public static final int ELOOP = NativeH.ELOOP();
 
     public static final int AF_UNIX = NativeH.AF_UNIX();
     public static final int AF_INET = NativeH.AF_INET();
@@ -88,6 +89,7 @@ public final class Constants {
     public static final int O_NOFOLLOW = NativeH.O_NOFOLLOW();
     public static final int O_CLOEXEC = NativeH.O_CLOEXEC();
     public static final int O_EXCL = NativeH.O_EXCL();
+    public static final long NR_openat = NativeH.SYS_openat();
 
     // openat2(2) (kernel 5.6+)
     public static final long NR_openat2 = NativeH.SYS_openat2();
