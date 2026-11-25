@@ -36,6 +36,7 @@
 #include <linux/if_addr.h>
 #include <linux/keyctl.h>
 #include <linux/netlink.h>
+#include <linux/openat2.h>
 #include <linux/rtnetlink.h>
 #include <linux/sched/types.h>
 #include <linux/sockios.h>

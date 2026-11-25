@@ -37,6 +37,7 @@ public final class IdmapMount {
     private static final int AT_EMPTY_PATH          = 0x1000;
     private static final int AT_FDCWD               = -100;
     private static final int MOVE_MOUNT_F_EMPTY_PATH = 0x4;
+    private static final int MOVE_MOUNT_T_SYMLINKS   = NativeH.MOVE_MOUNT_T_SYMLINKS();
 
     private static final long MOUNT_ATTR_IDMAP = 0x00100000L;
     private static final int AT_RECURSIVE     = 0x8000;
@@ -98,13 +99,17 @@ public final class IdmapMount {
         }
     }
 
-    /** Move the detached tree to its final mount point. */
+    /**
+     * Move the detached tree to its final mount point. The destination is
+     * followed if it is a symlink: Rootfs passes the mount point's
+     * /proc/thread-self/fd path (see InRoot), which is one.
+     */
     public static boolean moveMount(int treeFd, String destination) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment empty = arena.allocateFrom("");
             MemorySegment dst = arena.allocateFrom(destination);
             long rc = Libc.syscall(NR_move_mount, treeFd, empty.address(),
-                    AT_FDCWD, dst.address(), MOVE_MOUNT_F_EMPTY_PATH);
+                    AT_FDCWD, dst.address(), MOVE_MOUNT_F_EMPTY_PATH | MOVE_MOUNT_T_SYMLINKS);
             if (rc != 0) {
                 Logger.warn("move_mount → " + destination + " failed: " + Libc.strerror(Libc.errno()));
                 return false;
