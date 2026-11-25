@@ -73,6 +73,8 @@ public final class Constants {
     public static final int EBUSY = NativeH.EBUSY();
     public static final int EINVAL = NativeH.EINVAL();
     public static final int ENOSYS = NativeH.ENOSYS();
+    public static final int ELOOP = NativeH.ELOOP();
+    public static final int EXDEV = NativeH.EXDEV();
 
     public static final int AF_UNIX = NativeH.AF_UNIX();
     public static final int AF_INET = NativeH.AF_INET();
@@ -88,12 +90,19 @@ public final class Constants {
     public static final int O_NOFOLLOW = NativeH.O_NOFOLLOW();
     public static final int O_CLOEXEC = NativeH.O_CLOEXEC();
     public static final int O_EXCL = NativeH.O_EXCL();
+    public static final int O_WRONLY = NativeH.O_WRONLY();
+    public static final long NR_openat = NativeH.SYS_openat();
 
     // openat2(2) (kernel 5.6+)
     public static final long NR_openat2 = NativeH.SYS_openat2();
     public static final long RESOLVE_NO_MAGICLINKS = NativeH.RESOLVE_NO_MAGICLINKS();
     public static final long RESOLVE_NO_SYMLINKS = NativeH.RESOLVE_NO_SYMLINKS();
     public static final long RESOLVE_IN_ROOT = NativeH.RESOLVE_IN_ROOT();
+    public static final long RESOLVE_NO_XDEV = NativeH.RESOLVE_NO_XDEV();
+    public static final long RESOLVE_BENEATH = NativeH.RESOLVE_BENEATH();
+
+    // statfs(2) f_type of procfs (linux/magic.h)
+    public static final long PROC_SUPER_MAGIC = NativeH.PROC_SUPER_MAGIC();
 
     public static boolean isAarch64() {
         String a = System.getProperty("os.arch", "").toLowerCase();

@@ -304,4 +304,36 @@ class RootfsApplyOciMountsTest {
         assertEquals(rootfs.toRealPath() + "/srcdir", rec.mountCalls().get(0).source());
         assertTrue(rec.rawMountCalls().get(0).source().startsWith("/proc/thread-self/fd/"));
     }
+
+    @Test
+    void mountsInsideProcAreRefusedExceptTheLxcfsFiles(@TempDir Path tmp) {
+        // runc compat (checkProcMount): nothing may be mounted over a procfs
+        // file the runtime writes to, e.g. /proc/sys/... before a sysctl.
+        RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
+        try (var s = SyscallHost.install(rec)) {
+            assertThrows(RuntimeException.class, () -> Rootfs.applyOciMounts(tmp.toString(), List.of(
+                    mount("/proc/sys/net/ipv4/ip_forward", "/host/file", null, List.of("bind"))
+            ), Map.of(), Map.of(), Map.of(), new Spec()));
+            assertThrows(RuntimeException.class, () -> Rootfs.applyOciMounts(tmp.toString(), List.of(
+                    mount("/proc/self", "tmpfs", "tmpfs", null)
+            ), Map.of(), Map.of(), Map.of(), new Spec()));
+            assertDoesNotThrow(() -> Rootfs.applyOciMounts(tmp.toString(), List.of(
+                    mount("/proc/cpuinfo", "/var/lib/lxcfs/proc/cpuinfo", null, List.of("bind"))
+            ), Map.of(), Map.of(), Map.of(), new Spec()));
+        }
+        assertEquals(1, rec.mountCalls().size(), "only the lxcfs file is mounted");
+    }
+
+    @Test
+    void symlinkToProcDoesNotGetAroundTheCheck(@TempDir Path tmp) throws Exception {
+        java.nio.file.Files.createDirectories(tmp.resolve("proc/sys"));
+        java.nio.file.Files.createSymbolicLink(tmp.resolve("p"), Path.of("/proc"));
+        RecordingSyscalls rec = new RecordingSyscalls().stubMountReturn(0);
+        try (var s = SyscallHost.install(rec)) {
+            assertThrows(RuntimeException.class, () -> Rootfs.applyOciMounts(tmp.toString(), List.of(
+                    mount("/p/sys/x", "tmpfs", "tmpfs", null)
+            ), Map.of(), Map.of(), Map.of(), new Spec()));
+        }
+        assertTrue(rec.mountCalls().isEmpty());
+    }
 }

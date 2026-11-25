@@ -1,10 +1,9 @@
 package com.ternbusty.takoyaki.sysctl;
 
 import com.ternbusty.takoyaki.logger.Logger;
+import com.ternbusty.takoyaki.syscall.ProcFs;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Map;
 
 /**
@@ -28,9 +27,9 @@ public final class Sysctl {
                 Logger.warn("sysctl " + key + " rejected: not a namespaced key");
                 continue;
             }
-            Path path = Path.of("/proc/sys/" + key.replace('.', '/'));
+            String path = "sys/" + key.replace('.', '/');
             try {
-                Files.writeString(path, value);
+                ProcFs.write(path, value);
                 Logger.debug("sysctl " + key + "=" + value);
             } catch (IOException ex) {
                 Logger.warn("sysctl " + key + "=" + value + " failed: " + ex.getMessage());

@@ -35,9 +35,7 @@ public final class ProcessRestrictions {
     public static void applyOomScoreAdj(Integer oomScoreAdj) {
         if (oomScoreAdj == null) return;
         try {
-            java.nio.file.Files.writeString(
-                    java.nio.file.Path.of("/proc/self/oom_score_adj"),
-                    oomScoreAdj.toString());
+            com.ternbusty.takoyaki.syscall.ProcFs.write("self/oom_score_adj", oomScoreAdj.toString());
             Logger.debug("oom_score_adj=" + oomScoreAdj);
         } catch (java.io.IOException e) {
             Logger.warn("write oom_score_adj failed: " + e.getMessage());
